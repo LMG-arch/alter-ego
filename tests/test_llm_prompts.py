@@ -236,7 +236,7 @@ class TestPromptLibrary:
 
 
 # ────────────────────────────────────────────────────────────
-# 随包的那七个模板
+# 随包的那八个模板
 # ────────────────────────────────────────────────────────────
 
 
@@ -252,7 +252,7 @@ class TestShippedTemplates:
         assert PROMPTS_DIR.is_dir()
         assert (PROMPTS_DIR / "memory_consolidate.md").is_file()
 
-    def test_there_are_seven_of_them(self) -> None:
+    def test_there_are_eight_of_them(self) -> None:
         """数量写死是有意的：加了模板要顺手在这里加一条，不然没人会注意到。"""
         assert PromptLibrary().names() == (
             "chat_reply",
@@ -262,6 +262,7 @@ class TestShippedTemplates:
             "persona_generate",
             "post_compose",
             "reach_out",
+            "vault_organize",
         )
 
     def test_every_template_can_be_rendered(self) -> None:
@@ -288,4 +289,20 @@ class TestShippedTemplates:
 
         assert "林晚" in text
         assert "和阿哲聊了会儿" in text
+
+    def test_the_vault_template_is_written_for_a_person(self) -> None:
+        """整理自己的知识库是「把这件事看明白」，不是给文件管理器写规则。"""
+        template = PromptLibrary().get("vault_organize")
+        text = template.render(
+            persona_name="林晚",
+            user_name="你",
+            folders="- 20-想法 · 想法\n- 30-读到的 · 读到的",
+            catalog="- 和阿哲吵架 · 和阿哲吵架（20-想法）",
+            inbox="### 99-收集箱/xyz.md\n\n今天有点不想说话。\n",
+            max_items=10,
+        )
+
+        assert "林晚" in text
+        assert "不想说话" in text
+        assert "20-想法" in text
         assert "最多 10 条" in text

@@ -378,6 +378,63 @@
   覆盖率：`llm/gateway.py` 100%、`llm/prompts.py` 100%、`domain/memory.py` 100%、
   `sim/consolidation.py` 98.44%、**全库 96.74%**
 
+**它自己的知识库（`alterego vault`，已实现）**
+
+「把每日日程、自己搜集的信息等条理清晰地写好」——这一批把库里的东西摊成
+一间 Obsidian 库。分工是「**代码管骨架，角色管分类**」：目录结构、frontmatter
+字段、索引页、坏链检查、原子写入由代码保证（这些能机械验证）；放进收集箱的
+东西归到哪一类、叫什么名字、打什么标签、链到谁，由它自己决定。
+完整推导与两处文档冲突的判定见
+[`docs/plans/2026-09-16-obsidian-vault.md`](docs/plans/2026-09-16-obsidian-vault.md)。
+
+- `alterego vault {init,sync,organize,build,status}` —— 拆分标准不是「功能」，
+  而是**失败代价与花费**：`sync`（库里 → 笔记）不花钱、不会失败、是纯渲染；
+  `organize` 花一次调用、会失败、逐条跳过；`build`（重算索引）不花钱、不会失败。
+  把不花钱的两步和花钱的那一步分开，用户就敢反复跑前者
+- `domain/vault.py` —— 库的**形状**：7 个目录常量、`Note`、四个不变量
+  （frontmatter 齐全 / 路径合法 / 链接有目标 / 标题不重名）加孤儿检测，
+  以及 `parse_organize_plan()`。**模型的回复是外部输入**，所以每一条都要重新过
+  「目录在布局里吗 / 有标题吗 / 说的那一篇真在收集箱里吗」，一条不合格只丢那一条
+- `sim/vault.py` —— 编排与落盘。`VaultWorkbench` 装的**全是协议**
+  （`ScheduleRepository` / `ActivityRepository` / `SourceRepository` /
+  `MemoryRepository` / `LLMGateway` / `PromptLibrary`），
+  所以它既不知道存储是 SQLite，也不知道模型是哪一家
+- **`.obsidian/` 里两件事是刻意的**：`app.json` 把新建笔记的默认位置设成
+  `99-收集箱`（在 Obsidian 里随手写的东西自动落到待整理处）；
+  `core-plugins.json` **不启用 `daily-notes`**——日程页由 `sync` 按库里的日程生成，
+  两个来源同时写同一天的页面只会互相覆盖。代价是在 Obsidian 里没有「今天」按钮，
+  这是有意的取舍：日程页是**派生**的，手改会被下一次 `sync` 覆盖
+- **索引页的文件名是 `slugify(类型名)`**（`00-索引/想法.md`），不是目录名。
+  目录名带 `20-` 前缀是为了排序，而索引页叫 `20-想法.md` 会让人以为
+  它得跟着目录一起重新编号
+- `plugins/obsidian_vault/` —— 插件壳（`capability.obsidian_vault`，
+  默认**关闭**）。只做三件事：声明 `vault_path`、`describe()` 说人话、
+  `health()` 报告目录在不在。**真正干活的不在这里**：插件拿不到 `ctx.llm()`
+  （v0.2.0 才有），而一条链要能中途失败并留下可读的报告，就必须住在 `sim/` 里
+- `cli_vault.py` —— 第四个组装根（前三个是 `cli.py` / `cli_db.py` / `cli_memory.py`）。
+  **五个命令一律以只读方式打开数据库**：知识库是库的**下游**，从不往回写。
+  唯一的例外是花钱那一步的用量账本，它单开一条**可写**连接
+- 新增提示词模板 `vault_organize.md`，`[llm.routing]` 增加第 9 个用途 `vault`
+  （默认落在 `cheap` 那一档）
+- 测试新增 300 余个（全库 1836 个）：`test_domain_knowledge.py`（91）/
+  `test_domain_vault.py`（80）/ `test_sim_vault.py`（69）/
+  `test_obsidian_vault_plugin.py`（21）/ `test_cli_vault.py`（45）。
+  覆盖率：`domain/vault.py` 100%、`sim/vault.py` 94.99%、**全库 96.65%**
+- **写这一批的过程里逮到 8 个真 bug，其中 4 个只有跑起来才看得见**：
+  - `sync` 的文档（模块头、命令表、CLI 帮助**三处**）都写着「然后重建索引」，
+    而代码里没有这一步。`init` 完 `sync` 一次，用户看到的是几张空索引页
+    和旁边一整个满的 `10-日程/`
+  - 用量账本被挂在一条**只读**连接上。SQLite 只在日志里留一句
+    `attempt to write a readonly database`，而命令照样打印「账记在 llm_usage 表」
+    ——花掉的钱没记账，还告诉用户记了
+  - 日程页里给每条内心独白留了 `[[收集箱文件名]]` 链接，而 `organize` 归位时
+    会把它们改名，于是**每整理一次就在日程里留几条坏链**。现在只写时间和那句话
+    ——日程页是派生的、引用的名字却由另一步决定，这个链接本来就不该存在
+  - `_prepare()` 在「没有这个名字的人设」「有多个人设」两条错误路径上，
+    把已经打开的数据库连接丢给了垃圾回收。它平时看不出来，
+    只在某一次运行里变成一条飘忽的 `unclosed database` 警告——
+    而 `filterwarnings = ["error"]` 会把它记成某个**无关测试**的失败
+
 ### 变更
 
 - **迁移文件从此只管 DDL**。四个 `.sql` 里没有任何 `PRAGMA` 头、没有 `IF NOT EXISTS`、

@@ -259,6 +259,12 @@ class Plugin(ABC):
         """健康检查（可选实现）。alterego plugins doctor 会调用。"""
 ```
 
+**钩子的签名固定，用不用某个参数由插件自己决定。** 这不是疏忽：`execute(intent, ctx)`
+里「只报一句状态」的实现两个参数都用不上，`on_load(ctx)` 也有只用 `ctx.logger` 的写法。
+`pyproject.toml` 因此对 `plugins/*/plugin.py` 关掉 `ARG002`（未使用的参数）。
+**不给参数名加下划线前缀**——mypy 检查协议一致性时认的就是参数名
+（实现方可能被按关键字调用），改名字等于把一个 lint 警告换成一个类型错误。
+
 ### 4.2 状态机
 
 ```mermaid

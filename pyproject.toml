@@ -183,6 +183,12 @@ ignore = [
 # 写九个空实现——那是样板代码，不是约束（设计原则 P5/P2）。
 # 见 docs/design/02-plugin-api.md § 4.1。
 "src/alterego/kernel/plugin.py" = ["B027"]
+# 插件钩子的签名由协议规定（`execute(intent, ctx)`、`on_load(ctx)`），
+# 用不用某个参数取决于这个插件——只报状态的 `execute` 两个都用不上。
+# 不给参数名加下划线前缀，是因为 mypy 检查协议一致性时**认的就是参数名**
+# （实现方可能被按关键字调用），改名字会把一个 lint 警告换成一个类型错误。
+# 见 docs/design/02-plugin-api.md § 4。
+"plugins/*/plugin.py" = ["ARG002"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["alterego"]

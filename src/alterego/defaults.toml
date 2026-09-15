@@ -37,6 +37,7 @@ reflection = "cheap"
 npc = "cheap"
 persona = "strong"
 memory = "cheap"
+vault = "cheap"
 
 [storage]
 backend = "sqlite"

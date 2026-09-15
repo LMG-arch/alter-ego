@@ -1125,6 +1125,8 @@ alter-ego/
 │   ├── cli.py                       # 参数树 + calendar / birthday 命令组
 │   ├── cli_io.py                    # 输出助手（第 5 组红线禁 print(，CLI 不豁免）
 │   ├── cli_db.py                    # alterego db；组装根：唯一 import 具体存储实现的地方
+│   ├── cli_memory.py                # alterego memory；组装根：自己开库、自己拿供应商
+│   ├── cli_vault.py                 # alterego vault；组装根：库是数据库的下游，只读打开
 │   ├── kernel/                      # 内核：零业务逻辑
 │   │   ├── config.py
 │   │   ├── settings.py              # Setting / Choice 元数据与渲染所需的单一真源

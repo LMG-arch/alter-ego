@@ -66,7 +66,7 @@ class ExampleCapability(Plugin):
         """同步取一句话，方便在测试与 ``alterego plugins doctor`` 里直接用。"""
         return (self._greeting + self._punctuation) * self._repeat
 
-    async def execute(self, intent: Any, ctx: Any) -> CapabilityResult:  # noqa: ARG002
+    async def execute(self, intent: Any, ctx: Any) -> CapabilityResult:
         text = self.greeting()
         # summary 会被写进 activity_log 并在 Web 上展示 —— 所以要说人话。
         return CapabilityResult(ok=True, summary=f"说了一句「{text}」", artifacts={"text": text})

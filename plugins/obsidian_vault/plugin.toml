@@ -1,0 +1,35 @@
+# Obsidian 知识库插件清单
+#
+# 装它：把 plugins/obsidian_vault 拷到你的插件搜索路径下，然后在
+# config/alterego.toml 里加
+#     [plugins]
+#     enabled = ["capability.obsidian_vault"]
+#
+# 字段含义见 docs/design/02-plugin-api.md § 3.1。
+
+[plugin]
+id = "capability.obsidian_vault"
+version = "0.1.0"
+api_version = 1
+kind = "capability"
+entry = "plugin:ObsidianVault"
+
+name = "Obsidian 知识库"
+description = "把角色自己的知识库接进推演循环：报告它在哪、有多少东西在等着整理。"
+authors = ["LMG-arch"]
+license = "MIT"
+tags = ["obsidian", "vault", "knowledge", "capability"]
+
+enabled_by_default = false
+priority = 0
+auto_reload = true
+
+# 只有一项配置，因为只有一项真的会改变行为。
+# 想加「同步开关」「整理开关」之前先问：这是配置，还是应该做成另一个插件？
+# （设计原则 P4：可插拔优于可配置。）
+
+[plugin.config.vault_path]
+type = "string"
+default = ""
+description = "知识库建在哪。留空表示交给 `alterego vault` 按角色名决定（exports/<角色名>的知识库）。"
+max_length = 400

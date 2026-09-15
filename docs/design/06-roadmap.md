@@ -61,7 +61,7 @@ flowchart LR
 
 **每个阶段结束都必须**：测试通过 + 文档同步 + 提交 + 更新 CHANGELOG。
 
-> **当前进度（2026-09-15）**：阶段 A–C 已完成。阶段 D 的**存储层已落地**——
+> **当前进度（2026-09-16）**：阶段 A–C 已完成。阶段 D 的**存储层已落地**——
 > `storage/sqlite/` 下的 `connection.py` / `migrator.py` / `backend.py` 与四个迁移文件。
 > 领域层完成三条纵向切片：
 >
@@ -70,12 +70,27 @@ flowchart LR
 >    外加 `alterego calendar {list,today,check}` 三个命令。
 > 3. **生日**——`domain/birthday.py`、`domain/_toml.py`（与节日共用的读取助手）、
 >    `birthdays/__init__.py`（唯一 IO）、`data/birthdays.toml`（不进版本库），
->    外加 `alterego birthday {list,add,set}`（共 1234 个测试，全局覆盖率 96.75%，`domain/` 98.99%）。
+>    外加 `alterego birthday {list,add,set}`。
 >    生日**不是**新机制：它是 `kind="personal"` 的节日，见 [12](12-calendar-and-conversation.md) § 17。
+>
+> 此后又落地了三条**命令组**。它们不属于阶段 D 的领域建模，做的是另一件事——
+> 把已经写好、已经被测试覆盖的下层接口接到命令行上：
+>
+> 4. **数据库维护**——`alterego db {status,migrate,backup,restore}`（`cli_db.py`）。
+>    退出码 `4` 第一次真正被用上（`MigrationError` 单独一条分支）。
+> 5. **记忆梳理**——`alterego memory {distill,consolidate}`（`sim/consolidation.py`）。
+>    第一次有代码真的去调模型：用途分档、失败重试、**每次尝试都记一笔账**。
+> 6. **知识库**——`alterego vault {init,sync,organize,build,status}`（`sim/vault.py`、
+>    `cli_vault.py`），把库里的日程与想法摊成一间 Obsidian 库，收集箱里的东西
+>    由它自己归类。见 [`plans/2026-09-16-obsidian-vault.md`](../plans/2026-09-16-obsidian-vault.md)。
+>    它的插件 `capability.obsidian_vault` 默认**关闭**且**不含业务逻辑**——
+>    插件拿不到 `ctx.llm()`（v0.2.0 才有），而整理要调模型。
+>
+> 至此共 1836 个测试，全局覆盖率 **96.65%**。
 >
 > **领域层其余模块与 12 个 Repository 未开始**。阶段 E–M 均未开始。
 >
-> 先做这两条切片的理由见 [`docs/plans/2026-09-15-domain-emotion-memory.md`](../plans/2026-09-15-domain-emotion-memory.md) § 1：
+> 先做前两条切片的理由见 [`docs/plans/2026-09-15-domain-emotion-memory.md`](../plans/2026-09-15-domain-emotion-memory.md) § 1：
 > 只有情绪与记忆在文档里有**可执行的量化验收标准**（`strength_at` 验证表、`update_emotion` 四条规则），
 > 其余实体只有字段清单，等 Repository 到位再铺开成本更低。
 > 节日那条多了一个额外理由：它有需求里**点名的一句话**（「不要突然过渡到了节日」），

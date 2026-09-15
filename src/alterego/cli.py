@@ -45,6 +45,7 @@ from alterego.cli_db import (
 )
 from alterego.cli_io import _RULE, _err, _out, _pad
 from alterego.cli_memory import add_memory_parser
+from alterego.cli_vault import add_vault_parser
 from alterego.domain.birthday import (
     DEFAULT_AFTERMATH_DAYS,
     DEFAULT_LEAD_DAYS,
@@ -521,7 +522,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="version",
         version=f"alterego {__version__}",
     )
-    commands = parser.add_subparsers(dest="command", metavar="{calendar,birthday,db}")
+    commands = parser.add_subparsers(dest="command", metavar="{calendar,birthday,db,memory,vault}")
 
     calendar_parser = commands.add_parser("calendar", help="节日日历：它知道过几天要过节")
     calendar_commands = calendar_parser.add_subparsers(
@@ -614,6 +615,7 @@ def build_parser() -> argparse.ArgumentParser:
     db_restore.set_defaults(handler=cmd_db_restore)
 
     add_memory_parser(commands)
+    add_vault_parser(commands)
 
     return parser
 

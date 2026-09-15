@@ -101,6 +101,7 @@ reflection = "cheap"                # 情绪反思：几乎不需要聪明
 npc = "cheap"                       # NPC 对话：量大，要求低
 persona = "strong"                  # 人设生成：低频但一次性决定全局
 memory = "cheap"                    # 记忆摘要与巩固
+vault = "cheap"                     # 知识库整理：分类与互链，不需要聪明
                                     # v0.2.0 / v0.3.0 将新增四个用途：
                                     #   image_prompt / research_query /
                                     #   research_summarize / reaction

@@ -1,6 +1,6 @@
-"""SQLite 仓储实现：记忆、行为日志、用量账本。
+"""SQLite 仓储实现：记忆、行为日志、用量账本、人设、日程、搜集到的信息。
 
-三张表、三个类。**这里只做「一行 ↔ 一个对象」**：SQL、JSON 序列化、
+六张表、六个类。**这里只做「一行 ↔ 一个对象」**：SQL、JSON 序列化、
 往返映射都在这里；业务规则（重要度怎么衰减、什么时候该降权）在 `domain/`
 （见 `docs/design/03-data-model.md` § 6.9）。
 
@@ -14,7 +14,10 @@
 **``SELECT *`` + 按列名取值。** 不写死列顺序：``005`` 之后又加过列，
 而按位置取值的那份代码不会报错，它只会把 ``location`` 读成 ``inner_voice``。
 
-依据: docs/design/03-data-model.md § 7
+后三个（人设 / 日程 / 搜集到的信息）是**只读**的，给知识库用。只读不是
+遗漏：知识库是库的下游，从不往回写。
+
+依据: docs/design/03-data-model.md § 7、docs/plans/2026-09-16-obsidian-vault.md § 6
 """
 
 from __future__ import annotations
@@ -23,12 +26,17 @@ import json
 import sqlite3
 import uuid
 from collections.abc import Iterator, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, cast
 
 from alterego.domain.memory import Memory, MemoryKind, MemorySource
 from alterego.interfaces.llm import LLMUsage
-from alterego.interfaces.repository import ActivityRecord
+from alterego.interfaces.repository import (
+    ActivityRecord,
+    PersonaRecord,
+    ScheduleRecord,
+    SourceRecord,
+)
 from alterego.kernel.errors import IntegrityError, StorageError
 from alterego.storage.sqlite.connection import SqliteConnection
 
@@ -36,6 +44,9 @@ from alterego.storage.sqlite.connection import SqliteConnection
 __all__ = [
     "SqliteActivityRepository",
     "SqliteMemoryRepository",
+    "SqlitePersonaRepository",
+    "SqliteScheduleRepository",
+    "SqliteSourceRepository",
     "SqliteUsageRepository",
 ]
 
@@ -342,6 +353,28 @@ class SqliteActivityRepository:
                 (stamp, *chunk),
             )
 
+    def list_range(
+        self,
+        persona_id: str,
+        *,
+        since: datetime,
+        until: datetime,
+        limit: int = 500,
+    ) -> list[ActivityRecord]:
+        """按 ``started_at`` 取一段，不筛 ``distilled_at``。
+
+        ``ended_at`` 为 ``NULL`` 的行（还在进行中的行为）也会被取到——
+        用 ``started_at`` 当唯一的过滤条件就够了，再加一条
+        «``ended_at IS NOT NULL``» 只会让正在发生的那一分钟凭空消失。
+        """
+        rows = self._conn.query(
+            "SELECT * FROM activity_log "
+            "WHERE persona_id = ? AND started_at >= ? AND started_at < ? "
+            "ORDER BY started_at ASC, id ASC LIMIT ?",
+            (persona_id, _format_dt(since), _format_dt(until), int(limit)),
+        )
+        return [_row_to_activity(row) for row in rows]
+
 
 # ── 用量账本 ────────────────────────────────────────────────
 
@@ -399,3 +432,168 @@ class SqliteUsageRepository:
             usage.error,
             _format_dt(usage.at) if usage.at is not None else _now_iso(),
         )
+
+
+# ── 人设 ────────────────────────────────────────────────────
+
+
+def _row_to_persona(row: sqlite3.Row) -> PersonaRecord:
+    """``occupation`` 这类列允许为空，统一收成空串。
+
+    `None` 和 `""` 在笔记里的渲染**完全不同**：前者会印出「职业：None」，
+    后者让那一行整个消失。所以在边界上就把它们统一掉，
+    而不是让每个渲染函数自己防一遍。
+    """
+    return PersonaRecord(
+        id=str(row["id"]),
+        name=str(row["name"]),
+        age=int(row["age"]) if row["age"] is not None else None,
+        gender=str(row["gender"] or ""),
+        city=str(row["city"] or ""),
+        occupation=str(row["occupation"] or ""),
+        version=int(row["current_version"]),
+    )
+
+
+class SqlitePersonaRepository:
+    """:class:`~alterego.interfaces.repository.PersonaRepository` 的 SQLite 实现。"""
+
+    __slots__ = ("_conn",)
+
+    def __init__(self, conn: SqliteConnection) -> None:
+        self._conn = conn
+
+    def get(self, persona_id: str) -> PersonaRecord | None:
+        row = self._conn.query_one("SELECT * FROM persona WHERE id = ?", (persona_id,))
+        return None if row is None else _row_to_persona(row)
+
+    def find_by_name(self, name: str) -> PersonaRecord | None:
+        """按名字找。
+
+        重名时返回**第一个**而不是报错：名字不是主键，数据库没法保证它唯一，
+        而调用方（CLI / 插件）拿到一个之后还有 :meth:`list_all` 可以列全部。
+        在这里抛异常会让「两个角色都叫林晚」变成一个谁也不知道怎么修的死结。
+        """
+        row = self._conn.query_one(
+            "SELECT * FROM persona WHERE name = ? ORDER BY created_at, id LIMIT 1",
+            (name,),
+        )
+        return None if row is None else _row_to_persona(row)
+
+    def list_all(self) -> list[PersonaRecord]:
+        rows = self._conn.query("SELECT * FROM persona ORDER BY created_at, id")
+        return [_row_to_persona(row) for row in rows]
+
+
+# ── 日程 ────────────────────────────────────────────────────
+
+
+def _row_to_schedule(row: sqlite3.Row) -> ScheduleRecord:
+    """一行日程。
+
+    ``day`` 是 ``YYYY-MM-DD`` 的文本， ``date.fromisoformat`` 认它。
+    不用 :func:`_parse_dt`——那个返回 ``datetime``，而 ``day`` 本来就没有
+    时刻的概念，升成 datetime 会凭空多出一个 00:00。
+    """
+    raw_day = str(row["day"])
+    try:
+        day = date.fromisoformat(raw_day)
+    except ValueError as exc:
+        raise StorageError("日程的 day 不是合法的 YYYY-MM-DD", value=raw_day) from exc
+
+    return ScheduleRecord(
+        id=str(row["id"]),
+        day=day,
+        start_at=_require_dt(row["start_at"], column="start_at"),
+        end_at=_require_dt(row["end_at"], column="end_at"),
+        activity=str(row["activity"]),
+        category=str(row["category"] or "other"),
+        location=str(row["location"] or ""),
+        actual_start_at=_parse_dt(row["actual_start_at"]),
+        actual_end_at=_parse_dt(row["actual_end_at"]),
+        deviation_note=str(row["deviation_note"] or ""),
+    )
+
+
+class SqliteScheduleRepository:
+    """:class:`~alterego.interfaces.repository.ScheduleRepository` 的 SQLite 实现。"""
+
+    __slots__ = ("_conn",)
+
+    def __init__(self, conn: SqliteConnection) -> None:
+        self._conn = conn
+
+    def list_day(self, persona_id: str, *, day: date) -> list[ScheduleRecord]:
+        rows = self._conn.query(
+            "SELECT * FROM schedule_block "
+            "WHERE persona_id = ? AND day = ? "
+            "ORDER BY start_at ASC, id ASC",
+            (persona_id, day.isoformat()),
+        )
+        return [_row_to_schedule(row) for row in rows]
+
+    def list_range(
+        self,
+        persona_id: str,
+        *,
+        since: datetime,
+        until: datetime,
+        limit: int = 500,
+    ) -> list[ScheduleRecord]:
+        """按 ``start_at`` 取一段。注意 ``day`` 是当地日期而这里是时间戳：
+        跨午夜的一段日程（23:00 → 次日 01:00）只有一个 ``day``，
+        用 ``day`` 过滤会把它整个漏掉。"""
+        rows = self._conn.query(
+            "SELECT * FROM schedule_block "
+            "WHERE persona_id = ? AND start_at >= ? AND start_at < ? "
+            "ORDER BY start_at ASC, id ASC LIMIT ?",
+            (persona_id, _format_dt(since), _format_dt(until), int(limit)),
+        )
+        return [_row_to_schedule(row) for row in rows]
+
+
+# ── 搜集到的信息 ────────────────────────────────────────────
+
+
+def _row_to_source(row: sqlite3.Row) -> SourceRecord:
+    return SourceRecord(
+        id=str(row["id"]),
+        url=str(row["url"]),
+        fetched_at=_require_dt(row["fetched_at"], column="fetched_at"),
+        title=str(row["title"] or ""),
+        summary=str(row["summary"] or ""),
+        source_kind=str(row["source_kind"] or "search"),
+        published_at=_parse_dt(row["published_at"]),
+        lang=str(row["lang"] or ""),
+        memory_id=row["memory_id"],
+    )
+
+
+class SqliteSourceRepository:
+    """:class:`~alterego.interfaces.repository.SourceRepository` 的 SQLite 实现。"""
+
+    __slots__ = ("_conn",)
+
+    def __init__(self, conn: SqliteConnection) -> None:
+        self._conn = conn
+
+    def list_kept(
+        self,
+        persona_id: str,
+        *,
+        since: datetime,
+        limit: int = 100,
+    ) -> list[SourceRecord]:
+        """只给 ``dropped = 0`` 的那些。
+
+        被丢掉的三类（提示词注入 / 过长 / 重复）是过滤的中间产物。
+        把它们写进知识库不只是混淆——「我看到过一篇讲提示词注入的文章」
+        和「我在正文里看到过一段提示词注入」在用户眼里是两回事。
+        """
+        rows = self._conn.query(
+            "SELECT * FROM source_item "
+            "WHERE persona_id = ? AND dropped = 0 AND fetched_at >= ? "
+            "ORDER BY fetched_at ASC, id ASC LIMIT ?",
+            (persona_id, _format_dt(since), int(limit)),
+        )
+        return [_row_to_source(row) for row in rows]

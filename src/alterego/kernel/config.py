@@ -212,6 +212,7 @@ class LLMRoutingConfig:
     npc: str = "cheap"
     persona: str = "strong"
     memory: str = "cheap"
+    vault: str = "cheap"
 
     def resolve(self, purpose: str) -> str:
         """把用途（如 ``"decision"``）解析成实际的 provider 名。

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Protocol
 
 
@@ -27,7 +27,17 @@ if TYPE_CHECKING:
     from alterego.domain.memory import Memory, MemoryKind
 
 
-__all__ = ["ActivityRecord", "ActivityRepository", "MemoryRepository"]
+__all__ = [
+    "ActivityRecord",
+    "ActivityRepository",
+    "MemoryRepository",
+    "PersonaRecord",
+    "PersonaRepository",
+    "ScheduleRecord",
+    "ScheduleRepository",
+    "SourceRecord",
+    "SourceRepository",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,4 +136,139 @@ class ActivityRepository(Protocol):
 
     def mark_distilled(self, activity_ids: Sequence[str], at: datetime) -> None:
         """标记这批行为已被梳理进记忆。"""
+        ...
+
+    def list_range(
+        self,
+        persona_id: str,
+        *,
+        since: datetime,
+        until: datetime,
+        limit: int = 500,
+    ) -> list[ActivityRecord]:
+        """``since`` 到 ``until`` 之间的**全部**行为，按时间正序。
+
+        和 :meth:`list_undistilled` 的区别是**不看 ``distilled_at``**：
+        写日记要的是「这一天真实发生过什么」，而不是「还有什么没被梳理进记忆」。
+        被梳理过的行为同样是那天的一部分——恰恰是被梳理过的那些往往最要紧。
+        """
+        ...
+
+
+# ── 知识库要读的三样东西 ────────────────────────────────────
+#
+# 下面三个契约是「把库里的东西写成笔记」用的。它们**只读**：知识库是
+# 库的**下游**，从不往回写。这一条很要紧——一旦允许它回写，
+# 「用户手改了一个 Markdown 文件」就得有冲突解决策略，
+# 那是另一个量级的事（docs/plans/2026-09-16-obsidian-vault.md § 9）。
+
+
+@dataclass(frozen=True, slots=True)
+class PersonaRecord:
+    """``persona`` 的一行，只取写索引页开头要用的那几个字段。
+
+    刻意**不带** ``persona_json``：整份人格数据有性格、表达、偏好、背景、
+    情绪基线，而这里只要一句「我是谁」。全量传过来会诱使调用方
+    把整段塞进笔记，那既不是用户想看的，也会随人格演化和文件内容脱节。
+    """
+
+    id: str
+    name: str
+    age: int | None = None
+    gender: str = ""
+    city: str = ""
+    occupation: str = ""
+    version: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduleRecord:
+    """``schedule_block`` 的一行：计划做什么，以及实际几点做的。
+
+    计划和实际**都要**带出来。只写计划，笔记就成了一张没人兑现的时间表；
+    而 ``deviation_note`` 是「为什么没按计划来」，那通常是这一天里
+    最有意思的一句话。
+    """
+
+    id: str
+    day: date
+    start_at: datetime
+    end_at: datetime
+    activity: str
+    category: str = "other"
+    location: str = ""
+    actual_start_at: datetime | None = None
+    actual_end_at: datetime | None = None
+    deviation_note: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class SourceRecord:
+    """``source_item`` 的一行：它搜集到的一条信息。
+
+    ``dropped=True`` 的那些**不该**出现在这里——被判定为提示词注入、
+    过长或重复的内容是过滤掉的中间产物，不是它「搜集到的东西」。
+    """
+
+    id: str
+    url: str
+    fetched_at: datetime
+    title: str = ""
+    summary: str = ""
+    source_kind: str = "search"
+    published_at: datetime | None = None
+    lang: str = ""
+    memory_id: str | None = None
+
+
+class PersonaRepository(Protocol):
+    """人设的只读访问。"""
+
+    def get(self, persona_id: str) -> PersonaRecord | None:
+        """按 id 取。不存在返回 `None`。"""
+        ...
+
+    def find_by_name(self, name: str) -> PersonaRecord | None:
+        """按**名字**找。敲命令的人手上有名字，id 是他从没见过的一串字符。"""
+        ...
+
+    def list_all(self) -> list[PersonaRecord]:
+        """全部人设，按创建时间。用来在「有多个」时报出候选。"""
+        ...
+
+
+class ScheduleRepository(Protocol):
+    """日程的只读访问。"""
+
+    def list_day(self, persona_id: str, *, day: date) -> list[ScheduleRecord]:
+        """某一天的全部日程块，按开始时间正序。"""
+        ...
+
+    def list_range(
+        self,
+        persona_id: str,
+        *,
+        since: datetime,
+        until: datetime,
+        limit: int = 500,
+    ) -> list[ScheduleRecord]:
+        """一段时间的日程块。用来补写过去几天漏掉的日记。"""
+        ...
+
+
+class SourceRepository(Protocol):
+    """搜集到的信息的只读访问。"""
+
+    def list_kept(
+        self,
+        persona_id: str,
+        *,
+        since: datetime,
+        limit: int = 100,
+    ) -> list[SourceRecord]:
+        """``since`` 之后**没被丢掉**的条目，按抓取时间正序。
+
+        ``dropped`` 的那些不出现：它们是过滤掉的中间产物
+        （提示词注入、过长、重复），不是它「搜集到的东西」。
+        """
         ...

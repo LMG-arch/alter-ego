@@ -149,12 +149,16 @@ $RECYCLE.BIN/
 # 插件与临时文件
 # ═════════════════════════════════════════════════════════════
 
-# 本地开发的插件（不应提交到主仓库）
+# 本地开发的插件（不应提交到主仓库）。
+# 随仓库分发的插件在这里**逐个开例外**，而不是反过来——
+# 默认忽略意味着「忘记加例外」只损失一个新插件，而默认提交意味着
+# 用户写在 plugins/ 下的私人插件会被无意推到公开仓库。
 plugins/*/
 !plugins/.gitkeep
 !plugins/README.md
 !plugins/tokenizer_jieba/
 !plugins/example_*/
+!plugins/obsidian_vault/
 
 # 临时文件
 tmp/

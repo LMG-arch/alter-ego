@@ -1045,6 +1045,17 @@ alterego
 │                           vacuum 见 § 10 的优化建议；
 │                           **没有** rollback --to，理由见 03-data-model.md § 8.5
 │
+├── vault                   每个子命令都接 --vault DIR / --persona NAME
+│   ├── init                搭骨架：目录、.obsidian/、索引页
+│   ├── sync [--lookback-days N]
+│   │                       把日程与想法写成笔记（不花钱、不会失败）
+│   ├── organize [--dry-run] 让模型把收集箱归类、起名、互链（花一次）
+│   ├── build               重算索引并查坏链（不花钱、不会失败）
+│   └── status              看一眼：几篇、几个索引、几处问题
+│
+│                           **故意没有** open 子命令，理由见
+│                           plans/2026-09-16-obsidian-vault.md § 11
+│
 ├── export / import
 ├── stats [--cost|--activity|--emotion]
 └── config
@@ -1229,6 +1240,34 @@ LLM 消耗   今日 $1.12 / $2.00
   而下次的素材和这次一样。
 - **计费那一行只在真跑时打印。** 预演没有账可记，写出来会让人以为花了钱。
 
+**`alterego vault status`**（看一眼，见
+[`plans/2026-09-16-obsidian-vault.md`](../plans/2026-09-16-obsidian-vault.md) § 11）：
+
+```
+知识库 · D:\ai\个人agent\exports\林晚的知识库
+人设      林晚（p1）
+──────────────────────────────────────────
+  10-日程      1 篇
+  20-想法      3 篇
+  30-读到的    0 篇
+  40-记得的事  0 篇
+  50-见过的人  0 篇
+索引      6 个
+收集箱    0 篇
+问题      0 处
+```
+
+三条不能省的约定：
+
+- **五个命令不花同一个价**。`init` / `sync` / `build` / `status` 不花钱、
+  也不会失败（纯渲染与纯派生）；只有 `organize` 花钱、而且可能失败。
+  把「要花一次钱」的那一步单独拆成一个命令，是因为它跟另外四个的
+  **失败代价差别太大**：模型超时不该把已经写好的日程页一起搭进去。
+- **`organize` 一条不合格只丢那一条**。模型给了三条、其中一条目录名不在布局里，
+  另外两条照样归位，并在「跳过」里写出为什么（`domain/vault.py::parse_organize_plan`）。
+- **五个命令都以只读方式打开数据库**。知识库是数据库的**下游**，从不往回写；
+  唯一往回写的是用量账本，它挂在单独的一条可写连接上。
+
 ### 8.3 实现
 
 **argparse**（零依赖）。真实实现住在 `src/alterego/cli.py`：
@@ -1262,15 +1301,25 @@ LLM 消耗   今日 $1.12 / $2.00
 | 3 | 插件依赖环 |
 | 4 | 数据库迁移失败 |
 
-**为什么分成三个文件**：`cli.py`（参数树 + calendar/birthday）→
-`cli_io.py`（输出助手）→ `cli_db.py`（`db` 命令组，**组装根**）。
+**为什么分成五个文件**：`cli.py`（参数树 + calendar/birthday）→
+`cli_io.py`（输出助手）→ `cli_db.py` / `cli_memory.py` / `cli_vault.py`
+（三个命令组，各自是**组装根**）。
 切分的直接原因是 `AGENTS.md` § 5 的「单文件 ≤ 900 行」——`cli.py` 一度是 937 行。
 不是因为「一个文件干太多事」，而是因为**加一个命令组就会再撞一次上限**。
+第一次拆分（`cli_db.py`）划下的边界后来被直接用上了：`cli_memory.py` 与
+`cli_vault.py` 是新开文件，`cli.py` 没有再涨回去。
 
-**组装根**：整个程序里只有 `cli_db.py`（以及它的调用方 `cli.py`）知道
-「存储用的是 SQLite」，其余代码一律只认 `StorageBackend` Protocol。
+**组装根**：整个程序里只有这四个文件（`cli.py` / `cli_db.py` / `cli_memory.py` /
+`cli_vault.py`）知道「存储用的是 SQLite」，其余代码一律只认 `StorageBackend` Protocol。
 `scripts/check_architecture.sh` 第 3 组红线覆盖整个 `src/` 来钉住它，
 例外写在脚本的注释里——**例外要出现在能看见的地方，才叫例外**。
+
+四个组装根大小不一，但形状是同一个：**自己开库、自己拿供应商、自己关掉**。
+`cli_vault.py` 这一份多一层限制：它的内容连接是**只读**的，
+因为知识库是数据库的下游。而「花钱要记账」是唯一需要写库的事，
+所以那条连接单独开——把账本挂在只读连接上不会报错，
+只会在日志里留一句 `attempt to write a readonly database`，
+而命令照样打印「账记在 llm_usage 表」。
 
 
 ---
