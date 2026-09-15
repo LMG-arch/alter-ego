@@ -21,7 +21,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from alterego.cli_io import _RULE, _human_size, _out, _pad
+from alterego.cli_io import _RULE, _human_size, _out, _pad, _width
 from alterego.kernel.clock import resolve_timezone
 from alterego.kernel.config import Config, StorageConfig
 from alterego.kernel.errors import StorageError
@@ -100,14 +100,21 @@ def _print_migrations(plan: MigrationPlan) -> None:
     带上 ``destructive`` / ``reversible``：它们是迁移文件头里的**声明**，
     看的时候有用（「这一步会不会丢数据」「这一步原则上能不能退」），
     但它们不驱动任何代码路径——迁移器只往前走。
+
+    列宽**从待执行的文件名算出来**，不写死。这里原先写的是 ``25``，理由注释
+    还是「现有最长的 ``004_observability.sql`` 是 23 个字符」——``005_memory_consolidation.sql``
+    一进来就变成 28 个字符，文件名和描述被挤成了同一行。写死一个会过期的数字，
+    和 ``AGENTS.md`` § 4 那句「不要写死计数，要算出来」是同一个道理。
     """
-    for item in plan.pending:
+    pending = plan.pending
+    if not pending:
+        return
+    width = max(_width(item.filename) for item in pending) + 1
+    for item in pending:
         flags = ["破坏性" if item.destructive else "非破坏性"]
         flags.append("声明可逆" if item.reversible else "声明不可逆")
-        # 25 列：现有迁移文件名最长的是 `004_observability.sql`（23 个字符）。
-        # 写死一个比它大的数，否则那一行的描述会被挤到前一列里去。
-        _out(f"  {_pad(item.filename, 25)}{item.description}")
-        _out(f"  {'':25}{'｜'.join(flags)}")
+        _out(f"  {_pad(item.filename, width)}{item.description}")
+        _out(f"  {' ' * width}{'｜'.join(flags)}")
 
 
 def cmd_db_status(args: argparse.Namespace) -> int:

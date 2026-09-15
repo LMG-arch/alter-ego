@@ -105,11 +105,45 @@ class TestDbStatus:
         assert "已是最新" in out
 
     def test_it_names_the_pending_migration_files(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """光说「还差 4 个」没用，得说清楚是哪 4 个。"""
+        """光说「还差几个」没用，得说清楚是哪几个。"""
         _db("status")
         out = capsys.readouterr().out
         assert "001_initial" in out
         assert "非破坏性" in out
+
+    def test_the_filename_column_is_derived_from_the_longest_name(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """列宽得**算出来**，不能写死。
+
+        这条断言来自一个真实的 bug：列宽原本写死 25，理由注释是「现有最长的
+        `004_observability.sql` 是 23 个字符」。`005_memory_consolidation.sql`
+        （28 个字符）一进来，输出就成了
+        `005_memory_consolidation.sql记忆巩固标记与活动流梳理标记……`——
+        文件名和描述挤在同一行。现在按待执行文件里最长的那个算列宽。
+
+        断言写成「对每一行都成立」，以后再加更长的迁移文件也会被拦住。
+        """
+        _db("status")
+        out = capsys.readouterr().out
+
+        names: list[str] = []
+        columns: set[int] = set()
+        for line in out.splitlines():
+            if not line.startswith("  "):
+                continue
+            stem, marker, rest = line.partition(".sql")
+            if not marker:
+                continue
+            name = stem.removeprefix("  ") + marker
+            gap = len(rest) - len(rest.lstrip(" "))
+            assert gap > 0, f"文件名和描述之间没有空隙：{line!r}"
+            names.append(name)
+            columns.add(len(name) + gap)
+
+        assert names, "db status 没有列出任何待执行的迁移"
+        assert len(columns) == 1, f"各行没有对齐到同一列：{sorted(columns)}"
+        assert columns.pop() > max(len(name) for name in names), "列宽没有超过最长的文件名"
 
     def test_an_empty_database_admits_it_has_no_tables(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
