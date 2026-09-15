@@ -290,6 +290,43 @@ def test_backup_is_refused_inside_a_transaction(backend: SqliteStorageBackend) -
         backend.backup()
 
 
+def test_backup_never_overwrites_an_existing_file(
+    backend: SqliteStorageBackend, tmp_path: Path
+) -> None:
+    """撞名时让路，不是覆盖。
+
+    自动生成的文件名只精确到秒（``alterego-20260915-222939.db``），一秒内跑两次
+    完全可能，而 ``VACUUM INTO`` 又拒绝写一个已存在的文件。早先的做法是
+    「先删掉再写」——于是第二次备份把第一次的成果删掉了，还一声不吭。
+    备份是退路，退路不能互相抵消。
+    """
+    backend.migrate()
+    destination = tmp_path / "snapshot.db"
+
+    first = backend.backup(destination)
+    second = backend.backup(destination)
+
+    assert first == destination
+    assert second == tmp_path / "snapshot-2.db"
+    assert first.is_file()
+    assert second.is_file()
+
+
+def test_the_avoiding_backup_is_a_real_snapshot(
+    backend: SqliteStorageBackend, tmp_path: Path
+) -> None:
+    """让路让出来的那份也得是完整备份，不是一个空壳。"""
+    backend.migrate()
+    destination = tmp_path / "snapshot.db"
+    backend.backup(destination)
+
+    second = backend.backup(destination)
+
+    with SqliteConnection.open(second, readonly=True) as restored:
+        assert restored.user_version() == 2
+        assert restored.scalar("SELECT COUNT(*) FROM sqlite_master WHERE name = 'note'") == 1
+
+
 def test_backup_without_a_backup_directory_is_refused(db_path: Path) -> None:
     """没有备份目录时，``backup()`` 拒绝执行并说清楚怎么补救。
 

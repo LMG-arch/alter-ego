@@ -368,17 +368,21 @@ class SqliteConnection:
 
         **不能在事务里执行**——调用方负责在无事务时调用。
 
+        目标文件已存在时**不覆盖**，而是换一个带序号的名字。``VACUUM INTO``
+        本身拒绝写一个已存在的文件，早先的做法是「先删掉再写」——但删掉的那一份
+        也是一份备份，而自动生成文件名的地方（``Backend.backup()`` 与破坏性迁移前
+        的自动备份）只精确到秒：一秒内跑两次就会静默丢掉第一份。
+
+        所以返回的是**实际写出的路径**，调用方不能假定它等于 ``dest``。
+
         Returns:
             实际写出的文件路径。
         """
         if self._depth > 0:
             raise StorageError("备份不能在事务内执行（VACUUM INTO 的限制）", depth=self._depth)
 
-        target = Path(dest)
+        target = _free_path(Path(dest))
         target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists():
-            # VACUUM INTO 拒绝覆盖已存在的文件，先删掉才能得到确定的行为。
-            target.unlink()
 
         # 这里同样不能绑定参数，改用 sqlite3 的字符串转义。
         literal = target.resolve().as_posix().replace("'", "''")
@@ -411,3 +415,18 @@ def _first_line(sql: str) -> str:
     """异常上下文里只放 SQL 的第一行——整段 DDL 塞进去会让日志不可读。"""
     head = sql.strip().splitlines()[0] if sql.strip() else ""
     return head if len(head) <= 120 else head[:117] + "..."
+
+
+def _free_path(target: Path) -> Path:
+    """找一个还没被占用的文件名：``x.db`` → ``x-2.db`` → ``x-3.db``……
+
+    上限 1000 只是止损：真跑到那个数，说明调用方在循环里备份，
+    那时候报错比继续往磁盘里灌文件要好。
+    """
+    if not target.exists():
+        return target
+    for index in range(2, 1000):
+        candidate = target.with_name(f"{target.stem}-{index}{target.suffix}")
+        if not candidate.exists():
+            return candidate
+    raise StorageError("备份文件名冲突过多", dest=str(target))

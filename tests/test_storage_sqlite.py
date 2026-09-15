@@ -342,15 +342,23 @@ def test_backup_copies_the_schema_not_just_the_data(conn: SqliteConnection, tmp_
     assert "kept" in names
 
 
-def test_backup_overwrites_an_existing_file(conn: SqliteConnection, tmp_path: Path) -> None:
-    """VACUUM INTO 拒绝覆盖已存在的文件，连接层要先删掉它。"""
-    stale = tmp_path / "stale.db"
-    stale.write_bytes(b"not a database")
+def test_backup_lets_an_existing_file_be(conn: SqliteConnection, tmp_path: Path) -> None:
+    """目标已存在时，让路而不是覆盖。
+
+    ``VACUUM INTO`` 拒绝写一个已存在的文件，所以撞名时必须选一个别的名字。
+    早先这里是「先把旧的删掉」——看起来无害（反正是个陈旧文件），
+    但同一段代码也在给**真备份**让路：自动生成的名字只精确到秒，
+    一秒内备份两次，第一份就没了。而备份是退路，退路不该互相抵消。
+    """
+    taken = tmp_path / "stale.db"
+    taken.write_bytes(b"not a database")
 
     conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY)")
-    conn.backup_to(stale)
+    written = conn.backup_to(taken)
 
-    with SqliteConnection.open(stale, readonly=True) as restored:
+    assert written == tmp_path / "stale-2.db"
+    assert taken.read_bytes() == b"not a database"
+    with SqliteConnection.open(written, readonly=True) as restored:
         assert restored.scalar("SELECT COUNT(*) FROM sqlite_master WHERE name = 't'") == 1
 
 
