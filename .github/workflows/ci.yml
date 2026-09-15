@@ -132,6 +132,18 @@ jobs:
           fi
           echo "$FILES" | xargs ruff format --check --diff
 
+      # AGENTS.md § 4 把 `python -m mypy src/alterego` 列为必跑门禁，
+      # pyproject.toml 也把它配成 strict —— 但在此之前 CI 里根本没有这一步，
+      # 类型错误可以一路合进 main。与覆盖率下限同一类缺陷：文档说了、机制没有。
+      - name: mypy
+        run: |
+          if [ ! -d src/alterego ]; then
+            echo "⊘ 尚无 src/alterego（当前处于设计阶段），跳过"
+            exit 0
+          fi
+          python -m pip install -e ".[dev]"
+          python -m mypy src/alterego
+
       - name: 检查 TOML 可解析
         run: python -c "import glob,tomllib,pathlib; fs=sorted(glob.glob('**/*.toml',recursive=True)); [tomllib.loads(pathlib.Path(f).read_text(encoding='utf-8')) for f in fs]; print('✓ TOML 全部可解析:', ', '.join(fs))"
 
@@ -166,7 +178,12 @@ jobs:
         run: python -c "import alterego; print('alterego', getattr(alterego, '__version__', 'dev'))"
 
       - name: 运行测试
-        run: pytest -q --cov=alterego --cov-report=term-missing --cov-report=xml
+        run: pytest -q --cov=alterego --cov-report=term-missing --cov-report=xml --cov-report=json
+
+      # AGENTS.md § 5 写着四个覆盖率下限「CI 阻断」——在此之前 CI 里只有一个裸的
+      # --cov=alterego，没有 fail_under，删光 domain/ 的测试也照样绿。
+      - name: 核对覆盖率下限
+        run: python scripts/check_coverage.py
 
       - name: 上传覆盖率
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
