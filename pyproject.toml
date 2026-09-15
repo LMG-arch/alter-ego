@@ -178,6 +178,11 @@ ignore = [
 "tests/**" = ["ARG", "S101", "DTZ", "PLR2004"]
 # 架构红线脚本自身不检查
 "scripts/**" = ["T201"]
+# B027：Plugin 基类的九个生命周期钩子**故意**是空方法。
+# 它们的语义是「想改行为就覆盖哪一个」，全部标成 abstractmethod 会逼每个插件
+# 写九个空实现——那是样板代码，不是约束（设计原则 P5/P2）。
+# 见 docs/design/02-plugin-api.md § 4.1。
+"src/alterego/kernel/plugin.py" = ["B027"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["alterego"]
