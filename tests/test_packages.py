@@ -29,6 +29,7 @@ from pathlib import Path
 
 import pytest
 
+
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent / "src" / "alterego"
 
 #: 在全新解释器里只 import 顶层包，然后把溜进来的子模块打出来。
@@ -44,10 +45,8 @@ print(json.dumps(sorted(name for name in sys.modules if name.startswith("altereg
 
 def all_module_names() -> list[str]:
     """``alterego`` 下所有可导入模块的完整名字（含包本身）。"""
-    names = ["alterego"]
-    for info in pkgutil.walk_packages([str(PACKAGE_ROOT)], prefix="alterego."):
-        names.append(info.name)
-    return sorted(names)
+    found = pkgutil.walk_packages([str(PACKAGE_ROOT)], prefix="alterego.")
+    return sorted(["alterego", *(info.name for info in found)])
 
 
 ALL_MODULES = all_module_names()
@@ -105,7 +104,9 @@ def test_every_package_declares_where_its_rules_are_written() -> None:
     """
     offenders: list[str] = []
     for module_name in ALL_MODULES:
-        if not module_name.endswith((".kernel", ".domain", ".sim", ".llm", ".storage", ".channels", ".npc")):
+        if not module_name.endswith(
+            (".kernel", ".domain", ".sim", ".llm", ".storage", ".channels", ".npc")
+        ):
             continue
         module = importlib.import_module(module_name)
         docstring = (module.__doc__ or "").strip()
