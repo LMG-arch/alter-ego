@@ -344,9 +344,24 @@ class Scheduler:
 | `db_checkpoint` | 每 30 真实分钟 | SQLite WAL checkpoint |
 | `llm_usage_rollup` | 每小时 | 成本统计汇总 |
 
-### 2.7 `plugin.py` / `loader.py` / `manager.py`
+### 2.7 插件体系（`kernel/`）
 
 插件契约与生命周期是本项目的核心，独立成册，详见 [02-plugin-api.md](02-plugin-api.md)。
+
+模块划分：
+
+| 模块 | 职责 |
+| --- | --- |
+| `manifest.py` | `plugin.toml` 的解析与校验、配置取值（`PluginManifest` / `ConfigField` / `resolve_config`） |
+| `context.py` | 插件的运行期上下文：`PluginContext` / `PluginPaths` / `PluginState`，以及带归属的 `OwnedBus` / `OwnedRegistry` 视图 |
+| `plugin.py` | 门面：`Plugin` 基类 + 转发上两者的全部公开名字。**插件只需要 import 这一个模块** |
+| `loader.py` | 发现（本地目录 + pip entry points）、导入、依赖解析与拓扑排序 |
+| `manager.py` | 生命周期编排、错误隔离、熔断、热重载 |
+
+> **为什么 `plugin.py` 要拆**：它一度同时装着「怎么读清单」「怎么建上下文」「插件基类」
+> 三件互相无关的事。拆开之后每个模块只需要更少的知识——`manifest.py` 甚至不知道
+> 事件总线存在。这不是为了「文件小一点」，而是为了让 900 行红线与
+> 架构红线脚本能真正约束住内核（见 `tests/test_architecture.py`）。
 
 ---
 
@@ -554,6 +569,7 @@ class Stage(Protocol):
     """推演阶段插件契约"""
     name: str
     order: int                      # 越小越先执行
+    depends_on: tuple[str, ...]     # 依赖的其他阶段名（拓扑约束）
     enabled: bool
 
     async def run(self, ctx: TickContext) -> StageResult: ...
@@ -943,3 +959,4 @@ Tick a1b2c3d4 @ 2026-09-15 14:32 (虚拟时间)
 | 日期 | 版本 | 变更 | 作者 |
 | --- | --- | --- | --- |
 | 2026-09-15 | v0.1.0 | 初版 | LMG-arch |
+| 2026-09-15 | v0.1.1 | § 4 的 `Stage` 补上 `depends_on`；§ 2.7 补充内核插件模块的拆分与理由（对齐实现） | LMG-arch |

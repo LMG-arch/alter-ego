@@ -1265,22 +1265,44 @@ async def on_all_channels_failed(msg: OutboundMessage, errors: dict[str, str], c
 | Web 界面脱敏 | 插件配置页的密钥字段显示为 `••••••`，不可回读 |
 
 ```python
-SENSITIVE_PATTERNS = [
-    re.compile(r"(sk-[A-Za-z0-9]{20,})"),          # OpenAI key
+SENSITIVE_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
+    re.compile(r"(sk-[A-Za-z0-9]{20,})"),           # OpenAI key
     re.compile(r"(SEC[a-zA-Z0-9]{20,})"),           # 钉钉 secret
-    re.compile(r"(https://[^/]*(?:webhook|hook)[^/\s]*key=)([A-Za-z0-9-]+)"),
+    # 注意 `\S*` 而不是 `[^/\s]*`：真实的 webhook 地址几乎都带路径
+    # （`https://host/cgi-bin/hook/send?key=...`），而 `[^/\s]*` 跨不过斜杠，
+    # 一条都匹配不到——安全过滤器「看起来在工作」是最糟的状态。
+    re.compile(r"(https://\S*(?:webhook|hook)\S*key=)([A-Za-z0-9_-]+)"),
     re.compile(r"(bot\d{8,10}:[A-Za-z0-9_-]{35})"), # Telegram
-]
+)
+
+_KEEP_PREFIX = 4        # 只保留开头几位，便于用户认出「是哪个 key 泄露了」
+
+def _mask_match(match: re.Match[str]) -> str:
+    if match.lastindex is not None and match.lastindex >= 2:
+        # 双组模式：第一组是「非密钥的上下文」（URL 前缀），第二组才是密钥本身。
+        # 只替换掉第二组，日志里仍能看出「是发往哪个 webhook 时泄露的」。
+        return match.group(1) + MASK
+    secret = match.group(0)
+    return secret[:_KEEP_PREFIX] + MASK if len(secret) > _KEEP_PREFIX else MASK
 
 class SecretFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         msg = record.getMessage()
         for pattern in SENSITIVE_PATTERNS:
-            msg = pattern.sub(lambda m: m.group(1) + "***" if m.lastindex else "***", msg)
+            msg = pattern.sub(_mask_match, msg)
         record.msg = msg
         record.args = ()
         return True
 ```
+
+> 实现位于 `src/alterego/kernel/logging.py`。
+> **两条容易踩的坑**（都曾在本项目的样例代码里出现过）：
+>
+> 1. 单组模式若照抄 `m.group(1) + "***"`，会把**密钥本身原样打出来**——
+>    那等于过滤器没生效，而且看起来还在工作。
+> 2. 正则里的 `[^/\s]*` 跨不过 `/`，因此匹配不到任何真实 webhook 地址。
+>    安全相关的正则必须拿**真实形态的样例**测一遍，见
+>    `tests/test_kernel_logging.py` 里以真实 URL 形状写的用例。
 
 ### 11.2 Web 安全
 
@@ -1428,3 +1450,4 @@ v2 新增渠道**不应影响 v1 用户**：
 | 日期 | 版本 | 变更 | 作者 |
 | --- | --- | --- | --- |
 | 2026-09-15 | v0.1.0 | 初版 | LMG-arch |
+| 2026-09-15 | v0.1.1 | § 11.1 修正 `SecretFilter` 示例的两处实现 bug（单组过度脱敏、正则跨不过 `/`） | LMG-arch |

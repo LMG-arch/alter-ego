@@ -946,13 +946,20 @@ alter-ego/
 │   │   ├── bus.py
 │   │   ├── registry.py
 │   │   ├── clock.py
-│   │   ├── plugin.py                # Plugin / PluginContext / PluginManifest
+│   │   ├── manifest.py              # plugin.toml 的解析与校验
+│   │   ├── context.py               # PluginContext / PluginPaths / PluginState
+│   │   ├── plugin.py                # 门面：Plugin 基类 + 转发上面两者的公开名字
 │   │   ├── loader.py
 │   │   ├── manager.py
 │   │   ├── scheduler.py
 │   │   ├── errors.py
 │   │   └── logging.py
 │   ├── interfaces/                  # 跨层 Protocol 与纯数据契约（各层共同 import）
+│   │   ├── common.py                # HealthStatus 等共用小类型
+│   │   ├── llm.py
+│   │   ├── channel.py
+│   │   ├── storage.py
+│   │   └── simulation.py
 │   ├── domain/                      # 领域模型：纯函数，无 IO
 │   │   ├── persona.py
 │   │   ├── emotion.py
@@ -1196,3 +1203,4 @@ PR 模板中包含勾选清单，未勾选不予合并。
 | 日期 | 版本 | 变更 | 作者 |
 | --- | --- | --- | --- |
 | 2026-09-15 | v0.1.0 | 初版设计文档 | LMG-arch |
+| 2026-09-15 | v0.1.1 | § 13 目录树补上 `kernel/manifest.py` / `kernel/context.py`，展开 `interfaces/`（对齐实现） | LMG-arch |

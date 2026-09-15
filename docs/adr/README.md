@@ -123,6 +123,7 @@ src/           →  实际实现
 | [0004](0004-im-channels-outbound-only-in-v1.md) | v1 的 IM 渠道仅支持单向出站 | 已接受 | 2026-09-15 |
 | [0005](0005-downgrade-instead-of-discard-suppressed-intents.md) | 打扰预算耗尽时降级而非丢弃意图 | 已接受 | 2026-09-15 |
 | [0006](0006-ship-implementation-choices-as-data.md) | 发行版选型写成数据文件，不写进内核代码 | 已接受 | 2026-09-15 |
+| [0007](0007-auto-owning-plugin-context-views.md) | `PluginContext.bus` / `.registry` 使用带归属的视图 | 已接受 | 2026-09-15 |
 
 > 新增 ADR 后请在此表补充一行。**忘记更新索引是最常见的疏漏。**
 

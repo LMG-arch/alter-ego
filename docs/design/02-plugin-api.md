@@ -175,7 +175,10 @@ max_retry   = { type = "integer", default = 3,  min = 0, max = 5 }
 ### 4.1 基类
 
 ```python
-# alterego/interfaces.py（内核提供，插件只需 import）
+# alterego/kernel/plugin.py（内核提供，插件只需 import 这一个模块）
+#
+# 跨层的纯数据契约与 Protocol（LLMProvider / Channel / StorageBackend …）
+# 定义在 alterego/interfaces/ 包中，由本模块转发导出。
 
 class Plugin(ABC):
     """所有插件的基类"""
@@ -299,10 +302,12 @@ class PluginContext:
     """已绑定插件 id 的 logger，输出自动带 plugin_id 字段"""
 
     bus: EventBus
-    """事件总线：订阅与发布"""
+    """事件总线：订阅与发布。
+    运行期实际拿到的是 OwnedBus——订阅自动记在本插件名下。"""
 
     registry: ServiceRegistry
-    """能力注册表：注册自己提供的实现，获取自己依赖的实现"""
+    """能力注册表：注册自己提供的实现，获取自己依赖的实现。
+    运行期实际拿到的是 OwnedRegistry——注册自动记在本插件名下。"""
 
     clock: Clock
     """时钟：所有时间判断必须用它，保证倍速仿真正确"""
@@ -325,6 +330,33 @@ class PluginContext:
     def publish(self, topic: str, payload: dict) -> None: ...
     def now(self) -> datetime: ...      # == clock.virtual_now()
 ```
+
+#### `bus` 与 `registry` 是「带归属的视图」
+
+`ctx.bus` 与 `ctx.registry` 的运行期类型是 `OwnedBus` / `OwnedRegistry`：它们是
+`EventBus` / `ServiceRegistry` 的薄代理，区别只有一个——**自动把归属记成当前插件**。
+
+```python
+# 插件作者的写法：不传 owner
+ctx.registry.register(Channel, self, name="dingtalk")
+ctx.bus.subscribe("message.received", self.on_event)
+
+# 内核实际收到的调用，等价于：
+registry.register(Channel, self, name="dingtalk", owner="channel.dingtalk")
+bus.subscribe("message.received", self.on_event, owner="channel.dingtalk")
+```
+
+**为什么必须这样做**：§ 11.1 承诺「`on_load` 抛异常 → 卸载已注册的实现（回滚）」，
+§ 10.3 承诺「热重载时清掉旧实例的订阅」。如果归属要靠插件作者记得填 `owner=`，
+漏填的插件会在热重载后留下**指向半死对象的悬空引用**，而且没人会立刻发现——
+这类 bug 只在长时间运行后才显形，排查成本极高。
+
+把归属变成机制的一部分之后，作者**没法**写错。这是设计原则 P3（机制约束优于
+提示词祈祷）在本项目里最典型的一次应用，决策记录见
+[ADR-0007](../adr/0007-auto-owning-plugin-context-views.md)。
+
+> 其余方法（`get` / `has` / `get_all` / `names` / `publish` …）原样转发，
+> 所以对使用者而言它和 `EventBus` / `ServiceRegistry` 没有区别。
 
 ### 5.1 `PluginPaths`
 
@@ -356,7 +388,11 @@ class PluginState:
 
 ## 6. 能力接口定义
 
-接口定义在 `alterego/interfaces.py`（内核提供），插件实现并注册。
+接口定义在 `alterego/interfaces/` 包中（内核提供），插件实现并注册。
+
+> **为什么是包而不是单个模块**：每个能力接口都要 `import` 自己的数据契约，
+> 拆开之后 ``channel.py`` 不必认得 ``LLMRequest``，依赖关系在图上一眼可见。
+> 这也让「谁引用了谁」能被架构红线脚本逐文件检查。
 
 ### 6.1 `LLMProvider`
 
@@ -1403,3 +1439,4 @@ def test_dingtalk_signing():
 | 日期 | 版本 | 变更 | 作者 |
 | --- | --- | --- | --- |
 | 2026-09-15 | v0.1.0 | 初版，api_version = 1 | LMG-arch |
+| 2026-09-15 | v0.1.1 | 修正接口包位置（`alterego/interfaces/`）；§ 5 补充 `ctx.bus` / `ctx.registry` 的归属视图（[ADR-0007](../adr/0007-auto-owning-plugin-context-views.md)） | LMG-arch |
