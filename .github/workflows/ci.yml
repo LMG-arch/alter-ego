@@ -25,7 +25,7 @@ jobs:
     name: 架构红线
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: 检查分层依赖方向
         shell: bash
@@ -86,9 +86,9 @@ jobs:
     outputs:
       has_src: ${{ steps.guard.outputs.has_src }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -149,9 +149,9 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         python-version: ["3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -170,7 +170,7 @@ jobs:
 
       - name: 上传覆盖率
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage.xml
@@ -185,9 +185,9 @@ jobs:
     needs: [lint]
     if: needs.lint.outputs.has_src == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -213,9 +213,9 @@ jobs:
     needs: [lint]
     if: needs.lint.outputs.has_src == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -231,7 +231,7 @@ jobs:
           python -m pip install --force-reinstall dist/*.whl
           alterego --version || alterego --help | head -5
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
