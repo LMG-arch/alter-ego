@@ -131,6 +131,8 @@
 - `OwnedRegistry.__slots__` 未按字母序排列（RUF023）
 - 示例插件的 `plugin.toml` 用了 `type = "choice"` 与 `type = "int"`，两者都不是合法类型
   （`choices` 是 `string` 的约束，`int` 应写作 `integer`）——被端到端探针在提交前抓出
+- `tests/test_packages.py` 的 import 排序与 `list.extend` 写法（本地那次 `ruff check`
+  跑在这个文件出现**之前**，之后只补跑了 pytest，于是 CI 才第一次看到它）
 
 ### 文档
 
