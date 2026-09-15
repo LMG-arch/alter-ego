@@ -1,8 +1,10 @@
 """``StorageBackend`` 的 SQLite 实现。
 
-这是**唯一**把连接、迁移、PRAGMA 拼到一起的地方，也是其他层唯一能见到的东西：
+这是**唯一**把连接、迁移、PRAGMA 拼到一起的地方。
 ``storage.sqlite`` 之外的代码一律通过 ``StorageBackend`` Protocol 访问，
-不得 ``import alterego.storage.sqlite``（由 ``scripts/check_architecture.sh`` 第 3 组红线保证）。
+不得 ``import alterego.storage.sqlite``——组装根（``cli.py`` / ``cli_db.py``）
+与存储层自己是仅有的例外，
+由 ``scripts/check_architecture.sh`` 第 3 组红线覆盖整个 ``src/``。
 
 两条刻意的设计选择：
 
@@ -152,6 +154,7 @@ class SqliteStorageBackend:
         migrations: tuple[Migration, ...] | None = None,
         migrations_dir: Path = MIGRATIONS_DIR,
         backup_dir: Path | None = None,
+        read_only: bool = False,
     ) -> SqliteStorageBackend:
         """按 ``[storage]`` 配置段打开后端。
 
@@ -160,12 +163,23 @@ class SqliteStorageBackend:
         ``backup_before_destructive_migration = false`` 的效果是
         **把破坏性迁移变成一次硬失败**，而不是「那就别备份了」：
         迁移器在没有备份目录时会拒绝执行。想跑破坏性迁移就必须给退路。
+
+        显式传入的 ``backup_dir`` 优先于那个开关：开关管的是「要不要派生一个
+        默认备份目录」，不是「关掉一切备份」。手动备份（``alterego db backup``）
+        正是传它进来的，不该被这条迁移策略连坐。
+
+        Args:
+            read_only: 只读打开。维护命令（``db status`` / ``db backup``）用它，
+                免得一个只看一眼的命令顺手把库改了。只读时 PRAGMA 与启动自检
+                全部跳过——``journal_mode`` 这类设置本来就不允许在只读连接上写。
         """
-        if not config.backup_before_destructive_migration:
-            # 明确「没有退路」：不派生默认目录，让迁移器在破坏性迁移前硬失败。
-            effective_backup_dir: Path | None = None
+        if backup_dir is not None:
+            effective_backup_dir: Path | None = backup_dir
+        elif config.backup_before_destructive_migration:
+            effective_backup_dir = Path(config.db_path).parent / _BACKUP_DIRNAME
         else:
-            effective_backup_dir = backup_dir or Path(config.db_path).parent / _BACKUP_DIRNAME
+            # 明确「没有退路」：不派生默认目录，让迁移器在破坏性迁移前硬失败。
+            effective_backup_dir = None
 
         return cls.open(
             config.db_path,
@@ -179,6 +193,7 @@ class SqliteStorageBackend:
             migrations=migrations,
             migrations_dir=migrations_dir,
             backup_dir=effective_backup_dir,
+            read_only=read_only,
             checkpoint_on_start=config.checkpoint_on_start,
             integrity_check_on_start=config.integrity_check_on_start,
         )

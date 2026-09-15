@@ -98,7 +98,8 @@
 1. **其余 21 张表的领域模型**（`Persona` / `World` / `NPC` / `Relationship` / `ScheduleBlock` 之外的表镜像、`UsageSummary` / `UsageDaily` / `LLMUsage` / `BudgetUsage` / `MediaAsset` / `SourceItem` / `LogEntry` …）→ 下一批次
 2. **12 个 Repository 实现**（`storage/sqlite/repo/`）→ 下一批次
 3. **`storage.sqlite` 插件打包**（`plugin.toml` + entry point）→ 下一批次
-4. **`alterego db migrate / status / backup / restore` CLI 子命令** → 再后一批
+4. ~~**`alterego db migrate / status / backup / restore` CLI 子命令** → 再后一批~~
+   **已完成**（批次 5，见 [`2026-09-15-storage-cli.md`](2026-09-15-storage-cli.md)）
 5. `domain/media.py`（`build_portrait_prompt`）与 `domain/untrusted.py` → 与生图 / 外部源接线时一起做
 
 ## 6. 本批次发现的、需要后续修的结构问题

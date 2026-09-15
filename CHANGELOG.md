@@ -297,6 +297,46 @@
   CLI 用例用 autouse fixture 把生日文件换成临时文件，
   **绝不碰开发者本机真实的 `data/birthdays.toml`**
 
+**数据库维护命令（`alterego db`，已实现）**
+
+迁移器和它的测试早就在了，但用户手上没有一个能用的命令——这一批把
+[`docs/design/03-data-model.md`](docs/design/03-data-model.md) § 8.5 的五条调用补上。
+顺序按「**先看、再做、留住退路**」排：`status` 看清现状，`migrate` 动手，
+`backup` 留退路，`restore` 是唯一的回头路。
+
+- `cli_db.py` —— `alterego db {status,migrate,backup,restore}`。这是**组装根**：
+  整个程序里只有这里与 `cli.py` 知道「存储用的是 SQLite」，其余代码一律只认
+  `StorageBackend` Protocol。四个命令都不是新机制，
+  是把已经写好、已经被测试覆盖的存储层接口接到命令行上
+- `cli_io.py` —— `_out` / `_err` / `_width` / `_pad` / `_human_size`。
+  `scripts/check_architecture.sh` 第 5 组对**整个** `src/alterego` 禁止 `print(`，
+  命令行没有豁免。公共输出助手单独一个模块，是因为 `cli.py` 与 `cli_db.py`
+  都要用它，放在任一边都会造出依赖方向问题
+- **为什么拆三个文件**：`cli.py` 有 937 行，撞上 `AGENTS.md` § 5 的
+  「单文件 ≤ 900 行」。拆的边界不是「职责」，
+  而是**「再加一个命令组就会再撞一次」**：参数树留下、输出助手独立、
+  `db` 命令组独立
+- **退出码 `4` 第一次真正被用上**：`main()` 给 `MigrationError` 单独一条分支。
+  此前 `4` 只写在文档里，而异常类的 `exit_code` 属性实际不存在——
+  「迁移失败返回 4」的文档与「所有错误都返回 2」的代码并存了两批
+- **`db status` 与 `db migrate --dry-run` 不建库**。库不存在时打开一个内存库：
+  `open(真路径)` 的默认行为就是顺手创建文件，而「查一下」不该变成「建了一个空库」。
+  `--dry-run` 也**不备份**——备份的时机是「真的要改库之前」，预演连这个前提都没有
+- **`db status` 在库读不出来时照常打印并返回 `2`**：版本比程序新、比程序要求的旧、
+  文件损坏，都是「跑起来才会遇到」的状态。把它们变成 traceback，
+  等于让用户自己去猜该升级程序还是该升级库
+- **`db restore` 的顺序是「留一手 → 校验 → 覆盖」**。先把现在这份复制出去，
+  再以**只读**方式打开备份确认它真是一个库，最后才覆盖。任何一步失败
+  都必须在「现在这份还在」的状态下退出——一次失败的恢复不该把两份都弄没
+- **只敲到组名时，打那一层的帮助**。`alterego db` 此前回落到顶层帮助，
+  看着像「db 后面没东西可以敲」。三组（`calendar` / `birthday` / `db`）
+  都把自己存进 `args.subparser`，`main()` 优先用它
+- 迁移表格的**中文列宽**按显示宽度算，文件名那一列写死 25 列——
+  `004_observability.sql` 是 23 个字符，此前 22 的列宽把它的描述挤进了前一列
+- 测试新增 39 个（全库 1273 个）：`test_cli_db.py`（32，新）/ `test_cli.py`（+4）/ 
+  `test_storage_backend.py`（+2）/ `test_storage_sqlite.py`（1 个改写）。
+  覆盖率：`cli_db.py` 95.05%、`cli_io.py` 95.65%、全库 96.59%
+
 ### 变更
 
 - **迁移文件从此只管 DDL**。四个 `.sql` 里没有任何 `PRAGMA` 头、没有 `IF NOT EXISTS`、
@@ -363,7 +403,28 @@
 
 ### 修复
 
-- **`alterego calendar list --year 2027` 会拿 2026 的节日列表顶着 2027 的标题输出**，
+- **备份会互相抵消（静默数据丢失）**。`SqliteConnection.backup_to()` 在写之前执行
+  `target.unlink()`——理由是 `VACUUM INTO` 拒绝写一个已存在的文件，
+  而当时把撞名当成「反正是个陈旧文件，删了就是」。但同一段代码也在给**真备份**让路：
+  自动生成的文件名只精确到秒（`alterego-20260915-223422.db`），
+  一秒内备份两次，第一份就没了，且一声不吭；`db restore` 每次留的那份
+  `before-restore-*.db` 走的也是这条路径。**备份是退路，退路不能互相抵消**——
+  现在撞名时让路（`x.db` → `x-2.db`），并返回**实际写出的路径**，
+  调用方不得假定它等于入参。这个 bug 是**手工跑命令行**发现的：
+  单测里每次备份都指向不同的 `tmp_path`，撞名这条路径没有任何用例走过
+- **`alterego db`、`alterego calendar`、`alterego birthday`（不带子命令）打印的是
+  顶层帮助**。这是 argparse 的默认回落行为，但敲了 `db` 却看到顶层帮助，
+  会让人以为 `db` 后面没东西可以敲——而只敲了个组名，正是最需要指路的时候。
+  修法是把各组的 parser 存进 `args.subparser`，`main()` 优先用它
+- **`scripts/check_architecture.sh` 第 3 组红线排除范围太窄**。它允许 `cli.py`
+  引用具体存储实现，却没有允许 `cli_db.py`——而后者正是从它拆出来的，
+  职责与被排除者完全相同。这暴露了一个比缺陷本身更值得记的问题：
+  **那条红线是在被它管辖的文件出现之前通过的**。现在正则改为 `cli(_db)?\.py:`，
+  并给 `check_forbidden_excluding` 的 `exclude` 参数补上「这是扩展正则」的说明
+- `cli.py` 在拆出 `cli_db.py` 后剩下四个未使用的 import（F401），
+  而它们原本正是「本文件是组装根」的证据
+
+### 安全
   退出码还是 0。原因：`load_calendar(2027)` 为了看年末会把前后各一年合并进来，
   于是磁盘上只有 `2026.toml` 时它照样返回一份日历，调用方的 `is None` 判断从未生效。
   现在改为**验证覆盖**（`covers_year`）而不是只判 `None`，并且列表再按年份过滤一道。
@@ -419,6 +480,16 @@
 
 ### 文档
 
+- P7 同步：`03-data-model.md`（§ 8.5 五条命令标注为已实现并补上四条使用约定；
+  § 9.1 备份文件名改为连字符——文档写的是 `alterego_20260915_143211.db`，
+  代码输出的是 `alterego-20260915-143211.db`）、
+  `05-channels.md`（§ 8.1 命令树删掉凭空存在的 `db vacuum` 与 `db rollback --to <n>`
+  并补上缺失的 `restore`；§ 8.2 补 `db status` 的实测输出；
+  § 8.3 把设计期那段 `print` + `exc.exit_code` 的伪代码换成真实实现的四条约定）、
+  `06-roadmap.md` M2、本文件
+- 新增 [`docs/plans/2026-09-15-storage-cli.md`](docs/plans/2026-09-15-storage-cli.md)：
+  这一批做了什么、**没做什么**（`storage.sqlite` 插件壳、12 个 Repository、
+  `db vacuum` / `export` / `import`）
 - 新增 `docs/adr/0008` 角色形象一致性锚定在一张定妆照上
 - 新增 `docs/adr/0009` 抓取的外部内容一律视为不可信输入
 - 新增 `docs/adr/0010` 每个配置项都必须携带可展示的元数据

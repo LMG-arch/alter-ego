@@ -169,7 +169,7 @@ flowchart LR
 | 总线 | 通配符订阅、优先级、异常隔离、重入深度限制均有测试 |
 | 时钟 | `VirtualClock` 以 60x 推进；同一 tick 内时间冻结 |
 | 调度 | `every` / `at_time_of_day` 在虚拟时钟下正确触发 |
-| 架构红线 | `scripts/check_architecture.sh` 七组 22 项全部通过 |
+| 架构红线 | `scripts/check_architecture.sh` 七组 23 项全部通过 |
 | 测试 | 内核层覆盖率 ≥ 90% |
 
 **验证命令**：
@@ -185,7 +185,7 @@ alterego plugins list
 | 项 | 验收标准 |
 | --- | --- |
 | 数据库 | 26 张设计表 + `schema_version` + 2 个视图全部创建（`PRAGMA user_version = 4`） |
-| 迁移 | 提供 `001_initial.sql` ~ `004_observability.sql`；`alterego db migrate --dry-run` 可预演 |
+| 迁移 | 提供 `001_initial.sql` ~ `004_observability.sql`；`alterego db migrate --dry-run` 可预演；`alterego db {status,migrate,backup,restore}` 四条命令均已落地 |
 | 检索 | FTS5 BM25 检索可用；中文分词走 `preprocess_for_fts()`；Top-8 返回带分数分解 |
 | 情绪 | `update_emotion()` 纯函数，顺序为回归→冲击→惯性；有单元测试覆盖 4 条规则 |
 | 记忆 | `strength_at()` 与文档验证表数值一致（误差 < 0.001） |

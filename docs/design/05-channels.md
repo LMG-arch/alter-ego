@@ -1031,11 +1031,13 @@ alterego
 │   └── doctor              检查各渠道连通性
 │
 ├── db
-│   ├── migrate [--dry-run]
-│   ├── status
-│   ├── backup [--dest]
-│   ├── vacuum
-│   └── rollback --to <n>
+│   ├── status              库在哪、版本多少、还差几个迁移
+│   ├── migrate [--dry-run] 建库，或把库升到当前版本
+│   ├── backup [--dest PATH] 整份备份（唯一的「回滚」手段）
+│   └── restore <file>      从备份恢复（会覆盖现在的库）
+│
+│                           vacuum 见 § 10 的优化建议；
+│                           **没有** rollback --to，理由见 03-data-model.md § 8.5
 │
 ├── export / import
 ├── stats [--cost|--activity|--emotion]
@@ -1110,6 +1112,53 @@ LLM 消耗   今日 $1.12 / $2.00
 `set` 挡「没记过」，默认都不覆盖。生日的「没核对」与节日的待核对**分两行显示**——
 要去核的对象不同（一个是国务院公告，一个是本人）。
 
+**`alterego db status`**（还没建库，见 [03](03-data-model.md) § 8.5）：
+
+```
+数据库 · D:\ai\个人agent\data\alterego.db
+──────────────────────────────────────────────────────────
+库文件    还没建过
+当前版本  0
+目标版本  4
+待执行    4 个
+
+  001_initial.sql          建立 v0.1.0 的基础表、记忆全文索引与触发器
+                           非破坏性｜声明可逆
+  002_media.sql            新增图片资产与生图计量
+                           非破坏性｜声明可逆
+  003_sources.sql          新增外部信息来源（检索条目、RSS 订阅源、检索记录）
+                           非破坏性｜声明可逆
+  004_observability.sql    新增结构化运行日志、补齐 correlation_id 与两个视图
+                           非破坏性｜声明可逆
+
+运行 alterego db migrate 把它升到 4。
+```
+
+「还没建过」就是字面意思：**这条命令没有把库建出来**。库不存在时它打开的是
+一个内存库——`open(真路径)` 的默认行为就是顺手把文件创建出来，而「查一下」
+不该变成「建了一个空库」。
+
+迁移表格用**显示宽度**对齐（中文一个字占两列）。文件名那一列写死 25 列，
+比现有最长的 `004_observability.sql`（23 个字符）宽一点——
+否则那一行的描述会被挤进前一列里去。
+
+**`alterego db status`**（已建库）：
+
+```
+数据库 · D:\ai\个人agent\data\alterego.db
+──────────────────────────────────────────────────────────
+库文件    440.0 KB
+当前版本  4
+目标版本  4
+待执行    无
+
+已是最新（schema_version 4）。
+```
+
+库的版本比程序新或太旧时，这**就是**状态，不是崩溃：`status` 照常打印
+「当前无法读取」加上原因，退出码 `2`。脚本得能发现「这个库现在读不了」，
+而人得能从那一行里看出该升级程序还是该升级库。
+
 **`alterego memory search "爬山"`**（显示分数分解）：
 
 ```
@@ -1132,56 +1181,47 @@ LLM 消耗   今日 $1.12 / $2.00
 
 ### 8.3 实现
 
-**argparse**（零依赖）：
+**argparse**（零依赖）。真实实现住在 `src/alterego/cli.py`：
+`build_parser()` 用 `set_defaults(handler=...)` 把子命令接到处理函数上，
+而不是维护一张 `COMMANDS` 映射表——表要在两处同步，`set_defaults` 只有一处。
 
-```python
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="alterego", description="拟人化生活模拟 Agent")
-    p.add_argument("--config", type=Path, default=None)
-    p.add_argument("--verbose", "-v", action="count", default=0)
-    p.add_argument("--version", action="version", version=f"alterego {__version__}")
+四条与本节早期草稿不同的约定，每一条都是踩过之后才定下来的：
 
-    sub = p.add_subparsers(dest="command", required=True)
+- **不用 `print`**。`scripts/check_architecture.sh` 第 5 组对整个 `src/alterego`
+  禁止 `print(`（本意是「生产代码别留调试打印」，而 CLI 恰好也在那个目录里）。
+  输出统一走 `cli_io._out` / `_err`。不去给红线开口子——它是给生产代码用的，
+  而 `sys.stdout.write` 把「这行是给用户看的输出」表达得更清楚。
+- **退出码不挂在异常上**。异常类只描述「发生了什么」，「这个进程该以几退出」
+  是 CLI 的判断。`main()` 里按异常类型分派：迁移失败 `4`，其余配置类错误 `2`。
+  （草稿里的 `exc.exit_code` 等于让每个异常类自己声明退出码，那是
+  「谁用谁知道」的分工，而知道的是调用方。）
+- **只敲到某一层组名时，打那一层的帮助**（`alterego db` 打 db 的帮助）。
+  argparse 的默认行为是打顶层帮助，看着像「db 后面没东西可以敲」——
+  而只敲了个组名，正是最需要指路的时候。
+- **中文表格按显示宽度对齐**。`f"{text:<8}"` 数的是字符个数，中文一个字占两列，
+  于是所有含中文的列都会错位。`cli_io._pad` 用 `unicodedata.east_asian_width`
+  算真实宽度。
 
-    sub.add_parser("init", help="初始化项目")
-    sp = sub.add_parser("serve", help="启动守护进程")
-    sp.add_argument("--host", default=None)
-    sp.add_argument("--port", type=int, default=None)
-    sp.add_argument("--no-web", action="store_true")
+退出码（[01](01-architecture.md) § 6.3）：
 
-    sp = sub.add_parser("why", help="解释最近的行为")
-    sp.add_argument("--at", type=str)
-    sp.add_argument("--outbound", action="store_true")
-    sp.add_argument("--suppressed", action="store_true")
+| 码 | 含义 |
+| --- | --- |
+| 0 | 正常 |
+| 1 | 通用错误 |
+| 2 | 配置非法（含「数据文件写坏了」「年份越界」「库读不出来」） |
+| 3 | 插件依赖环 |
+| 4 | 数据库迁移失败 |
 
-    # ── persona ──
-    pp = sub.add_parser("persona", help="人设管理").add_subparsers(dest="sub", required=True)
-    pp.add_parser("show")
-    pp.add_parser("edit")
-    pp.add_parser("generate")
-    sp = pp.add_parser("refine"); sp.add_argument("instruction")
-    pp.add_parser("history")
-    sp = pp.add_parser("diff"); sp.add_argument("v1", type=int); sp.add_argument("v2", type=int)
-    sp = pp.add_parser("rollback"); sp.add_argument("version", type=int)
+**为什么分成三个文件**：`cli.py`（参数树 + calendar/birthday）→
+`cli_io.py`（输出助手）→ `cli_db.py`（`db` 命令组，**组装根**）。
+切分的直接原因是 `AGENTS.md` § 5 的「单文件 ≤ 900 行」——`cli.py` 一度是 937 行。
+不是因为「一个文件干太多事」，而是因为**加一个命令组就会再撞一次上限**。
 
-    # ... 其余命令
+**组装根**：整个程序里只有 `cli_db.py`（以及它的调用方 `cli.py`）知道
+「存储用的是 SQLite」，其余代码一律只认 `StorageBackend` Protocol。
+`scripts/check_architecture.sh` 第 3 组红线覆盖整个 `src/` 来钉住它，
+例外写在脚本的注释里——**例外要出现在能看见的地方，才叫例外**。
 
-    return p
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    try:
-        return COMMANDS[args.command](args)
-    except KeyboardInterrupt:
-        print("\n已中断")
-        return 130
-    except AlterEgoError as exc:
-        print(f"✗ {exc}", file=sys.stderr)
-        if exc.context.get("hint"):
-            print(f"  建议: {exc.context['hint']}", file=sys.stderr)
-        return exc.exit_code
-```
 
 ---
 

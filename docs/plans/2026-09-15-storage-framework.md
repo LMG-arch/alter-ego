@@ -117,6 +117,7 @@
 
 - 12 个 Repository 的具体实现（`PersonaRepository` … `BudgetRepository`）—— 批次 2
 - 把 `SqliteStorageBackend` 包成 `storage.sqlite` 插件（`plugin.toml` + 入口点）—— 批次 2
-- `alterego db migrate / status / backup` CLI 子命令 —— 批次 3
+- ~~`alterego db migrate / status / backup` CLI 子命令 —— 批次 3~~
+  **已完成**（批次 5，`2026-09-15-storage-cli.md`）：四条命令，另加 `restore`
 - `domain/` 领域层纯函数 —— 批次 2 之后
 - `jieba` 中文分词接入（`03-data-model.md § 6.4`）—— 依赖批次 2 的 Repository

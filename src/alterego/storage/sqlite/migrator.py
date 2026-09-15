@@ -88,7 +88,12 @@ class Migration:
     """是否会丢失数据。为真时，应用前必须先备份。"""
 
     reversible: bool
-    """是否可回滚。为假时 ``alterego db rollback`` 会拒绝执行。"""
+    """是否原则上可逆。
+
+    这是**声明性元数据**，不驱动任何代码路径：迁移器只往前走，
+    没有 ``db rollback``，唯一的退路是一份 ``VACUUM INTO`` 出来的完整备份。
+    它目前只给 ``alterego db status`` 展示用。
+    """
 
     sql: str
     """迁移主体（已去掉头部注释行与首尾空白）。"""

@@ -88,6 +88,7 @@ check_required() {
 # check_forbidden_excluding <名称> <正则> <路径> <排除的路径片段> <说明>
 #
 # 用于「除了实现该机制的那个文件，其他任何地方都不准这么做」的规则。
+# ``exclude`` 是**扩展正则**，可写 ``a\.py|/b/`` 一次排除多处。
 check_forbidden_excluding() {
     local name="$1" pattern="$2" path="$3" exclude="$4" hint="$5"
     CHECKS=$((CHECKS + 1))
@@ -97,7 +98,7 @@ check_forbidden_excluding() {
 
     local hits
     hits=$(grep -rEn --include='*.py' "$pattern" "$path" 2>/dev/null \
-           | grep -v "$exclude" || true)
+           | grep -vE "$exclude" || true)
 
     if [[ -n "$hits" ]]; then
         printf '  %s✗%s %s\n' "$RED" "$RESET" "$name"
@@ -214,6 +215,23 @@ check_forbidden \
     "from alterego\.storage\.sqlite|import alterego\.storage\.sqlite" \
     "$SIM" \
     "通过 Repository Protocol 或 ctx.storage 访问，不 import 具体实现。"
+
+# 上面那条只盯 sim/，而 `storage/sqlite/__init__.py` 的 docstring 承诺的是
+# 「其他层一律不得 import」。承诺与检查范围不一致时，承诺就是一句空话——
+# 所以这里把它扩到整个 src/，只留两个正当的例外：
+#
+#   cli.py      组装根（composition root）。它的职责就是挑一个具体实现装上，
+#               和 `main()` 里 `Main->>Store: migrate()`（01-architecture.md § 6.1）
+#               是同一件事。组装根引用具体实现是架构允许的，不是漏洞。
+#   cli_db.py   同一件事的延伸：`alterego db` 那几个维护命令住在这里。
+#               它是因为 cli.py 撞上 900 行上限才拆出去的，职责没变。
+#   storage/    实现自己。`backend.py` / `migrator.py` 当然要互相 import。
+check_forbidden_excluding \
+    "sqlite 实现只被组装根与存储层引用" \
+    "from alterego\.storage\.sqlite|import alterego\.storage\.sqlite" \
+    "$SRC" \
+    "cli(_db)?\.py:|/storage/" \
+    "除 cli.py / cli_db.py（组装根）与 storage/ 之外，一律通过 StorageBackend Protocol 访问。想要具体实现，让组装根构造好再传进来。"
 
 check_forbidden \
     "sim/ 不直接依赖具体 LLM 客户端" \

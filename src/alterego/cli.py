@@ -3,7 +3,7 @@
 完整命令树见 ``docs/design/05-channels.md`` § 8。当前实现到「能启动、能报版本、
 能查节日日历、能记生日」——后续每加一个功能就多一个子命令，而不是一次性写完再调。
 
-退出码约定（``docs/design/01-architecture.md`` § 7）::
+退出码约定（``docs/design/01-architecture.md`` § 6.3）::
 
     0  正常
     1  通用错误
@@ -11,24 +11,33 @@
     3  插件依赖环
     4  数据库迁移失败
 
-关于输出：这一层用 ``sys.stdout.write`` 而不是 ``print``。
-``scripts/check_architecture.sh`` 第 5 组对 ``src/alterego`` **整个目录**禁止
-``print(``（本意是「生产代码别留调试打印」，而 CLI 正好也在那个目录里）。
-不去改那条红线——它是给生产代码用的；CLI 用显式的 ``sys.stdout.write``
-表达「这行是给用户看的输出」，反而更清楚。
+关于输出：统一走 ``alterego.cli_io`` 里的 ``_out`` / ``_err``。为什么不用
+``print``、为什么把它们单独放一个模块，那里写着。
+
+关于分层：**组装根**（composition root）有两个文件——本文件与 ``cli_db.py``。
+``db`` 那几个命令会挑一个具体的存储实现装上，那部分住在 ``cli_db.py``
+（它是因为本文件撞上「单文件 ≤ 900 行」才拆出去的）；本文件只留参数树
+与其余命令组。整个程序里只有这两个文件知道「存储用的是 SQLite」，
+其余代码一律只认 ``StorageBackend`` Protocol。
+``scripts/check_architecture.sh`` 第 3 组红线把这件事钉住了。
 """
 
 from __future__ import annotations
 
 import argparse
-import sys
-import unicodedata
 from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
 
 from alterego import __version__
 from alterego.birthdays import default_path, load_book, save_book
+from alterego.cli_db import (
+    cmd_db_backup,
+    cmd_db_migrate,
+    cmd_db_restore,
+    cmd_db_status,
+)
+from alterego.cli_io import _RULE, _err, _out, _pad
 from alterego.domain.birthday import (
     DEFAULT_AFTERMATH_DAYS,
     DEFAULT_LEAD_DAYS,
@@ -54,27 +63,13 @@ from alterego.domain.calendar import (
 from alterego.holidays import available_years, load_calendar
 from alterego.kernel.clock import resolve_timezone
 from alterego.kernel.config import Config
-from alterego.kernel.errors import AlterEgoError
+from alterego.kernel.errors import AlterEgoError, MigrationError
 
 
 __all__ = ["build_parser", "main"]
 
 _WEEKDAY_NAMES = "一二三四五六日"
-_RULE = "─" * 58
 _BAR_WIDTH = 10
-
-
-# ────────────────────────────────────────────────────────────
-# 输出助手
-# ────────────────────────────────────────────────────────────
-
-
-def _out(text: str = "") -> None:
-    sys.stdout.write(text + "\n")
-
-
-def _err(text: str) -> None:
-    sys.stderr.write(text + "\n")
 
 
 def _weekday(day: date) -> str:
@@ -97,20 +92,6 @@ def _bar(value: float, width: int = _BAR_WIDTH) -> str:
     """把 0~1 的强度画成条形：`0.35` 看不出趋势，`███░░░░░░░` 看得出。"""
     filled = max(0, min(width, round(value * width)))
     return "█" * filled + "░" * (width - filled)
-
-
-def _width(text: str) -> int:
-    """显示宽度。CJK 与全角标点占两列。"""
-    return sum(2 if unicodedata.east_asian_width(char) in "WF" else 1 for char in text)
-
-
-def _pad(text: str, width: int) -> str:
-    """按**显示宽度**补齐。
-
-    用 `f"{text:<8}"` 不行：它数的是字符个数，而中文一个字占两列，
-    于是表格里所有含中文的列都会错位（`节后 0  天` 旁边跟着 `节后 1 天`）。
-    """
-    return text + " " * max(0, width - _width(text))
 
 
 def _span(holiday: Holiday) -> str:
@@ -533,13 +514,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="version",
         version=f"alterego {__version__}",
     )
-    commands = parser.add_subparsers(dest="command", metavar="{calendar,birthday}")
+    commands = parser.add_subparsers(dest="command", metavar="{calendar,birthday,db}")
 
     calendar_parser = commands.add_parser("calendar", help="节日日历：它知道过几天要过节")
     calendar_commands = calendar_parser.add_subparsers(
         dest="subcommand",
         metavar="{list,today,check}",
     )
+    # 记住自己，好让「只敲 `alterego calendar`」打出**这一层**的帮助。
+    # 不记的话会回落到顶层帮助，看着像「calendar 后面没东西可以敲」。
+    calendar_parser.set_defaults(subparser=calendar_parser)
 
     list_parser = calendar_commands.add_parser("list", help="一年的节日一览")
     _add_year(list_parser)
@@ -572,6 +556,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="subcommand",
         metavar="{list,add,set}",
     )
+    birthday_parser.set_defaults(subparser=birthday_parser)
 
     birthday_list = birthday_commands.add_parser("list", help="记过谁的生日，下次还有几天")
     birthday_list.add_argument(
@@ -590,6 +575,37 @@ def build_parser() -> argparse.ArgumentParser:
     _add_birthday_arguments(birthday_set)
     birthday_set.set_defaults(handler=_cmd_birthday_set)
 
+    db_parser = commands.add_parser("db", help="数据库：建库、看状态、备份、恢复")
+    db_commands = db_parser.add_subparsers(
+        dest="subcommand",
+        metavar="{status,migrate,backup,restore}",
+    )
+    db_parser.set_defaults(subparser=db_parser)
+
+    db_status = db_commands.add_parser("status", help="库在哪、版本多少、还差几个迁移")
+    db_status.set_defaults(handler=cmd_db_status)
+
+    db_migrate = db_commands.add_parser("migrate", help="建库，或把库升到当前版本")
+    db_migrate.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="只显示将要执行什么，不改数据库，也不建库",
+    )
+    db_migrate.set_defaults(handler=cmd_db_migrate)
+
+    db_backup = db_commands.add_parser("backup", help="整份备份（唯一的「回滚」手段）")
+    db_backup.add_argument(
+        "--dest",
+        default=None,
+        metavar="PATH",
+        help="备份到哪（默认 data/backups/alterego-<时间戳>.db）",
+    )
+    db_backup.set_defaults(handler=cmd_db_backup)
+
+    db_restore = db_commands.add_parser("restore", help="从备份恢复（会覆盖现在的库）")
+    db_restore.add_argument("file", metavar="FILE", help="要恢复的备份文件")
+    db_restore.set_defaults(handler=cmd_db_restore)
+
     return parser
 
 
@@ -607,12 +623,20 @@ def main(argv: list[str] | None = None) -> int:
 
     handler: Callable[[argparse.Namespace], int] | None = getattr(args, "handler", None)
     if handler is None:
-        # 还没指定具体子命令（例如只敲了 `alterego`）——打印帮助是当前最合理的行为。
-        parser.print_help()
+        # 只敲了 `alterego`，或只敲到某一层组名（如 `alterego db`）。
+        # 后者要打**那一层**的帮助：敲 `db` 却看到顶层帮助，会让人以为
+        # `db` 后面没东西可以敲——而这恰好是最需要指路的时候。
+        group: argparse.ArgumentParser | None = getattr(args, "subparser", None)
+        (group or parser).print_help()
         return 0
 
     try:
         return handler(args)
+    except MigrationError as exc:
+        # 迁移失败单独一个退出码。它是唯一一条「数据库可能停在半路」的失败，
+        # 脚本最需要把它和「配置写错了」区分开；文档也承诺了 4。
+        _err(f"错误：{exc}")
+        return 4
     except (AlterEgoError, ValueError) as exc:
         # 数据文件写坏了、年份越界、配置文件非法。都是「配置非法」，不是崩溃。
         _err(f"错误：{exc}")

@@ -471,7 +471,7 @@ git diff --name-only main...HEAD | grep '^docs/'  # 有文档变更？
 
 ## 架构红线
 
-CI 会跑 [`scripts/check_architecture.sh`](scripts/check_architecture.sh)，**七组共 22 项**检查：
+CI 会跑 [`scripts/check_architecture.sh`](scripts/check_architecture.sh)，**七组共 23 项**检查：
 
 | 组 | 内容 |
 | --- | --- |

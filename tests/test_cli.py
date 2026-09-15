@@ -61,6 +61,19 @@ class TestMain:
         assert main() == 0
         assert "usage: alterego" in capsys.readouterr().out
 
+    @pytest.mark.parametrize("group", ["calendar", "birthday", "db"])
+    def test_a_bare_group_name_prints_that_groups_help(
+        self, group: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """`alterego calendar` 要看的是 calendar 有什么子命令。
+
+        回落到顶层帮助（argparse 的默认行为）等于什么也没说，
+        而「只敲了个组名」正是最需要指路的时候。
+        """
+        assert main([group]) == 0
+        out = capsys.readouterr().out
+        assert f"usage: alterego {group}" in out
+
 
 # ────────────────────────────────────────────────────────────
 # calendar · 这一组读的是随包数据

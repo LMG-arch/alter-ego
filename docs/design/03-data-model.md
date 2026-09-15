@@ -1430,12 +1430,25 @@ required = max(item.version for item in discover_migrations())   # 当前 = 4
 ### 8.5 命令
 
 ```bash
+alterego db status               # 显示当前版本与待执行迁移（只读，不建库）
 alterego db migrate              # 应用所有待执行迁移
 alterego db migrate --dry-run    # 只显示将要执行的内容
-alterego db status               # 显示当前版本与待执行迁移
 alterego db backup               # 手动备份
 alterego db restore <file>       # 从备份恢复（这是唯一的「回滚」方式）
 ```
+
+**已实现**（`alterego db` 命令组，见 [05](05-channels.md) § 8.2 的样例输出）。
+几条不在字面上但影响使用的约定：
+
+- **`status` 与 `migrate --dry-run` 不建库**。库不存在时它们打开一个内存库，
+  而不是把真路径建出来——「查一下」不该变成「建了一个空库」。
+- **`migrate --dry-run` 也不备份**。备份的时机是「真的要改数据库之前」，
+  预演连这个前提都不存在。
+- **`restore` 先把现在这份留一手再覆盖**，顺序是「留一手 → 校验备份 → 覆盖」。
+  任何一步失败都必须在「现在这份还在」的状态下退出：一次失败的恢复
+  不该把两份都弄没。
+- **退出码**：命令自身的问题（库还不在、备份读不出来）是 `2`；
+  迁移失败是 `4`（见 [01](01-architecture.md) § 6.3）。
 
 > **没有 `db rollback --to N`，这是有意的。** 反向迁移的正确性几乎从不会被测试
 > ——真正的回滚发生在生产事故里，而那是最不适合第一次运行某段代码的时机。
@@ -1452,15 +1465,20 @@ alterego db restore <file>       # 从备份恢复（这是唯一的「回滚」
 ### 9.1 备份
 
 ```bash
-alterego db backup                          # → data/backups/alterego_20260915_143211.db
+alterego db backup                          # → data/backups/alterego-20260915-143211.db
 alterego db backup --dest /path/to/backup
 ```
 
 使用 SQLite 的 `VACUUM INTO`（在线安全备份，无需停止进程）：
 
 ```sql
-VACUUM INTO 'data/backups/alterego_20260915_143211.db';
+VACUUM INTO 'data/backups/alterego-20260915-143211.db';
 ```
+
+**备份不覆盖已有的备份。** 目标文件名已存在时往后加序号（`x.db` → `x-2.db`），
+实际的路径会打印出来。自动生成的名字只精确到秒，一秒内跑两次完全可能，
+而 `VACUUM INTO` 又拒绝写一个已存在的文件——早先的做法是「先删掉再写」，
+于是第二次备份把第一次的成果删掉了。**备份是退路，退路不能互相抵消。**
 
 ### 9.2 导出
 
