@@ -65,6 +65,7 @@ data/cache/
 logs/
 *.log
 *.log.*
+!logs/.gitkeep
 
 # ── 密钥与令牌 ──
 .env
@@ -87,6 +88,8 @@ persona.local.toml
 exports/
 *.export.json
 *.export.jsonl
+!instances/.gitkeep
+!exports/.gitkeep
 
 # ═════════════════════════════════════════════════════════════
 # 编辑器与系统
