@@ -45,7 +45,14 @@
 | 2 | **不用全局 `random`**（用 `ctx.rng`） | 行为不可重现 | 红线组 3 |
 | 3 | **LLM 调用必经 `ctx.llm()`** | 成本漏报、预算失效 | 红线组 7 |
 | 4 | **不自行构造 logging handler** | 密钥脱敏失效 | 红线组 5 |
-| 5 | **新增配置项必须写 `description` + `effect`** | 用户看到无说明的开关 | `test_settings_metadata.py` |
+| 5 | **新增配置项必须写中文 docstring 说明「改了会怎样」** | 用户看到无说明的开关 | ⚠️ 暂无自动化（见下） |
+
+> ⚠️ 第 5 条目前**只能靠人守**。完整的展示元数据机制（`Setting(description=..., effect=...)`
+> + `tests/test_settings_metadata.py`）是 v0.2.0 的设置中心，**尚未实现**——
+> [`docs/design/10-settings-center.md`](docs/design/10-settings-center.md)，
+> [ADR-0010](docs/adr/0010-every-setting-carries-display-metadata.md)。
+> 今天能自动化的只有「模板覆盖了每个键」（`tests/test_kernel_config.py`）。
+> 按照上面那条元规则，**这一条现在还不算规则**——把机制做出来它才算。
 
 ### 一条元规则
 
@@ -331,9 +338,17 @@ feat(plugin)!: 插件清单必填 api_version
 | `sim/` | 85% |
 | 全局 | 85% |
 
-### 强制测试：设置元数据（CI 阻断）
+这四个数由 [`scripts/check_coverage.py`](scripts/check_coverage.py) 按包核对，跑在 CI 的测试作业里。
+coverage 自带的 `--cov-fail-under` 只能表达一个全局下限，所以复用同一次 `--cov-report=json` 的产物自己算。
 
-**每个配置项都必须能向用户说清楚「是什么」与「改了会怎样」。** 三条断言在 `tests/test_settings_metadata.py`：
+### 强制测试：设置元数据（**v0.2.0 · 尚未实现**）
+
+**每个配置项都必须能向用户说清楚「是什么」与「改了会怎样」。**
+
+⚠️ **下面这三条断言、以及它们所在的 `tests/test_settings_metadata.py`，现在都不存在。**
+列出它们是 v0.2.0 的目标形态（[`10-settings-center.md`](docs/design/10-settings-center.md)），
+不是可以照着跑的门禁。在机制落地之前，新增配置项的强制要求只有
+「中文 docstring + `templates/alterego.toml` 里有一行带注释的默认值」。
 
 ```python
 def test_every_config_field_has_metadata() -> None:
@@ -375,15 +390,15 @@ def test_every_enum_choice_explains_its_consequence() -> None:
 
 ```
 tests/
-├── kernel/          # 单元测试
-├── domain/          # 纯函数测试，无 IO
-├── sim/             # 推演测试，用 FrozenClock + FakeLLM
-├── storage/         # 用 tmp_path 建临时数据库
-├── channels/        # 用 FakeChannel / mock httpx
-├── plugin/          # 插件加载与隔离
-├── golden/          # 可复现性黄金测试
-└── architecture/    # 架构红线（Python 版）
+├── test_*.py        # 平铺一层：一个模块一个文件（kernel / domain / sim / storage / cli 都在这一层）
+├── fixtures/        # 共享测试数据（目前只有 .gitkeep）
+└── golden/          # 可复现性黄金测试（固定种子，逐字节比对）
 ```
+
+> **为什么不是一个模块一个子目录**：平铺时文件名自带模块前缀（`test_domain_calendar.py`），
+> 文件搜索一次就能命中；分目录则要先记住进了哪一层。
+> 真源是 `git ls-files tests`；上面这幅图少了文件就是文档 bug（P7）。
+> 唯一的例外是 `tests/golden/`——它是**按意义**分的，不是按被测模块分的。
 
 ### 标记
 
@@ -404,24 +419,33 @@ tests/
 
 ### 测试工具
 
-内核提供 `alterego.testing`：
+内核侧的可测性积木在 `kernel/` 里，共享夹具在 [`tests/conftest.py`](tests/conftest.py)：
+
+| 需要什么 | 从哪拿 |
+| --- | --- |
+| 冻结的时间 | `from alterego.kernel.clock import FrozenClock`（``clock`` fixture 已备好） |
+| 事件总线 | `from alterego.kernel.bus import EventBus`（``bus`` fixture） |
+| 服务注册表 | `from alterego.kernel.registry import ServiceRegistry`（``registry`` fixture） |
+| 临时数据库 | 用 ``tmp_path`` + `SqliteStorageBackend.open(...)`，不要写进 ``data/`` |
+
+> ⚠️ **`alterego.testing` 尚不存在。** 本文档与
+> [`docs/design/02-plugin-api.md`](docs/design/02-plugin-api.md) § 16.2 曾把
+> `FakeRegistry` / `FakeBus` / `FakeLLM` / `FakeChannel` / `make_context` / `load_plugin_for_test`
+> 当成内核提供的工具，**一个都没有**。照着 import 会 `ModuleNotFoundError`。
+> 假体写在各自用到它的测试文件里。
+
+插件的端到端验收看 [`tests/test_example_plugin.py`](tests/test_example_plugin.py)：
+它走**真实路径**——发现 → 清单校验 → 依赖解析 → 导入 → 注册 → 执行 → 卸载：
 
 ```python
-from alterego.testing import (
-    FakeRegistry, FakeBus, FrozenClock, FakeLLM, FakeChannel, make_context,
-)
-
-async def test_reach_out_respects_budget():
-    ctx = make_context(
-        clock=FrozenClock("2026-09-15T14:30:00+08:00"),
-        llm=FakeLLM(responses=[...]),
-        budget={"messages_today": 3},   # 已达上限
-    )
-    await IntentionStage().run(ctx)
-    assert ctx.chosen_intent.name == "reflect_internal"
-    assert ctx.suppressed[0].reason == "daily_message_limit_reached"
-    assert ctx.suppressed[0].inner_voice        # 必须记录了内心话
+# 节选自 tests/test_example_plugin.py（真的能跑）
+from alterego.kernel.loader import discover, import_plugin_class
+from alterego.kernel.manager import PluginManager
+from alterego.kernel.registry import ServiceRegistry
 ```
+
+**示例代码会腐烂。** 所以不写「示例看起来对不对」，而是让内核真的把它加载一遍。
+示例一旦腐烂，CI 立刻变红。
 
 ---
 
@@ -507,16 +531,19 @@ bash scripts/check_architecture.sh --verbose
 
 ### Python 版红线测试
 
-同时提供 pytest 版本（`tests/architecture/test_dependencies.py`），用 AST 解析 import 语句，比 grep 更精确：
+同时提供 pytest 版本（[`tests/test_architecture.py`](tests/test_architecture.py)），
+用 AST 解析 import 语句，比 grep 更精确：
 
 ```python
+# 节选自 tests/test_architecture.py（真的会跑）
 @pytest.mark.architecture
-def test_kernel_has_no_io_imports():
-    forbidden = {"sqlite3", "httpx", "requests", "fastapi"}
-    for mod in imports_in("src/alterego/kernel"):
-        assert mod.split(".")[0] not in forbidden, \
-            f"kernel 引用了 {mod}。依据 docs/design/01-architecture.md § 1"
+def test_kernel_has_no_io_imports(path: Path) -> None:
+    ...
 ```
+
+它**不是**权威——权威是 `scripts/check_architecture.sh`（七组 23 项，CI 里跑）。
+pytest 版存在的理由是：bash 脚本在 Windows 上不一定可用，而本地开发者
+应该在任何平台上都能立刻发现自己越了界。
 
 ---
 
@@ -526,12 +553,13 @@ def test_kernel_has_no_io_imports():
 
 - [ ] 变更描述清晰，说明了**为什么**改
 - [ ] 本地 `pytest` 全绿
-- [ ] 本地 `ruff check . && ruff format --check .` 通过
+- [ ] 本地 `ruff check src tests plugins scripts && ruff format --check src tests plugins scripts` 通过
 - [ ] 本地 `bash scripts/check_architecture.sh` 通过
 - [ ] 新功能有测试；bug 修复有复现测试
-- [ ] 覆盖率未下降
+- [ ] `python scripts/check_coverage.py` 通过
 - [ ] **相关设计文档已同步更新**
-- [ ] **新增配置项已补 `description` 与 `effect`**（`tests/test_settings_metadata.py` 会拦）
+- [ ] **新增配置项已补中文 docstring，并在 `templates/alterego.toml` 里补了带注释的默认值**
+      （展示元数据机制属 v0.2.0，尚未实现）
 - [ ] **新增可观测记录已带 `correlation_id`**
 - [ ] `CHANGELOG.md` 的 `[Unreleased]` 已更新
 - [ ] 提交信息符合 Conventional Commits

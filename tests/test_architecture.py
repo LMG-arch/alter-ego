@@ -1,6 +1,6 @@
 """架构红线的可执行版本。
 
-``scripts/check_architecture.sh`` 是权威检查（20 项，CI 里会跑），
+``scripts/check_architecture.sh`` 是权威检查（七组 23 项，CI 里会跑），
 但它是 bash——在 Windows 上不一定可用。这里用 ``ast`` 复刻其中最关键的几条，
 让本地开发者在任何平台上都能立刻发现越界。
 

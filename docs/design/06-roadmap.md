@@ -54,7 +54,7 @@ flowchart LR
 | G | 接入层 | CLI + Web |
 | H | 外部渠道 | 钉钉 / 企业微信 / 文件 |
 | I | NPC 社会网络与记忆增强 | `npc/` |
-| J | 多层模型路由与设置中心 | `kernel/settings.py`、`[llm.providers/models/routing]`、设置页 |
+| J | 多层模型路由与设置中心 | `kernel/settings.py`（**尚未实现**）、`[llm.providers/models/routing]`、设置页 |
 | K | 可观测性 | 统计页 + 日志页 + `correlation_id` 闭环 |
 | L | 生图与形象一致性 | `interfaces/image.py`、`domain/media.py`、`image.*` 插件、相册页 |
 | M | 联网检索 | `interfaces/source.py`、`domain/untrusted.py`、`source.*` 插件、信息源页 |
@@ -192,15 +192,19 @@ flowchart LR
 ```bash
 pytest tests/kernel -q
 bash scripts/check_architecture.sh
-alterego plugins list
 ```
+
+> `alterego plugins list` 曾是这里的一条验证命令，但它**至今不存在**
+> （`alterego --help` 只有 `calendar` / `birthday` / `db` / `memory` / `vault` 五组）。
+> 插件发现与清单由 `tests/test_kernel_loader.py` / `tests/test_kernel_manager.py` 直接调
+> `PluginLoader` / `PluginManager` 验证，不经过 CLI。
 
 ### M2 · 能记住并思考（阶段 D + E 结束）
 
 | 项 | 验收标准 |
 | --- | --- |
-| 数据库 | 26 张设计表 + `schema_version` + 2 个视图全部创建（`PRAGMA user_version = 4`） |
-| 迁移 | 提供 `001_initial.sql` ~ `004_observability.sql`；`alterego db migrate --dry-run` 可预演；`alterego db {status,migrate,backup,restore}` 四条命令均已落地 |
+| 数据库 | 26 张设计表 + `schema_version` + 2 个视图全部创建（`PRAGMA user_version = 5`） |
+| 迁移 | 提供 `001_initial.sql` ~ `005_memory_consolidation.sql`；`alterego db migrate --dry-run` 可预演；`alterego db {status,migrate,backup,restore}` 四条命令均已落地 |
 | 检索 | FTS5 BM25 检索可用；中文分词走 `preprocess_for_fts()`；Top-8 返回带分数分解 |
 | 情绪 | `update_emotion()` 纯函数，顺序为回归→冲击→惯性；有单元测试覆盖 4 条规则 |
 | 记忆 | `strength_at()` 与文档验证表数值一致（误差 < 0.001） |
@@ -300,9 +304,9 @@ alterego channels doctor
 | 项 | 验收标准 |
 | --- | --- |
 | 文档 | DESIGN.md + **11 个分册**全部同步到最终实现 |
-| 测试 | 总覆盖率 ≥ 85%；领域层 ≥ 95%；内核层 ≥ 90% |
-| 红线 | CI 中**六组**架构检查全部通过（含新增的「LLM 调用必经 `ctx.llm()`」与「不得自建 logging handler」） |
-| 设置标注 | `test_settings_metadata.py` 三条断言全绿（每个键有元数据 / `effect` 可验证 / 枚举选项有后果） |
+| 测试 | 总覆盖率 ≥ 85%；领域层 ≥ 95%；内核层 ≥ 90%；推演层 ≥ 85%（由 `scripts/check_coverage.py` 核对） |
+| 红线 | `bash scripts/check_architecture.sh` 七组 23 项全部通过（含「LLM 调用必经 `ctx.llm()`」与「不得自建 logging handler」） |
+| 设置标注 | ⏳ **v0.1.0 未达成，推迟到 v0.2.0**（[ADR-0010](../adr/0010-every-setting-carries-display-metadata.md)）：`test_settings_metadata.py` 与 `kernel/settings.py` 都还不存在。今天只强制「每个字段有中文 docstring + `templates/alterego.toml` 里有默认值」 |
 | 可追踪 | 所有可观测表均有 `correlation_id`；`v_trace` 能把一次推演串成完整链路 |
 | CHANGELOG | `[0.1.0]` 章节完整 |
 | 安装 | `pip install alterego` 可用（或 `uv pip install .`） |

@@ -3,7 +3,7 @@
 - **状态**：已接受
 - **日期**：2026-09-15
 - **决策者**：LMG-arch
-- **相关**：[docs/design/08-external-sources.md § 2](08-external-sources.md#2-三条红线)
+- **相关**：[docs/design/08-external-sources.md § 2](../design/08-external-sources.md#2-三条红线)
 - **影响范围**：`domain/untrusted.py`、`source.*` 插件、`interfaces/source.py`、提示词模板、`source_item` 表
 
 ---

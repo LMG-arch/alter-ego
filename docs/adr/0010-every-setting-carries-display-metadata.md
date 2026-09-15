@@ -1,6 +1,11 @@
 # ADR-0010 · 每个配置项都必须携带可展示的元数据
 
 - **状态**：已接受
+- **实施状态**：**尚未实现**（截至 2026-09-16）。`kernel/settings.py` 与
+  `tests/test_settings_metadata.py` **都还不存在**，`SETTING_METADATA` / `Setting` / `SettingKind`
+  写进代码会 `ImportError`。计划在 v0.2.0 的设置中心里落地
+  （[`06-roadmap.md`](../design/06-roadmap.md) 计划 J）。
+  在此之前，`AGENTS.md` / `CONTRIBUTING.md` 只把「中文 docstring + 模板里有默认值」列为强制项。
 - **日期**：2026-09-15
 - **决策者**：LMG-arch
 - **相关**：[docs/design/10-settings-center.md § 4](../design/10-settings-center.md#4-用测试强制标注)、[ADR-0006](0006-ship-implementation-choices-as-data.md)

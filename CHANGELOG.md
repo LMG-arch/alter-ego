@@ -546,6 +546,34 @@
 - `cli.py` 在拆出 `cli_db.py` 后剩下四个未使用的 import（F401），
   而它们原本正是「本文件是组装根」的证据
 
+**文档与代码一致性审计（v0.1.1，一轮全项目循环检查）**
+
+- **嵌套配置段里的错键会静默消失**（`kernel/config.py`）。未知键检测只看**顶层**：
+  把 `[llm.routing]` 里的 `decision` 敲成 `decisionn`，这个键落在已知的 `llm` 段内，
+  于是既不进 `unknown_keys`，也不会被 `build_section` 认领（后者只遍历 dataclass
+  自己的字段名）——**什么都不发生，也没有任何提示**。设计文档把这种失效列为不可接受。
+  现在 `_split_known` 递归进嵌套配置段，报出点号路径（`llm.routing.decisionn`）；
+  `Mapping` 类型的字段（`llm.providers` / `channels.options` / `plugins.config`）
+  是**开放的**，由插件自己解释键名，内核不往里递归。
+  顺带补上了一句真正会打的 WARNING——`Config.unknown_keys` 的 docstring 一直承诺
+  「只告警，不失败」，而此前没有任何代码在告警
+- **`db status` 的迁移表把最后一行挤成一团**（`cli_db.py`）。文件名那一列**写死 25 列**，
+  注释里拿 `004_observability.sql`（23 个字符）当依据；等
+  `005_memory_consolidation.sql`（28 个字符）出现，它就和描述粘在了一起。
+  现在宽度从待执行清单里**推导**（最长文件名 + 1），并有一条回归测试守着
+- **`domain/consolidation.py` 没被 `domain/__init__.py` 导出**。该文件保持显式模块清单
+  （P2：不用通配符），而它同时漏在 import 块与 `__all__` 里——`from alterego.domain import ...`
+  拿不到任何巩固相关的名字
+- **覆盖率下限从来没被拦住过**（CI）。`AGENTS.md` § 5 与 `CONTRIBUTING.md` 都写着四个
+  下限是「CI 阻断」，但 `pyproject.toml` 里没有 `fail_under`，CI 里只有一个裸的
+  `--cov=alterego`——**把 `domain/` 的测试删光，CI 照样绿**。新增
+  `scripts/check_coverage.py`（复用同一次 `--cov-report=json` 的产物按包核对），
+  接进 CI 的测试作业。coverage 自带的 `--cov-fail-under` 只能表达一个全局下限，
+  而这里要的是四个不同的数
+- **CI 里没有 mypy**（`.github/workflows/ci.yml`）。`AGENTS.md` § 4 把它列为必跑门禁，
+  `pyproject.toml` 把它配成 `strict = true`，`dev` 依赖里也装了它——但没有一步在跑它。
+  与上一条同一类缺陷：**文档说了、机制没有**。现已补上
+
 ### 安全
   退出码还是 0。原因：`load_calendar(2027)` 为了看年末会把前后各一年合并进来，
   于是磁盘上只有 `2026.toml` 时它照样返回一份日历，调用方的 `is None` 判断从未生效。
@@ -688,6 +716,56 @@
 - `docs/design/06-roadmap.md` 当前进度从「两条纵向切片」改为三条，并写入新的测试与覆盖率数字
 - `CONTRIBUTING.md` 项目结构树加 `birthdays/` 与 `domain/_toml.py`
 
+**文档与代码一致性审计（v0.1.1）** —— 以文档为真源反向核对代码，逐条修正：
+
+- `docs/DESIGN.md` § 13 目录结构**逐行核对**了 `git ls-files src/alterego`：补上漏画的
+  9 个已实现文件（`cli_io.py` / `cli_memory.py` / `cli_vault.py` / `kernel/config_values.py` /
+  `domain/{consolidation,knowledge,vault}.py` / `sim/{consolidation,vault}.py` /
+  `llm/{gateway,prompts}.py` / `storage/sqlite/repositories.py` 等）、
+  改正三处写错的类名（`sim/context.py` 是 `TickContext` 不是 `TicketContext`，
+  `interfaces/simulation.py` 导出的是 `Stage` / `StageResult` 而不是 `Intent`），
+  并加上**图例**说明这张图是目标布局而不是 `ls` 的结果——认不出来的读者会照着
+  import 一个不存在的模块
+- `docs/design/05-channels.md` § 8.1 命令树加**状态图例**（✅ 已实现 / 无标记 = 规划）。
+  `alterego --help` 今天只有 `calendar` / `birthday` / `db` / `memory` / `vault` 五组，
+  而树里画了 `init` / `serve` / `chat` / `status` / `why` / `persona` / `feed` /
+  `plugins` / `channels` / `export` / `import` / `stats` / `config` 等十余个**不存在**的命令
+- `docs/design/05-channels.md` § 8.1 的 `db status` 样例更新到真实输出
+  （`目标版本 5` / `待执行 5 个` / 五行）。文件名列宽的说明也从「写死 25 列」
+  改成「从数据里推导」——**任何写死在源码里的「当前最长值」都是等着过期的**
+- `docs/design/06-roadmap.md`：`PRAGMA user_version = 4` → `5`、
+  `001_initial.sql ~ 004_observability.sql` → `~ 005_memory_consolidation.sql`、
+  M7 的「六组架构检查」→ 七组 23 项、补上 `/sim/` 的覆盖率下限；
+  删掉 M1 验证命令里**不存在**的 `alterego plugins list`；
+  M7 的「设置标注」如实标注为 **v0.1.0 未达成、推迟到 v0.2.0**
+- `docs/design/06-roadmap.md` § 计划 J 的 `kernel/settings.py`、以及
+  `docs/design/10-settings-center.md` 全文，标注为 **v0.2.0 规划、代码尚不存在**
+  （该文档顶部加了一段「照着写会 `ImportError`」的说明，而不是逐个代码块去注释）
+- `docs/design/02-plugin-api.md` § 16.1：`api_version = "1"` → `api_version = 1`
+  （**清单校验收整数，那个字符串会被直接拒绝**）；
+  § 16.2 展示的 `alterego.testing` 模块**不存在**，已换成真实的测试积木
+  （`FrozenClock` / `EventBus` / `ServiceRegistry` + `tests/conftest.py` 的夹具）
+- `CONTRIBUTING.md` 的「测试组织」目录树改回真实布局（`tests/` 是**平铺**的，
+  没有 `tests/kernel/` 这些子目录），「测试工具」一节的 `alterego.testing` 同样标注为不存在；
+  「Python 版红线测试」指向不存在的 `tests/architecture/test_dependencies.py`，
+  改为真实的 `tests/test_architecture.py`，并说明它**不是**权威、权威是 bash 脚本
+- `docs/design/03-data-model.md` § 4.2 枚举表与 § 3.1 的 SQL 注释里
+  `llm_usage.purpose` 列了 10 个值，其中 `emotion` / `image_prompt` /
+  `research_query` / `research_summarize` **连配置键都还没有**，而真实存在的
+  `vault` 反倒漏了——改为真实的 7 个 + 一条「另有四个规划中」的说明
+- `docs/DESIGN.md` § 12.1 与 `docs/design/04-simulation-loop.md` § 10.1 的
+  `[llm.routing]` 样例加状态标注（✅ 已接线 / ⏳ 未实现）：照抄那四个未实现的键进去，
+  会被新的未知键检测点名
+- `docs/design/07-model-routing-and-media.md` § 2.4 的用途表加**状态列**并由测试守着
+  （见「架构」），§ 3.1.1 新增一节说明未知键检测的已实现行为与两条故意划下的边界
+- `AGENTS.md` / `CONTRIBUTING.md` / `.github/PULL_REQUEST_TEMPLATE.md` /
+  `docs/adr/0010`：设置元数据机制被写成「CI 阻断」，而 `kernel/settings.py` 与
+  `tests/test_settings_metadata.py` **都不存在**——统一改标为 v0.2.0 规划，
+  并把今天真正可守的规则（中文 docstring + `templates/alterego.toml` 里有默认值）写清楚
+- `docs/adr/0009` 里一个指向 `08-external-sources.md` 的相对链接**少了一层 `../`**，
+  在 GitHub 上是 404
+- `tests/test_architecture.py` 的 docstring 写着「20 项」，实际是七组 23 项
+
 ### 架构
 
 - **新增 `domain/media.py` 与 `domain/untrusted.py`，均为纯函数且不得下沉到插件**。
@@ -717,6 +795,13 @@
   facade 的兼容性因此是被测试锁住的契约
 - 架构红线第 2 / 4 / 6 组（领域层纯净、分层不越级、插件互不依赖）从
   `⊘ 目录不存在，跳过` 变为**实际生效**；连同新增的第 7 组，当前 **22/22 全部通过**
+- **三条「机制测试」把这次审计发现的漂移变成 CI 会拦的错**：
+  `tests/test_packages.py::test_domain_reexports_every_public_module`（`domain/` 的
+  模块清单漏一个就红）、`::test_every_interface_module_is_reexported`、
+  以及 `tests/test_llm_gateway.py::TestThePurposeTableMatchesTheCode`
+  （解析 `07-model-routing-and-media.md` § 2.4 的表，与 `LLMRoutingConfig` 的字段、
+  与源码里 `PURPOSE: Final[str]` 常量三方对齐；标 ✅ 的用途必须真的被调用过）。
+  这三处的共同点是：**漂移本身不会报错，只是慢慢变成谎言**
 
 ---
 

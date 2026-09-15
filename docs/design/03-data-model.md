@@ -516,7 +516,8 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     id                  TEXT PRIMARY KEY,
     persona_id          TEXT REFERENCES persona(id) ON DELETE SET NULL,
     tick_id             TEXT,
-    purpose             TEXT NOT NULL,      -- decision|expression|reflection|emotion|memory|npc|persona|image_prompt|research_query|research_summarize
+    purpose             TEXT NOT NULL,      -- decision|expression|reflection|memory|npc|persona|vault
+                                            -- （权威清单带接线状态，见 07-model-routing-and-media.md § 2.4）
     tier                TEXT NOT NULL,      -- strong | cheap | custom
     provider_id         TEXT NOT NULL,
     model               TEXT NOT NULL,
@@ -975,7 +976,7 @@ inner_voice       = '刚看到那个独立游戏的视频，好想跟他说一�
 | `schedule_block.category` | `sleep`, `work`, `meal`, `commute`, `leisure`, `social`, `chore`, `other` |
 | `activity_log.category` | `internal`, `social`, `outbound` |
 | `tick_log.status` | `ok`, `partial`, `failed`, `interrupted`, `skipped` |
-| `llm_usage.purpose` | `decision`, `expression`, `reflection`, `emotion`, `memory`, `npc`, `persona`, `image_prompt`, `research_query`, `research_summarize`（权威清单在 [`07-model-routing-and-media.md § 2.4`](07-model-routing-and-media.md#24-用途purpose清单)） |
+| `llm_usage.purpose` | **今天实际会落库的七个**：`decision`, `expression`, `reflection`, `memory`, `npc`, `persona`, `vault`。另有四个规划中的用途（`emotion` / `image_prompt` / `research_query` / `research_summarize`）**连配置键都还没有**，写进 `[llm.routing]` 会被未知键检测点名——权威清单见 [`07-model-routing-and-media.md § 2.4`](07-model-routing-and-media.md#24-用途purpose清单) |
 | `llm_usage.tier` | `strong`, `cheap`, `custom` |
 | `post_interaction.kind` | `like`, `comment` |
 | `persona_version.change_type` | `init`, `manual_edit`, `llm_refine`, `evolution` |

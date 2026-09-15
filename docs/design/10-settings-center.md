@@ -3,6 +3,14 @@
 > 上级文档：[DESIGN.md](../DESIGN.md) · 版本 v0.1.0
 > 本文档描述「所有配置都能在 UI 里设置、且每个设置都有标注」的设计。
 
+> ⚠️ **本文档描述的是 v0.2.0 的规划，代码尚不存在（截至 2026-09-16）。**
+> 文中出现的 `kernel/settings.py`、`SETTING_METADATA`、`Setting` / `SettingKind` / `Choice`
+> 和 `tests/test_settings_metadata.py` **全部还没有写** —— 照着写会 `ImportError`。
+> 依据：[`ADR-0010`](../adr/0010-every-setting-carries-display-metadata.md)。
+> 在此之前，强制项只有两条（见 [`AGENTS.md`](../../AGENTS.md) § 7）：
+> 每个配置字段写中文 docstring 说清「改了会发生什么」，并在 `templates/alterego.toml` 里
+> 留一行带注释的默认值。
+
 ---
 
 ## 目录

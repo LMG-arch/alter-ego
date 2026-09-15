@@ -142,6 +142,10 @@ CREATE INDEX idx_activity_undistilled
 要收紧成 `cli(_db|_memory)?\.py:`（批次 5 已经踩过一次同类问题：
 排除正则没有覆盖到实际存在的文件，等于没有排除）。
 
+> **后续（2026-09-16 补注）**：批次 7 加了第四个组装根 `cli_vault.py`，正则的最终形态是
+> `cli(_db|_memory|_vault)?\.py:`。这条**每加一个组装根就要改一次**的规律本身说明：
+> 排除列表是脆的，加 `cli_*.py` 时必须同时改 `scripts/check_architecture.sh`。
+
 ---
 
 ## 5. 不在本批次范围内（明确记下，避免越做越大）

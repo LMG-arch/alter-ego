@@ -930,13 +930,18 @@ cheap      = "deepseek_chat"
 decision   = "strong"                # 意图决策用哪个模型
 expression = "strong"                # 表达生成用哪个模型
 reflection = "cheap"                 # 情绪/记忆反思
-emotion    = "cheap"                 # 情绪评估
-memory     = "cheap"                 # 记忆巩固
+memory     = "cheap"                 # 记忆巩固                  ✅ 已接线
 npc        = "cheap"                 # NPC 对话
 persona    = "strong"                # 人格生成
-image_prompt     = "cheap"           # 生图提示词构造（v0.2.0）
-research_query   = "cheap"           # 检索词生成（v0.3.0）
-research_summarize = "cheap"         # 抓回内容的消化（v0.3.0）
+vault      = "cheap"                 # 知识库归类/索引            ✅ 已接线
+# ── 下面四项**今天还不存在**：照抄进配置会被 § 3.1.1 的未知键检测点名 ──
+emotion    = "cheap"                 # 情绪评估                  ⏳ v0.2.0
+image_prompt     = "cheap"           # 生图提示词构造             ⏳ v0.2.0
+research_query   = "cheap"           # 检索词生成                ⏳ v0.3.0
+research_summarize = "cheap"         # 抓回内容的消化             ⏳ v0.3.0
+
+# 权威清单（哪个键存在、哪个键真的调了 `LLMGateway.complete()`）在
+# 07-model-routing-and-media.md § 2.4，那里带 ✅/🔌/⏳ 三种状态列。
 
 [media]                              # v0.2.0
 enabled = true
@@ -1092,6 +1097,13 @@ TAVILY_API_KEY          [环境变量]  未设置 —
 
 ## 13. 目录结构
 
+**图例**（这张图是**目标布局**，不是 `ls` 的结果）：
+
+- ✅ **已实现** —— 文件存在，行为有测试守着。
+- 无标记 —— 设计意图，**尚未创建**。照着它去 import 会 `ModuleNotFoundError`。
+- 已实现文件是否在图上，以 `git ls-files src/alterego` 为准；图上漏画一个已实现的
+  文件是文档 bug（P7），发现就补。
+
 ```
 alter-ego/
 ├── docs/
@@ -1107,28 +1119,31 @@ alter-ego/
 │   │   ├── 08-external-sources.md          # 联网检索 + 不可信输入
 │   │   ├── 09-observability.md             # Token 统计 + 日志体系
 │   │   ├── 10-settings-center.md           # 配置元数据 + 设置页
-│   │   └── 11-optimization-roadmap.md      # 可加深方向的取舍分析
+│   │   ├── 11-optimization-roadmap.md      # 可加深方向的取舍分析
+│   │   └── 12-calendar-and-conversation.md # ✅ 节日日历 + 对话节奏
 │   ├── adr/                         # 架构决策记录
 │   │   ├── README.md                # 索引：新增 ADR 必须在这里补一行
 │   │   ├── 0000-template.md
 │   │   └── 0001…0010                # 机制/语言/存储/渠道/降级/选型即数据/归属视图/定妆照/不可信输入/元数据强制
+│   ├── plans/                       # ✅ 每个批次的落地计划（记录历史，不做实时维护）
 │   └── guide/                       # 用户手册
 │       ├── getting-started.md
 │       └── plugin-development.md
 │
 ├── scripts/
-│   └── check_architecture.sh        # 七组 23 项红线检查，CI 第一道关
+│   └── check_architecture.sh        # 七组红线检查，CI 第一道关
 │
 ├── src/alterego/
 │   ├── __init__.py                  # 只有 __version__，不 import 任何子模块
 │   ├── defaults.toml                # 随包分发的发行版选型（内核不许知道的那部分）
-│   ├── cli.py                       # 参数树 + calendar / birthday 命令组
-│   ├── cli_io.py                    # 输出助手（第 5 组红线禁 print(，CLI 不豁免）
-│   ├── cli_db.py                    # alterego db；组装根：唯一 import 具体存储实现的地方
-│   ├── cli_memory.py                # alterego memory；组装根：自己开库、自己拿供应商
-│   ├── cli_vault.py                 # alterego vault；组装根：库是数据库的下游，只读打开
+│   ├── cli.py                       # ✅ 参数树 + calendar / birthday 命令组
+│   ├── cli_io.py                    # ✅ 输出助手（第 5 组红线禁 print(，CLI 不豁免）
+│   ├── cli_db.py                    # ✅ alterego db；组装根：唯一 import 具体存储实现的地方
+│   ├── cli_memory.py                # ✅ alterego memory；组装根：自己开库、自己拿供应商
+│   ├── cli_vault.py                 # ✅ alterego vault；组装根：库是数据库的下游，只读打开
 │   ├── kernel/                      # 内核：零业务逻辑
-│   │   ├── config.py
+│   │   ├── config.py                # ✅ 配置加载与校验
+│   │   ├── config_values.py         # ✅ 配置值的类型构造
 │   │   ├── settings.py              # Setting / Choice 元数据与渲染所需的单一真源
 │   │   ├── bus.py
 │   │   ├── registry.py
@@ -1142,17 +1157,21 @@ alter-ego/
 │   │   ├── errors.py
 │   │   └── logging.py
 │   ├── interfaces/                  # 跨层 Protocol 与纯数据契约（各层共同 import）
-│   │   ├── common.py                # HealthStatus 等共用小类型
-│   │   ├── llm.py
+│   │   ├── common.py                # ✅ HealthStatus 等共用小类型
+│   │   ├── llm.py                   # ✅ LLMProvider / LLMRequest / LLMResponse
 │   │   ├── image.py                 # ImageProvider / ImageRequest / GeneratedImage
 │   │   ├── source.py                # SearchProvider / FeedReader / PageFetcher
-│   │   ├── channel.py
-│   │   ├── storage.py
-│   │   └── simulation.py
+│   │   ├── channel.py               # ✅ Channel 协议（唯一入站见 ADR-0004）
+│   │   ├── repository.py            # ✅ 仓储 Protocol：Memory / Activity / Persona / Schedule / Source
+│   │   ├── storage.py               # ✅ StorageBackend
+│   │   └── simulation.py            # ✅ Stage / StageResult / Capability / CapabilityResult / IntentType / Tool
 │   ├── domain/                      # 领域模型：纯函数，无 IO
 │   │   ├── schedule.py              # ✅ 已实现：ScheduleBlock / current_block / is_interruptible
 │   │   ├── emotion.py               # ✅ 已实现：二维情绪、四条更新规则、标签推导
 │   │   ├── memory.py                # ✅ 已实现：强度衰减、检索重排、遗忘与激活、巩固
+│   │   ├── consolidation.py         # ✅ 已实现：巩固窗口与 LLM 草稿的解析、校验、摘要
+│   │   ├── knowledge.py             # ✅ 已实现：知识库布局、路径白名单、笔记文件名
+│   │   ├── vault.py                 # ✅ 已实现：整理计划的解析与校验（一次调用里的全部约束）
 │   │   ├── calendar.py              # ✅ 已实现：日型、节前/节后强度曲线、今天归哪个节日
 │   │   ├── birthday.py              # ✅ 已实现：三种主体、闰日、按年展开、同一天合并成一条
 │   │   ├── _toml.py                 # ✅ 已实现：节日与生日共用的取值助手
@@ -1169,8 +1188,10 @@ alter-ego/
 │   ├── birthdays/                   # 生日记录（你自己的数据，住 data/）的读取器
 │   │   └── __init__.py              # ✅ 已实现：load_book / save_book / render
 │   ├── sim/                         # 推演引擎
+│   │   ├── context.py               # ✅ 已实现：TickContext / StateSnapshot（推演过程中的载体）
+│   │   ├── consolidation.py         # ✅ 已实现：记忆巩固（唯一已接线的 purpose: memory）
+│   │   ├── vault.py                 # ✅ 已实现：知识库整理（purpose: vault）
 │   │   ├── engine.py
-│   │   ├── context.py
 │   │   ├── budget.py
 │   │   ├── narrator.py
 │   │   ├── stages/
@@ -1191,6 +1212,10 @@ alter-ego/
 │   ├── npc/                         # NPC 模拟（与主体推演分开，避免抢注意力）
 │   ├── capabilities/                # 内置 capability 插件宿主
 │   ├── llm/                         # LLM 抽象层
+│   │   ├── gateway.py               # ✅ 按用途路由、重试、计量（唯一允许发请求的地方）
+│   │   ├── prompts.py               # ✅ 提示词模板的装载与渲染
+│   │   ├── providers/
+│   │   │   └── openai_compatible.py # ✅ 兼容 OpenAI 协议的供应商
 │   │   ├── client.py
 │   │   ├── router.py
 │   │   ├── prompt.py
@@ -1205,11 +1230,12 @@ alter-ego/
 │   │   └── http_fetch.py
 │   ├── storage/
 │   │   └── sqlite/
-│   │       ├── connection.py        # 连接、PRAGMA、事务、完整性检查、备份
-│   │       ├── migrator.py          # 发现/校验/应用迁移，事务边界与版本记账归它
-│   │       ├── backend.py           # StorageBackend 契约实现 + 版本兼容检查
-│   │       ├── migrations/          # 极完整的 schema 都在这里（含 001_initial.sql）
-│   │       └── repo/
+│   │       ├── connection.py        # ✅ 连接、PRAGMA、事务、完整性检查、备份
+│   │       ├── migrator.py          # ✅ 发现/校验/应用迁移，事务边界与版本记账归它
+│   │       ├── backend.py           # ✅ StorageBackend 契约实现 + 版本兼容检查
+│   │       ├── repositories.py      # ✅ 仓储 Protocol 的 SQLite 实现
+│   │       ├── migrations/          # ✅ 极完整的 schema 都在这里（001_initial.sql … 005_memory_consolidation.sql）
+│   │       └── repo/                # 拆分后的按表仓储（尚未拆分，现在是上面那个 repositories.py）
 │   │           ├── persona_repo.py
 │   │           ├── memory_repo.py
 │   │           ├── media_repo.py
@@ -1224,21 +1250,19 @@ alter-ego/
 │   │       ├── sse.py               # SSEHub
 │   │       ├── auth.py              # token / password / none
 │   │       ├── routes/
-│   │       └── static/
-│   │           ├── index.html
-│   │           ├── style.css
-│   │           └── app.js
+│   │       └── static/              # ✅ 目前只有 .gitkeep，前端资源待补
 │   ├── prompts/                     # 提示词模板（可热改，随包分发）
-│   │   ├── intention.md
-│   │   ├── emotion_update.md
-│   │   ├── memory_consolidate.md
-│   │   ├── post_compose.md
-│   │   ├── chat_reply.md
+│   │   ├── intention.md             # ✅ 意图决策（purpose: decision）
+│   │   ├── emotion_update.md        # ✅ 情绪评估（purpose: emotion）——模板已备，尚未接线
+│   │   ├── memory_consolidate.md    # ✅ 记忆巩固（purpose: memory）
+│   │   ├── vault_organize.md        # ✅ 知识库整理（purpose: vault）
+│   │   ├── post_compose.md          # ✅ 发动态（purpose: expression / reflection 的一部分）
+│   │   ├── chat_reply.md            # ✅ 回复用户
+│   │   ├── reach_out.md             # ✅ 主动联系
+│   │   ├── persona_generate.md      # ✅ 人格生成（purpose: persona）
 │   │   ├── image_prompt.md          # 把四槽位展开成生图提示词
 │   │   ├── research_query.md        # 按兴趣 + 情绪生成检索词
-│   │   ├── research_summarize.md    # 消化抓回内容（严格 JSON 输出）
-│   │   ├── reach_out.md
-│   │   └── persona_generate.md
+│   │   └── research_summarize.md    # 消化抓回内容（严格 JSON 输出）
 │   └── daemon.py                    # 进程生命周期：启动、信号、优雅关闭
 │
 ├── templates/
@@ -1246,7 +1270,10 @@ alter-ego/
 │   └── persona/                     # 人物与世界初始模板（随包分发）
 │
 ├── plugins/                         # 本地 drop-in 插件目录（gitignore，只留示例）
-│   └── example_plugin/              # 插件开发模板
+│   ├── example_plugin/              # ✅ 插件开发模板
+│   │   ├── plugin.toml
+│   │   └── plugin.py
+│   └── obsidian_vault/              # ✅ capability 插件：把整理结果写进 Obsidian 库
 │       ├── plugin.toml
 │       └── plugin.py
 │
@@ -1265,12 +1292,12 @@ alter-ego/
 ├── exports/                         # gitignore
 │
 ├── tests/
-│   ├── conftest.py                  # 共享 fixture：冻结时钟、EventBus、ServiceRegistry
-│   ├── test_kernel_*.py             # 内核单元测试
-│   ├── test_architecture.py         # 用 ast 机械校验分层红线
-│   ├── test_settings_metadata.py    # 强制每个配置项都有标注与「改了会怎样」
-│   ├── golden/                      # 固定随机种子的黄金用例（P6 可复现）
-│   └── fixtures/                    # 共享测试数据
+│   ├── conftest.py                  # ✅ 共享 fixture：冻结时钟、EventBus、ServiceRegistry
+│   ├── test_kernel_*.py             # ✅ 内核单元测试
+│   ├── test_architecture.py         # ✅ 用 ast 机械校验分层红线
+│   ├── test_settings_metadata.py    # 强制每个配置项都有标注与「改了会怎样」（见 10-settings-center.md，尚未实现）
+│   ├── golden/                      # ✅ 固定随机种子的黄金用例（P6 可复现）
+│   └── fixtures/                    # ✅ 共享测试数据
 │
 ├── .github/
 │   ├── workflows/ci.yml

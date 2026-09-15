@@ -976,15 +976,20 @@ AlterEgo v0.1.0
 
 ### 8.1 命令总览
 
+> **图例**：✅ = 已有代码、能跑；没有标记的 = **设计意图，尚未实现**。
+> 真源是 `alterego --help`（现在只有 `calendar` / `birthday` / `db` / `memory` / `vault`
+> 五组）。照着没标记的那个敲，`argparse` 会报 `invalid choice`。
+> **漏标一个已实现的命令**是文档 bug（P7），发现就补 ✅。
+
 ```
 alterego
-├── init                    初始化项目（生成配置与人设）
-├── serve                   启动守护进程与 Web 界面
-├── chat [--no-stream]      终端对话（开发调试）
-├── status                  查看当前状态
-├── why [--at|--outbound|--suppressed]  解释最近的行为
+├── init                    初始化项目（生成配置与人设）          规划
+├── serve                   启动守护进程与 Web 界面              规划
+├── chat [--no-stream]      终端对话（开发调试）                 规划
+├── status                  查看当前状态                          规划
+├── why [--at|--outbound|--suppressed]  解释最近的行为            规划
 │
-├── persona
+├── persona                                                       规划（整组）
 │   ├── show                显示当前人设
 │   ├── edit                编辑人设
 │   ├── generate            用 LLM 生成新人设
@@ -994,49 +999,46 @@ alterego
 │   └── rollback <version>  回滚
 │
 ├── memory
-│   ├── list [--kind|--forgotten|--query]
-│   ├── search "<query>"    记忆检索（显示分数分解）
-│   ├── show <id>
-│   ├── forget <id>
-│   ├── distill [--dry-run] [--persona NAME]
+│   ├── list [--kind|--forgotten|--query]                         规划
+│   ├── search "<query>"    记忆检索（显示分数分解）                规划
+│   ├── show <id>                                                 规划
+│   ├── forget <id>                                               规划
+│   ├── distill [--dry-run] [--persona NAME]          ✅
 │   │                       让模型把这段时间做过的事整理成记忆
-│   └── consolidate [--dry-run] [--persona NAME]
+│   └── consolidate [--dry-run] [--persona NAME]      ✅
 │                           让模型把散落的经历归纳成新的认识
 │
-│                           （list/search/show/forget 见后续批次；
-│                            distill 与 consolidate 已在 v0.4.0 落地）
-│
-├── calendar
+├── calendar                                         ✅（list/today/check）
 │   ├── list [--year YYYY]  一年的节日一览（含生日）
 │   ├── today [--date] [--days N]
 │   │                       今天是什么日子 + 之后 N 天有什么
 │   └── check [--year YYYY] 数据可信度：哪些日期还没核对
 │
-├── birthday
+├── birthday                                         ✅（list/add/set）
 │   ├── list [--days N]     记过谁的生日，下次还有几天
 │   ├── add  --who {self,user,npc} --on MM-DD ……
 │   │                       记一个新的生日（已记过的会被挡住）
 │   └── set  ……（参数与 add 完全相同）
 │                           改掉已经记过的那个
 │
-├── feed
+├── feed                                                          规划（整组）
 │   ├── list [--limit]
 │   ├── show <id>
 │   └── delete <id>
 │
-├── plugins
+├── plugins                                                       规划（整组）
 │   ├── list [--verbose]
 │   ├── doctor              健康检查（含网络连通性）
 │   ├── enable <id> / disable <id>
 │   ├── reload <id>
 │   └── reset <id>          重置熔断状态
 │
-├── channels
+├── channels                                                      规划（整组）
 │   ├── list                渠道与方向
 │   ├── test <id>           发测试消息
 │   └── doctor              检查各渠道连通性
 │
-├── db
+├── db                                               ✅（status/migrate/backup/restore）
 │   ├── status              库在哪、版本多少、还差几个迁移
 │   ├── migrate [--dry-run] 建库，或把库升到当前版本
 │   ├── backup [--dest PATH] 整份备份（唯一的「回滚」手段）
@@ -1045,7 +1047,7 @@ alterego
 │                           vacuum 见 § 10 的优化建议；
 │                           **没有** rollback --to，理由见 03-data-model.md § 8.5
 │
-├── vault                   每个子命令都接 --vault DIR / --persona NAME
+├── vault                   每个子命令都接 --vault DIR / --persona NAME    ✅（整组）
 │   ├── init                搭骨架：目录、.obsidian/、索引页
 │   ├── sync [--lookback-days N]
 │   │                       把日程与想法写成笔记（不花钱、不会失败）
@@ -1056,9 +1058,9 @@ alterego
 │                           **故意没有** open 子命令，理由见
 │                           plans/2026-09-16-obsidian-vault.md § 11
 │
-├── export / import
-├── stats [--cost|--activity|--emotion]
-└── config
+├── export / import                                               规划
+├── stats [--cost|--activity|--emotion]                           规划
+└── config                                                        规划（整组）
     ├── show [--redacted]
     └── edit
 ```
@@ -1136,40 +1138,45 @@ LLM 消耗   今日 $1.12 / $2.00
 ──────────────────────────────────────────────────────────
 库文件    还没建过
 当前版本  0
-目标版本  4
-待执行    4 个
+目标版本  5
+待执行    5 个
 
-  001_initial.sql          建立 v0.1.0 的基础表、记忆全文索引与触发器
-                           非破坏性｜声明可逆
-  002_media.sql            新增图片资产与生图计量
-                           非破坏性｜声明可逆
-  003_sources.sql          新增外部信息来源（检索条目、RSS 订阅源、检索记录）
-                           非破坏性｜声明可逆
-  004_observability.sql    新增结构化运行日志、补齐 correlation_id 与两个视图
-                           非破坏性｜声明可逆
+  001_initial.sql              建立 v0.1.0 的基础表、记忆全文索引与触发器
+                               非破坏性｜声明可逆
+  002_media.sql                新增图片资产与生图计量
+                               非破坏性｜声明可逆
+  003_sources.sql              新增外部信息来源（检索条目、RSS 订阅源、检索记录）
+                               非破坏性｜声明可逆
+  004_observability.sql        新增结构化运行日志、补齐 correlation_id 与两个视图
+                               非破坏性｜声明可逆
+  005_memory_consolidation.sql 记忆巩固标记与活动流梳理标记，各带一个部分索引
+                               非破坏性｜声明可逆
 
-运行 alterego db migrate 把它升到 4。
+运行 alterego db migrate 把它升到 5。
 ```
 
 「还没建过」就是字面意思：**这条命令没有把库建出来**。库不存在时它打开的是
 一个内存库——`open(真路径)` 的默认行为就是顺手把文件创建出来，而「查一下」
 不该变成「建了一个空库」。
 
-迁移表格用**显示宽度**对齐（中文一个字占两列）。文件名那一列写死 25 列，
-比现有最长的 `004_observability.sql`（23 个字符）宽一点——
-否则那一行的描述会被挤进前一列里去。
+迁移表格用**显示宽度**对齐（中文一个字占两列）。文件名那一列的宽度是
+**算出来的**——取当前待执行清单里最长的文件名再加一列。曾经这里写死 25 列、
+注释里拿 `004_observability.sql`（23 个字符）当依据；等
+`005_memory_consolidation.sql`（28 个字符）出现时，写死的宽度就把它和描述
+挤到了一起。**任何在源码里写死的「当前最长值」都是等着过期的**，
+所以现在由 `cli_db._print_migrations` 从数据里推导。
 
 **`alterego db status`**（已建库）：
 
 ```
 数据库 · D:\ai\个人agent\data\alterego.db
 ──────────────────────────────────────────────────────────
-库文件    440.0 KB
-当前版本  4
-目标版本  4
+库文件    448.0 KB
+当前版本  5
+目标版本  5
 待执行    无
 
-已是最新（schema_version 4）。
+已是最新（schema_version 5）。
 ```
 
 库的版本比程序新或太旧时，这**就是**状态，不是崩溃：`status` 照常打印

@@ -1616,17 +1616,21 @@ def contagion_effect(npc_emotion: Emotion, persona_neuroticism: float) -> float:
 
 ```toml
 [llm.routing]
+strong     = "deepseek_reasoner"  # 模型别名，不是 provider 名
+cheap      = "deepseek_chat"
 decision   = "strong"     # 意图决策 → 强模型
 expression = "strong"     # 文案生成 → 强模型（影响观感）
 persona    = "strong"     # 人设生成/演化 → 强模型
 reflection = "cheap"      # 反思 → 便宜模型
 npc        = "cheap"      # NPC 推演 → 便宜模型
-memory     = "cheap"      # 记忆归纳 → 便宜模型
-emotion    = "cheap"      # 情绪推断 → 便宜模型
-# v0.2.0/v0.3.0 新增
-image_prompt       = "cheap"   # 生图提示词构造
-research_query     = "cheap"   # 检索词生成
-research_summarize = "cheap"   # 抓回内容的消化
+memory     = "cheap"      # 记忆归纳 → 便宜模型（✅ 已接线）
+vault      = "cheap"      # 知识库归类 → 便宜模型（✅ 已接线）
+# 下面四项**今天还不存在**：写进配置会被 07-model-routing-and-media.md § 3.1.1
+# 的未知键检测点名。权威清单与接线状态见同文 § 2.4。
+emotion    = "cheap"      # 情绪推断 → 便宜模型              ⏳ v0.2.0
+image_prompt       = "cheap"   # 生图提示词构造              ⏳ v0.2.0
+research_query     = "cheap"   # 检索词生成                 ⏳ v0.3.0
+research_summarize = "cheap"   # 抓回内容的消化              ⏳ v0.3.0
 ```
 
 > **值的语义在 v0.2.0 变了**：以前这里填的是 **provider 名**（如 `openai_compatible`），

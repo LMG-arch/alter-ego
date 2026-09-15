@@ -56,14 +56,21 @@ httpx.AsyncClient(base_url="https://api...")   # → ctx.llm().complete(...)
 logging.FileHandler(...)  # → 用 ctx.logger，脱敏与轮转由内核负责
 
 # ✗ 禁止：新增配置项不带说明
-daily_limit: float = 2.0  # → 必须注册 Setting(description=..., effect=...)
+# → 至少要有中文 docstring 说清楚「改了会发生什么」，并在 templates/alterego.toml 里补一行
+#   带注释的默认值（tests/test_kernel_config.py::test_authoritative_template_covers_every_key 会查）
 ```
+
+> ⚠️ **设置项展示元数据的完整版（`Setting(description=..., effect=...)` + `SETTING_METADATA` +
+> `tests/test_settings_metadata.py`）尚未实现**，它是 v0.2.0 的设置中心
+> （[`docs/design/10-settings-center.md`](docs/design/10-settings-center.md)，
+> [ADR-0010](docs/adr/0010-every-setting-carries-display-metadata.md)）。
+> 上面第 5 条给的是**今天就能守**的版本。机制落地后那两句会换回 CI 断言。
 
 **自行验证**：
 
 ```bash
-bash scripts/check_architecture.sh --verbose   # 七组红线
-python -m pytest tests/test_settings_metadata.py -q
+bash scripts/check_architecture.sh --verbose   # 七组红线，共 23 项
+python -m pytest tests/test_kernel_config.py tests/test_packages.py -q
 ```
 
 ---
@@ -77,13 +84,16 @@ python -m pytest tests/test_settings_metadata.py -q
 **六步缺一不可。** 完整的门禁命令：
 
 ```bash
-python -m ruff format src tests plugins
-python -m ruff check src tests plugins
+python -m ruff format src tests plugins scripts
+python -m ruff check src tests plugins scripts
 python -m mypy src/alterego
-python -m pytest tests -q
-python -m pytest tests -q --cov=alterego
+python -m pytest tests -q --cov=alterego --cov-report=json
+python scripts/check_coverage.py
 bash scripts/check_architecture.sh
 ```
+
+⚠️ **不要漏掉 `scripts`**：CI 的 ruff 是 `git ls-files '*.py'`，范围比上面这两个命令大。
+本地不检查 `scripts/`，就等于让脚本的 lint 错误留到 CI 才炸。
 
 **范围外的东西不要顺手改。** 发现别的问题 → 记下来，单独一次提交。
 
@@ -93,14 +103,18 @@ bash scripts/check_architecture.sh
 
 | 约束 | 值 | 为什么 |
 | --- | --- | --- |
-| 单文件行数 | **≤ 900** | 超过就拆（`config.py` 已 656，接近上限） |
+| 单文件行数 | **≤ 900** | 超过就拆（`kernel/config.py` 已 825，最接近上限） |
 | 行长 | ≤ 100 | formatter 处理 |
 | 类型注解 | 全部 | `mypy strict = true` |
 | 必需依赖 | **只有两个**：`pydantic`、`httpx` | P5。新增必需依赖需写 ADR |
-| `kernel/` 覆盖率 | ≥ 90% | CI 阻断 |
-| `domain/` 覆盖率 | ≥ 95% | 纯函数，必须高覆盖 |
+| `kernel/` 覆盖率 | ≥ 90% | CI 阻断（`scripts/check_coverage.py`） |
+| `domain/` 覆盖率 | ≥ 95% | 纯函数，必须高覆盖，CI 阻断 |
 | `sim/` 覆盖率 | ≥ 85% | CI 阻断 |
 | 全局覆盖率 | ≥ 85% | CI 阻断 |
+
+**四个下限由 [`scripts/check_coverage.py`](scripts/check_coverage.py) 按包核对**，跑在 CI 的测试作业里。
+coverage 自带的 `--cov-fail-under` 只能表达一个全局下限，所以复用同一次 `--cov-report=json` 的产物自己算。
+改下限要同时改那个脚本和这张表。
 
 **测试标记**：`@pytest.mark.slow` / `.integration` / `.golden` / `.architecture`
 
@@ -119,9 +133,20 @@ bash scripts/check_architecture.sh
 
 ## 7. 新增配置项的正确姿势
 
+**今天（v0.1.x）必须做的是这三步**：
+
+1. 配置 `dataclass` 加字段，字段下面写**中文 docstring** 说清「改了会发生什么」。
+2. 在 `templates/alterego.toml` 里补一行带注释的默认值——`test_authoritative_template_covers_every_key`
+   会核对模板与配置类一一对应，缺了直接红。
+3. 如果是新增**段**，还要在 `kernel/config.py` 的 `Config` 上挂好；嵌套的 dataclass 段
+   会被 `_split_known` 递归检查，写错键名会被告警点名（见 `07-model-routing-and-media.md` § 3.1.1）。
+
+**下面这段「展示元数据」是 v0.2.0 的目标形态，现在写会 ImportError**（`SETTING_METADATA`、
+`Setting`、`SettingKind` 都还不存在），列出它是为了让机制落地时不用重新设计：
+
 ```python
 # 1. 配置 dataclass 加字段
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class MediaSelfieConfig:
     daily_limit: int = 3
     """每天最多主动拍几张自拍。"""

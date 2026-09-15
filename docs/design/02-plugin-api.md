@@ -657,6 +657,10 @@ optional = ["channel.web"]
 
 支持版本约束：`>=`、`<=`、`==`、`~=`（兼容版本）、无约束。
 
+> 上面这两个 id 是**语法示例**，两个插件都还不存在。今天随内核一起发的只有
+> `capability.example`（示例）与 `capability.obsidian_vault`（知识库）；
+> 存储后端与 LLM provider 都是内核自带的，不走插件。
+
 ### 8.2 解析流程
 
 ```mermaid
@@ -1422,7 +1426,7 @@ class CameraStatusTool:
 ### 16.1 新建插件
 
 - [ ] 在 `plugins/<name>/` 下创建目录
-- [ ] 编写 `plugin.toml`：`id` 符合命名规范、`api_version = "1"`、`kind` 正确、`entry` 可解析
+- [ ] 编写 `plugin.toml`：`id` 符合命名规范、`api_version = 1`（**整数，不是字符串**）、`kind` 正确、`entry` 可解析
 - [ ] `config` 中每个字段都有 `type` 与 `description`；密钥字段标 `secret = true` 并配 `env`
 - [ ] `requires` 只列出真正必需的依赖；能可选的放 `optional`
 - [ ] 实现 `Plugin` 子类，在 `on_load` 中注册能力
@@ -1437,28 +1441,30 @@ class CameraStatusTool:
 
 ### 16.2 测试
 
-- [ ] 单元测试：`on_load` 能正确注册能力（用 `FakeRegistry`）
+- [ ] 单元测试：`on_load` 能正确注册能力（用 `ServiceRegistry`）
 - [ ] 单元测试：核心逻辑用 `FrozenClock` + 固定 seed 验证确定性
 - [ ] 集成测试：能被 `PluginManager` 正常加载、启动、停止、重载
 - [ ] 异常测试：依赖缺失时的降级行为
 - [ ] 异常测试：`on_load` 抛异常时不影响其他插件
 
-测试辅助工具（内核提供）：
+可用的测试积木（全部是真实存在的）：
 
 ```python
-from alterego.testing import (
-    FakeRegistry, FakeBus, FrozenClock, FakeLLM, FakeChannel,
-    make_context, load_plugin_for_test,
-)
-
-def test_dingtalk_signing():
-    plugin, ctx = load_plugin_for_test(
-        "plugins/dingtalk",
-        config={"webhook_url": "https://example.com/hook", "secret": "SECtest"},
-    )
-    url = plugin._signed_url()
-    assert "timestamp=" in url and "sign=" in url
+from alterego.kernel.clock import FrozenClock
+from alterego.kernel.bus import EventBus
+from alterego.kernel.registry import ServiceRegistry
 ```
+
+`tests/conftest.py` 已经提供了 `clock` / `hour` / `bus` / `registry` 四个夹具。
+
+> ⚠️ **曾经展示的 `alterego.testing` 模块不存在。**
+> `FakeRegistry` / `FakeBus` / `FakeLLM` / `FakeChannel` / `make_context` /
+> `load_plugin_for_test` 一个都没有写，照着 import 会 `ModuleNotFoundError`。
+
+想要一份「真的会被 CI 跑」的插件测试模版，看
+[`tests/test_example_plugin.py`](../../tests/test_example_plugin.py)：
+它用真实路径把发现、清单校验、依赖解析、导入、注册、执行、卸载全走一遍，
+示例插件一旦腐烂就变红。
 
 ### 16.3 文档
 

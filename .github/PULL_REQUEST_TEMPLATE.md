@@ -47,10 +47,13 @@ Closes #
 **本地运行结果**：
 
 ```
-$ pytest -q
+$ pytest -q --cov=alterego --cov-report=json
 ...
 
-$ ruff check .
+$ python scripts/check_coverage.py
+...
+
+$ ruff check src tests plugins scripts
 ...
 
 $ bash scripts/check_architecture.sh
@@ -59,7 +62,7 @@ $ bash scripts/check_architecture.sh
 
 - [ ] 新增功能有对应测试
 - [ ] bug 修复有**先失败后通过**的复现测试
-- [ ] 覆盖率未下降（`kernel/` ≥ 90%，`domain/` ≥ 95%，全局 ≥ 85%）
+- [ ] `python scripts/check_coverage.py` 通过（`kernel/` ≥ 90%，`domain/` ≥ 95%，`sim/` ≥ 85%，全局 ≥ 85%）
 - [ ] 涉及推演的改动使用了固定的 `ctx.rng` 种子（可复现）
 
 **手动验证步骤**（如适用）：
@@ -161,7 +164,8 @@ $ bash scripts/check_architecture.sh
 ## 检查清单回顾
 
 - [ ] 本地 `pytest` 全绿
-- [ ] 本地 `ruff check . && ruff format --check .` 通过
+- [ ] 本地 `python scripts/check_coverage.py` 通过
+- [ ] 本地 `ruff check src tests plugins scripts && ruff format --check src tests plugins scripts` 通过
 - [ ] 本地 `bash scripts/check_architecture.sh` 通过
 - [ ] 提交信息符合 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/)
 - [ ] 已阅读上述全部内容，没有敷衍勾选
