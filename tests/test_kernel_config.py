@@ -1,0 +1,394 @@
+"""内核配置系统的行为测试。
+
+这些用例是本项目的「配置契约」：改了 ``config.py`` 或改了
+``defaults.toml`` / ``templates/alterego.toml``，这里必须仍然通过。
+"""
+
+from __future__ import annotations
+
+from dataclasses import FrozenInstanceError
+from datetime import time
+from pathlib import Path
+
+import pytest
+
+from alterego.kernel.config import (
+    DEFAULT_CONFIG_PATH,
+    DEFAULT_CONFIG_PATHS,
+    Config,
+    DisturbBudgetConfig,
+    LLMRoutingConfig,
+    SimulationConfig,
+    WebConfig,
+)
+from alterego.kernel.errors import ConfigError
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+TEMPLATE = REPO_ROOT / "templates" / "alterego.toml"
+
+
+def _write(tmp_path: Path, text: str) -> Path:
+    path = tmp_path / "alterego.toml"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  默认值与随包数据
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_load_without_any_file_still_works() -> None:
+    """没有配置文件时用默认值静默继续——绝大多数命令不该强制 init。"""
+    config = Config.load()
+    assert config.simulation.mode == "realtime"
+    assert config.disturb_budget.daily_message_limit == 3
+    assert config.source is None
+
+
+def test_explicit_missing_path_is_an_error(tmp_path: Path) -> None:
+    """显式指定的路径不存在时直接报错，不静默换用默认值。"""
+    with pytest.raises(ConfigError) as excinfo:
+        Config.load(path=tmp_path / "nope.toml")
+    assert excinfo.value.context["path"].endswith("nope.toml")
+
+
+def test_missing_file_can_be_required(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``alterego init`` 之外不该强制要求配置文件，但 init 自己要知道去哪找。"""
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ConfigError) as excinfo:
+        Config.load(require_file=True)
+    assert excinfo.value.context["searched"] == [str(p) for p in DEFAULT_CONFIG_PATHS]
+
+
+def test_packaged_defaults_file_ships_with_the_package() -> None:
+    """``defaults.toml`` 是发行版的选型声明，丢了会让默认值静默变空。"""
+    assert DEFAULT_CONFIG_PATH.is_file(), f"缺少随包默认值：{DEFAULT_CONFIG_PATH}"
+
+
+def test_packaged_defaults_supply_the_implementation_choices() -> None:
+    """内核代码里不许写具体技术名，这些值只能由数据文件提供（P1）。"""
+    config = Config.load()
+    assert config.llm.default_provider == "openai_compatible"
+    assert config.storage.backend == "sqlite"
+    assert config.llm.routing.strong == "openai_compatible"
+    assert config.llm.routing.cheap == "openai_compatible"
+
+
+def test_user_config_overrides_packaged_defaults() -> None:
+    config = Config.load(
+        overrides={"llm": {"default_provider": "my_provider"}, "storage": {"backend": "me"}}
+    )
+    assert config.llm.default_provider == "my_provider"
+    assert config.storage.backend == "me"
+
+
+def test_nested_sections_are_real_dataclasses() -> None:
+    """``from __future__ import annotations`` 下很容易悄悄退化成 dict。
+
+    退化了不会报错，只会让 ``config.simulation.mode`` 变成下标访问——
+    所以在这里钉死。
+    """
+    config = Config.load()
+    assert isinstance(config.simulation, SimulationConfig)
+    assert isinstance(config.llm.routing, LLMRoutingConfig)
+    assert isinstance(config.web, WebConfig)
+
+
+def test_config_is_frozen() -> None:
+    config = Config.load()
+    with pytest.raises(FrozenInstanceError):
+        config.core.log_level = "DEBUG"  # type: ignore[misc]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  加载优先级
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_env_beats_file(tmp_path: Path) -> None:
+    path = _write(tmp_path, '[core]\nlog_level = "WARNING"\n')
+    config = Config.load(path=path, env={"ALTEREGO_CORE__LOG_LEVEL": "DEBUG"})
+    assert config.core.log_level == "DEBUG"
+    assert config.source == path
+
+
+def test_overrides_beat_env() -> None:
+    config = Config.load(
+        overrides={"core": {"log_level": "ERROR"}},
+        env={"ALTEREGO_CORE__LOG_LEVEL": "DEBUG"},
+    )
+    assert config.core.log_level == "ERROR"
+
+
+def test_double_underscore_env_maps_to_nesting() -> None:
+    config = Config.load(
+        env={
+            "ALTEREGO_SIMULATION__MODE": "fast",
+            "ALTEREGO_WEB__PORT": "9000",
+            "ALTEREGO_PLUGINS__AUTO_RELOAD": "true",
+        }
+    )
+    assert config.simulation.mode == "fast"
+    assert config.web.port == 9000
+    assert config.plugins.auto_reload is True
+
+
+def test_single_level_env_is_ignored_not_guessed() -> None:
+    """``ALTEREGO_XXX`` 定位不到配置段，只能忽略——猜错比不猜更糟。"""
+    config = Config.load(env={"ALTEREGO_SOMETHING": "1"})
+    assert config.unknown_keys == ()
+
+
+def test_string_values_are_coerced_from_env() -> None:
+    """环境变量全是字符串，``"8765"`` 必须变成 ``int`` 而不是一路裸奔。"""
+    config = Config.load(env={"ALTEREGO_WEB__PORT": "9123"})
+    assert config.web.port == 9123
+    assert isinstance(config.web.port, int)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  TOML 解析与错误
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_broken_toml_reports_the_file(tmp_path: Path) -> None:
+    path = _write(tmp_path, "[core\nlog_level = 1\n")
+    with pytest.raises(ConfigError) as excinfo:
+        Config.load(path=path)
+    assert excinfo.value.context["path"] == str(path)
+
+
+def test_missing_env_reference_is_an_error() -> None:
+    with pytest.raises(ConfigError) as excinfo:
+        Config.load(env={}, overrides={"llm": {"providers": {"p": {"api_key": "${NOPE}"}}}})
+    assert "NOPE" in str(excinfo.value)
+
+
+def test_env_reference_is_resolved() -> None:
+    config = Config.load(
+        env={"MY_KEY": "abc123"},
+        overrides={"llm": {"providers": {"p": {"api_key": "${MY_KEY}"}}}},
+    )
+    assert config.llm.providers["p"]["api_key"] == "abc123"  # type: ignore[index]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  ``[<section>.<用户起的名字>]`` 的折叠
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_named_sections_collapse_into_their_containers(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        """
+[channels.file]
+path = "data/outbox"
+
+[llm.my_provider]
+api_key = "k"
+
+[plugins.config."my.plugin"]
+threshold = 3
+""",
+    )
+    config = Config.load(path=path, env={})
+    assert config.unknown_keys == ()
+    assert config.channels.options_for("file") == {"path": "data/outbox"}
+    assert config.llm.providers["my_provider"] == {"api_key": "k"}  # type: ignore[index]
+    assert config.plugins.config_for("my.plugin") == {"threshold": 3}
+
+
+def test_unknown_top_level_key_only_warns() -> None:
+    """插件可能需要内核不认识的键（P4），所以只记录不失败。"""
+    config = Config.load(overrides={"telemetry": {"enabled": True}})
+    assert config.unknown_keys == ("telemetry",)
+
+
+def test_options_for_unknown_channel_is_empty() -> None:
+    assert Config.load().channels.options_for("nope") == {}
+
+
+def test_config_for_unknown_plugin_is_empty() -> None:
+    assert Config.load().plugins.config_for("nope.plugin") == {}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  校验
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"core": {"log_level": "VERBOSE"}}, id="log_level"),
+        pytest.param({"core": {"timezone": "Not/AZone"}}, id="timezone"),
+        pytest.param({"simulation": {"mode": "warpspeed"}}, id="mode"),
+        pytest.param({"simulation": {"tick_interval_minutes": 0}}, id="tick_interval_zero"),
+        pytest.param(
+            {"simulation": {"mode": "turbo", "tick_interval_minutes": 5}}, id="turbo_too_fine"
+        ),
+        pytest.param({"disturb_budget": {"daily_message_limit_urgent": 1}}, id="urgent_below"),
+        pytest.param({"disturb_budget": {"quiet_hours": ["08:00", "08:00"]}}, id="quiet_identical"),
+        pytest.param({"llm": {"timeout_seconds": 0}}, id="timeout_zero"),
+        pytest.param({"llm": {"budget": {"monthly_usd_limit": 1.0}}}, id="monthly_below_daily"),
+        pytest.param({"llm": {"budget": {"on_exceed": "explode"}}}, id="on_exceed"),
+        pytest.param({"persona": {"evolution_max_field_delta": 0.0}}, id="delta_zero"),
+        pytest.param({"web": {"port": 70000}}, id="port"),
+        pytest.param({"web": {"auth": "none", "host": "0.0.0.0"}}, id="open_listener"),
+        pytest.param({"storage": {"journal_mode": "ROCKS"}}, id="journal_mode"),
+        pytest.param({"retention": {"tick_log_keep_days": 0}}, id="retention"),
+        pytest.param({"channels": {"enabled": ["a", "a"]}}, id="duplicate_channel"),
+        pytest.param(
+            {"plugins": {"auto_reload": True, "auto_reload_interval_seconds": 0.1}},
+            id="reload_too_fast",
+        ),
+        pytest.param({"routing": {"level": "sometimes"}}, id="routing_level"),
+    ],
+)
+def test_invalid_values_are_rejected_at_build_time(overrides: dict[str, object]) -> None:
+    """宁可启动时退出码 2，也不要跑了一半才发现配置写错。"""
+    with pytest.raises(ConfigError) as excinfo:
+        Config.load(env={}, overrides=overrides)
+    assert excinfo.value.code == "config_error"
+
+
+def test_localhost_without_auth_is_allowed() -> None:
+    """本机监听关掉认证是合理的——只是不能暴露到局域网。"""
+    config = Config.load(overrides={"web": {"auth": "none", "host": "127.0.0.1"}})
+    assert config.web.auth == "none"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  静默时段
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_quiet_hours_handle_midnight_crossing() -> None:
+    config = DisturbBudgetConfig(quiet_hours=(time(23, 30), time(8, 0)))
+    assert config.in_quiet_hours(time(23, 45)) is True
+    assert config.in_quiet_hours(time(3, 0)) is True
+    assert config.in_quiet_hours(time(8, 0)) is False
+    assert config.in_quiet_hours(time(12, 0)) is False
+    assert config.in_quiet_hours(time(23, 0)) is False
+
+
+def test_quiet_hours_within_one_day() -> None:
+    config = DisturbBudgetConfig(quiet_hours=(time(1, 0), time(6, 0)))
+    assert config.in_quiet_hours(time(3, 0)) is True
+    assert config.in_quiet_hours(time(0, 59)) is False
+    assert config.in_quiet_hours(time(6, 0)) is False
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  路由
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_routing_resolves_one_level_of_indirection() -> None:
+    routing = LLMRoutingConfig(strong="big", cheap="small")
+    assert routing.resolve("decision") == "big"
+    assert routing.resolve("reflection") == "small"
+
+
+def test_routing_passes_through_a_direct_provider_name() -> None:
+    routing = LLMRoutingConfig(decision="direct")
+    assert routing.resolve("decision") == "direct"
+
+
+def test_routing_rejects_unknown_purpose() -> None:
+    """静默回落会让「我明明配了没生效」变成玄学。"""
+    with pytest.raises(ConfigError) as excinfo:
+        Config.load().llm.routing.resolve("telepathy")
+    assert "decision" in excinfo.value.context["supported"]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  派生路径与副作用
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_derived_paths(tmp_path: Path) -> None:
+    config = Config.load(
+        env={},
+        overrides={"core": {"data_dir": str(tmp_path / "d")}, "storage": {"db_path": "a.db"}},
+    )
+    assert config.data_dir == tmp_path / "d"
+    assert config.database_path == tmp_path / "d" / "a.db"
+    assert config.backups_dir == tmp_path / "d" / "backups"
+    assert config.outbox_dir == tmp_path / "d" / "outbox"
+
+
+def test_absolute_db_path_is_respected(tmp_path: Path) -> None:
+    target = tmp_path / "elsewhere" / "x.db"
+    config = Config.load(env={}, overrides={"storage": {"db_path": str(target)}})
+    assert config.database_path == target
+
+
+def test_plugin_search_paths_are_absolute(tmp_path: Path) -> None:
+    config = Config.load(env={}, overrides={"plugins": {"search_paths": ["plugins"]}})
+    assert all(p.is_absolute() for p in config.plugin_search_paths)
+
+
+def test_ensure_directories_creates_everything(tmp_path: Path) -> None:
+    config = Config.load(env={}, overrides={"core": {"data_dir": str(tmp_path / "d")}})
+    config.ensure_directories()
+    assert config.data_dir.is_dir()
+    assert config.backups_dir.is_dir()
+    assert config.outbox_dir.is_dir()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  展示与脱敏
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_secrets_are_masked_by_default() -> None:
+    """配置经常被贴到 issue 里。"""
+    config = Config.load(
+        env={},
+        overrides={
+            "llm": {"providers": {"p": {"api_key": "sk-real", "base_url": "https://x"}}},
+            "channels": {"dingtalk_webhook": {"webhook_url": "https://secret"}},
+        },
+    )
+    dumped = config.redacted()
+    assert dumped["llm"]["providers"]["p"]["api_key"] == "***"
+    assert dumped["llm"]["providers"]["p"]["base_url"] == "https://x"
+    assert dumped["channels"]["options"]["dingtalk_webhook"]["webhook_url"] == "***"
+
+
+def test_redaction_can_be_turned_off() -> None:
+    config = Config.load(env={}, overrides={"llm": {"providers": {"p": {"api_key": "sk-real"}}}})
+    assert config.to_dict(redact=False)["llm"]["providers"]["p"]["api_key"] == "sk-real"
+
+
+def test_dump_is_json_friendly() -> None:
+    """``alterego config --json`` 直接 ``json.dumps``，不能出现 Path/datetime。"""
+    dumped = Config.load().to_dict()
+    assert isinstance(dumped["core"]["data_dir"], str)
+    assert isinstance(dumped["disturb_budget"]["quiet_hours"], list)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  与权威模板保持同步
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_authoritative_template_covers_every_key() -> None:
+    """``templates/alterego.toml`` 是所有配置项的权威参考。
+
+    它一旦出现内核不认识的键，要么是模板写错了，要么是 ``config.py``
+    漏了新字段——两种都必须当场发现。
+    """
+    config = Config.load(path=TEMPLATE, env={})
+    assert config.unknown_keys == ()
+    assert config.source == TEMPLATE
+
+
+def test_authoritative_template_loads_real_values() -> None:
+    config = Config.load(path=TEMPLATE, env={})
+    assert config.simulation.mode == "realtime"
+    assert config.llm.budget.on_exceed == "degrade"
+    assert config.channels.enabled == ("channel.file", "channel.web")

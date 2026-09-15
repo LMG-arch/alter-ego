@@ -138,19 +138,30 @@ class Config:
 **加载优先级**（后者覆盖前者）：
 
 ```
-内置默认值  →  config/alterego.toml  →  环境变量 (ALTEREGO_*)  →  CLI 参数  →  测试注入
+dataclass 默认值  →  alterego/defaults.toml  →  config/alterego.toml
+                  →  环境变量 (ALTEREGO_*)  →  CLI 参数  →  测试注入
 ```
+
+> **为什么第二层是数据文件而不是代码。** 「默认用哪个 LLM provider」「默认用哪个
+> 存储后端」属于**发行版**的选择，不属于**内核**。如果把它们写成 dataclass 的
+> 默认值，`kernel/config.py` 里就会出现具体技术名词，P1「内核无知」当场失效
+> （`scripts/check_architecture.sh` 第 1 组会红）。因此这些值放在随包分发的
+> `src/alterego/defaults.toml` 里，内核只认识字符串形式的 provider / backend 名。
+> 换发行版 = 换一个数据文件，内核一行都不用改。见 ADR-0006。
 
 **实现要点**：
 
 | 要点 | 做法 |
 | --- | --- |
 | TOML 解析 | Python 3.11 内置 `tomllib`，无第三方依赖 |
-| 密钥注入 | 配置值形如 `${ENV_VAR}` 时在加载阶段解析为环境变量内容 |
+| 密钥注入 | 配置值形如 `${ENV_VAR}` 时在加载阶段解析为环境变量内容；变量缺失直接失败并点名 |
 | 校验 | `__post_init__` 中校验范围（如 `0 <= daily_message_limit <= 20`） |
 | 不可变 | 全部 `frozen=True`，防止运行时被意外修改 |
 | 脱敏 | `Config.redacted()` 返回密钥替换为 `***` 的副本，用于日志与 Web 展示 |
-| 环境变量映射 | `ALTEREGO_CORE__LOG_LEVEL` 双下划线表示层级 |
+| 环境变量映射 | `ALTEREGO_CORE__LOG_LEVEL` 双下划线表示层级；只有一级的 `ALTEREGO_XXX` 忽略而非猜测 |
+| 用户命名的段 | `[channels.<id>]` → `channels.options`、`[llm.<name>]` → `llm.providers`、`[plugins.config."<id>"]` → `plugins.config`（自动折叠） |
+| 未知键 | 只记录进 `Config.unknown_keys` 并告警，不失败——插件可能需要它们（P4） |
+| 权威参考 | `templates/alterego.toml` 必须覆盖所有键，测试断言其 `unknown_keys == ()` |
 
 ### 2.3 `bus.py` — 事件总线
 

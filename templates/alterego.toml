@@ -5,10 +5,15 @@
 #  它同时是**所有配置项的权威参考**：每一行都有注释，每个键都有默认值。
 #
 #  配置加载优先级（后者覆盖前者）：
-#    1. 本文件的默认值（内置）
-#    2. config/alterego.toml          （用户配置）
-#    3. ALTEREGO_* 环境变量            （容器/CI 友好）
-#    4. 命令行参数                     （仅一次运行）
+#    1. dataclass 内置默认值          （内核代码里的保守值，不含任何具体技术名）
+#    2. alterego/defaults.toml        （随包分发：本发行版默认挑了哪些实现）
+#    3. config/alterego.toml          （用户配置，由 `alterego init` 从本模板生成）
+#    4. ALTEREGO_* 环境变量            （容器/CI 友好）
+#    5. 命令行参数                     （仅一次运行）
+#
+#  第 2 层只回答一个问题：「默认用哪个 provider / 哪个存储后端」。
+#  它是数据文件而不是代码，因为这类选择属于发行版而不属于内核
+#  （设计原则 P1，见 docs/adr/0006-ship-implementation-choices-as-data.md）。
 #
 #  ⚠️ 不要在 schema 里出现 "secret" 类型的键。所有密钥走环境变量：
 #       ${VAR_NAME} 语法会被解析为环境变量的值，例如

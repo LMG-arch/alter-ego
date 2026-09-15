@@ -24,12 +24,54 @@
 
 ### 新增
 
-- 项目脚手架：`pyproject.toml`、`.gitignore`、MIT `LICENSE`、README、CI 工作流
-- 架构红线检查脚本 `scripts/check_architecture.sh`：六组 grep 检查强制保证分层依赖方向
+**项目脚手架**
+
+- `pyproject.toml`、`.gitignore`、MIT `LICENSE`、`README.md`、`.github/` 下的 CI 工作流与 issue / PR 模板
+- 架构红线检查脚本 `scripts/check_architecture.sh`：六组检查强制保证分层依赖方向
+
+**内核层（阶段 C）**
+
+- `kernel/errors.py` —— 异常树（`AlterEgoError` 基类 + 4 大类 13 个子类）。所有异常携带
+  `context: dict`，`to_dict()` 可直接进日志；`is_retryable()` 区分「重试有用」与「重试只会更快烧钱」
+- `kernel/clock.py` —— 三种时钟：`RealClock` / `VirtualClock`（倍速与重入基线）/ `FrozenClock`（测试）。
+  含 IANA 时区解析与无 tzdata 环境下的固定偏移兜底
+- `kernel/bus.py` —— 事件总线。`fnmatch` 通配主题、优先级 + 注册序排序、`once` 订阅、
+  异常隔离（处理器炸了不影响其他处理器）、重入保护（深度上限 8）
+- `kernel/registry.py` —— 服务注册表。按接口 + 名字索引、优先级解析、
+  同优先级歧义时报错并给出 `name=` 建议、`unregister_owner` 支持插件整体卸载
+- `kernel/config.py` —— 配置系统。11 个 `frozen=True` 配置段、`__post_init__` 全量校验、
+  `${ENV_VAR}` 密钥注入、`ALTEREGO_SECTION__KEY` 环境变量映射、疑似密钥自动脱敏、
+  未知键只告警不失败
+- `src/alterego/defaults.toml` —— 随包分发的发行版选型（默认 provider / 存储后端 / 路由分层）
+- `cli.py` —— `argparse` 骨架与退出码约定（0 正常 / 2 配置错 / 3 插件依赖错 / 4 存储错）
+
+**测试**
+
+- `tests/test_kernel_config.py` —— 41 个用例覆盖加载优先级、键折叠、全部校验分支、
+  静默时段跨零点、脱敏，并断言权威模板 `templates/alterego.toml` 的键 100% 被内核认识
+- `tests/test_architecture.py` —— 用 `ast` 机械校验内核不 import 任何 IO 库、
+  不 import 任何上层模块、不留 `print`
+
+### 变更
+
+- `templates/alterego.toml` 头部注释补上第 2 层加载来源 `alterego/defaults.toml`
+- `pyproject.toml` 的 `[tool.hatch.build.targets.wheel.force-include]` 只保留 `templates`：
+  包内数据文件由 `packages = ["src/alterego"]` 自动包含，重复声明只会让目录一挪位置就 build 失败
+- ruff 忽略 `RUF001/002/003`（中文全角标点）与 `N818`（内核异常名不含 `Error` 后缀），
+  两者都是既定风格而非疏忽，已在配置里写明理由
 
 ### 文档
 
+- `docs/adr/0006` 发行版选型写成数据文件，不写进内核代码
+- `docs/design/01-architecture.md` § 2.2 更新配置加载优先级与实现要点表
 - `docs/adr/0001` 引入架构决策记录机制
+
+### 架构
+
+- **内核不再知道任何具体技术名**。`kernel/config.py` 里原本硬编码的
+  `default_provider` / `backend` / 路由分层默认值移入随包数据文件 `src/alterego/defaults.toml`，
+  由 `Config.load()` 作为最低优先级层合并。首次真机运行 `check_architecture.sh` 时这 6 处
+  被第 1 组红线挡下——红线生效，且修的是代码而不是规则。见 ADR-0006
 
 ---
 

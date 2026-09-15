@@ -96,10 +96,11 @@ Changelog = "https://github.com/LMG-arch/alter-ego/blob/main/CHANGELOG.md"
 [tool.hatch.build.targets.wheel]
 packages = ["src/alterego"]
 
+# 只有 `templates/` 需要映射：它在包目录之外，不映射就会被 wheel 漏掉。
+# `src/alterego/` 里的数据文件（`defaults.toml`、`prompts/`、`migrations/`、
+# `channels/web/static/`）由上面的 `packages` 自动包含，不要在这儿重复列一遍——
+# 重复列意味着目录一改位置 build 就炸。
 [tool.hatch.build.targets.wheel.force-include]
-"src/alterego/channels/web/static" = "alterego/channels/web/static"
-"src/alterego/prompts" = "alterego/prompts"
-"src/alterego/migrations" = "alterego/migrations"
 "templates" = "alterego/templates"
 
 [tool.hatch.build.targets.sdist]
@@ -159,6 +160,17 @@ select = [
 ignore = [
     "E501",    # 行长由 formatter 控制
     "B008",    # 允许函数调用作为默认参数（FastAPI Depends）
+    # ── 以下是本项目的既定中文风格，不是疏忽 ──────────────────
+    # RUF001/2/3：全角标点（，。：；（）「」）在中文注释与文案里是正确写法。
+    # ruff 认为它们「与 ASCII 混淆」，但本项目所有面向人的文本都是中文，
+    # 混用半角反而更难读。见 CONTRIBUTING.md「文档纪律」。
+    "RUF001",
+    "RUF002",
+    "RUF003",
+    # N818：异常名不强制 Error 后缀。内核异常树的名字（TickAborted、
+    # IntentRejected、LLMBudgetExceeded）已在 docs/design/01-architecture.md
+    # § 2.1 定稿，且是文档、日志与 `alterego why` 输出里对用户可见的契约名。
+    "N818",
 ]
 
 [tool.ruff.lint.per-file-ignores]

@@ -1,0 +1,42 @@
+# ═══════════════════════════════════════════════════════════════════════
+#  AlterEgo 随包默认配置（只包含「内核不该知道的那些键」）
+# ═══════════════════════════════════════════════════════════════════════
+#
+# 为什么需要这个文件？
+#
+#   设计原则 P1「内核无知」要求 `src/alterego/kernel/` 里不得出现任何
+#   具体技术名词（sqlite / openai / httpx / fastapi ...）。但「默认用哪个
+#   LLM provider、默认用哪个存储后端」总得有个值。
+#
+#   这个决定权不属于内核，而属于**发行版**：内核只定义 Protocol 与抽象，
+#   由发行版声明「我默认装了哪些插件」。因此这些键写在这里（数据），
+#   而不是写在 kernel/config.py 的 dataclass 默认值里（代码）。
+#
+# 加载顺序（docs/design/01-architecture.md § 2.2）：
+#
+#   1. 本文件              ← 随包默认值，用户看不见也改不了
+#   2. config/alterego.toml ← 用户配置（`alterego init` 从 templates/ 生成）
+#   3. ALTEREGO_* 环境变量
+#   4. CLI 参数
+#
+#   本文件只放「内核不能写」的键；其余默认值都在 kernel/config.py 的
+#   dataclass 里，它们是结构性的（间隔、上限、模式），不涉及具体技术。
+#
+#   完整注释版见 templates/alterego.toml。
+# ═══════════════════════════════════════════════════════════════════════
+
+[llm]
+default_provider = "openai_compatible"
+
+[llm.routing]
+strong = "openai_compatible"
+cheap = "openai_compatible"
+decision = "strong"
+expression = "strong"
+reflection = "cheap"
+npc = "cheap"
+persona = "strong"
+memory = "cheap"
+
+[storage]
+backend = "sqlite"

@@ -806,6 +806,17 @@ QQ 官方机器人需企业/开发者审核；第三方 OneBot（NapCat / LLOneB
 
 > **完整注释版见 [`templates/alterego.toml`](../templates/alterego.toml)**——它是所有配置项的权威参考（每个键都有默认值与说明），也是 `alterego init` 复制给用户的起始文件。下面只列出关键项。
 
+**加载优先级**（后者覆盖前者）：
+
+```
+dataclass 默认值 → alterego/defaults.toml → config/alterego.toml
+                 → ALTEREGO_* 环境变量 → CLI 参数
+```
+
+其中 `alterego/defaults.toml` 是随包分发的**发行版选型**（默认用哪个 LLM provider、哪个存储后端），
+它是数据文件而非代码——内核里不出现任何具体技术名（P1「内核无知」，见
+[ADR-0006](adr/0006-ship-implementation-choices-as-data.md)）。
+
 ```toml
 [core]
 data_dir = "data"
@@ -916,12 +927,20 @@ alter-ego/
 │   │   ├── 05-channels.md
 │   │   └── 06-roadmap.md
 │   ├── adr/                         # 架构决策记录
-│   │   └── 0001-record-architecture-decisions.md
+│   │   ├── README.md                # 索引：新增 ADR 必须在这里补一行
+│   │   ├── 0000-template.md
+│   │   └── 0001…0006                # ADR 机制 / 语言 / 存储 / 渠道方向 / 降级 / 选型即数据
 │   └── guide/                       # 用户手册
 │       ├── getting-started.md
 │       └── plugin-development.md
 │
+├── scripts/
+│   └── check_architecture.sh        # 六组红线检查，CI 第一道关
+│
 ├── src/alterego/
+│   ├── __init__.py                  # 只有 __version__，不 import 任何子模块
+│   ├── defaults.toml                # 随包分发的发行版选型（内核不许知道的那部分）
+│   ├── cli.py
 │   ├── kernel/                      # 内核：零业务逻辑
 │   │   ├── config.py
 │   │   ├── bus.py
@@ -933,7 +952,8 @@ alter-ego/
 │   │   ├── scheduler.py
 │   │   ├── errors.py
 │   │   └── logging.py
-│   ├── domain/                      # 领域模型：纯逻辑，无 IO
+│   ├── interfaces/                  # 跨层 Protocol 与纯数据契约（各层共同 import）
+│   ├── domain/                      # 领域模型：纯函数，无 IO
 │   │   ├── persona.py
 │   │   ├── emotion.py
 │   │   ├── memory.py
@@ -961,6 +981,8 @@ alter-ego/
 │   │       ├── socialize.py
 │   │       ├── post_moment.py
 │   │       └── reach_out.py
+│   ├── npc/                         # NPC 模拟（与主体推演分开，避免抢注意力）
+│   ├── capabilities/                # 内置 capability 插件宿主
 │   ├── llm/                         # LLM 抽象层
 │   │   ├── client.py
 │   │   ├── router.py
@@ -976,49 +998,57 @@ alter-ego/
 │   │           ├── persona_repo.py
 │   │           ├── memory_repo.py
 │   │           └── ...
-│   ├── channels/
-│   │   ├── file.py
-│   │   ├── web.py
-│   │   ├── wecom.py
-│   │   └── dingtalk.py
-│   ├── web/
-│   │   ├── app.py
-│   │   ├── sse.py
-│   │   └── static/
-│   │       ├── index.html
-│   │       ├── style.css
-│   │       └── app.js
-│   ├── cli/
-│   │   ├── main.py
-│   │   └── commands/
-│   └── daemon.py
+│   ├── channels/                    # 出站渠道 + v1 唯一的入站渠道（ADR-0004）
+│   │   ├── file.py                  # 离线兜底：写进 data/outbox/
+│   │   └── web/                     # 本地 Web 界面
+│   │       ├── app.py               # ASGI 应用
+│   │       ├── plugin.py            # 以 channel 插件身份注册
+│   │       ├── sse.py               # SSEHub
+│   │       ├── auth.py              # token / password / none
+│   │       ├── routes/
+│   │       └── static/
+│   │           ├── index.html
+│   │           ├── style.css
+│   │           └── app.js
+│   ├── prompts/                     # 提示词模板（可热改，随包分发）
+│   │   ├── intention.md
+│   │   ├── emotion_update.md
+│   │   ├── memory_consolidate.md
+│   │   ├── post_compose.md
+│   │   ├── chat_reply.md
+│   │   ├── reach_out.md
+│   │   └── persona_generate.md
+│   └── daemon.py                    # 进程生命周期：启动、信号、优雅关闭
 │
-├── plugins/                         # 本地 drop-in 插件目录
+├── templates/
+│   ├── alterego.toml                # 配置模板：所有配置项的权威参考
+│   └── persona/                     # 人物与世界初始模板（随包分发）
+│
+├── plugins/                         # 本地 drop-in 插件目录（gitignore，只留示例）
 │   └── example_plugin/              # 插件开发模板
 │       ├── plugin.toml
 │       └── plugin.py
 │
-├── prompts/                         # 提示词模板（可热改）
-│   ├── intention.md
-│   ├── emotion_update.md
-│   ├── memory_consolidate.md
-│   ├── post_compose.md
-│   ├── chat_reply.md
-│   ├── reach_out.md
-│   └── persona_generate.md
-│
-├── persona/                         # 人格模板
-│   └── templates/
+├── config/                          # `alterego init` 生成（gitignore）
+│   └── alterego.toml
 │
 ├── data/                            # 运行时数据（gitignore）
 │   ├── alterego.db
+│   ├── alterego.db-wal
 │   ├── alterego.lock
+│   ├── backups/
 │   └── outbox/
 │
+├── logs/                            # gitignore
+├── instances/                       # 用户数据（gitignore）
+├── exports/                         # gitignore
+│
 ├── tests/
-│   ├── unit/
-│   ├── integration/
-│   └── fixtures/
+│   ├── conftest.py                  # 共享 fixture：冻结时钟、EventBus、ServiceRegistry
+│   ├── test_kernel_*.py             # 内核单元测试
+│   ├── test_architecture.py         # 用 ast 机械校验分层红线
+│   ├── golden/                      # 固定随机种子的黄金用例（P6 可复现）
+│   └── fixtures/                    # 共享测试数据
 │
 ├── .github/
 │   ├── workflows/ci.yml
