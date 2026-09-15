@@ -63,12 +63,15 @@ flowchart LR
 
 > **当前进度（2026-09-15）**：阶段 A–C 已完成。阶段 D 的**存储层已落地**——
 > `storage/sqlite/` 下的 `connection.py` / `migrator.py` / `backend.py` 与四个迁移文件。
-> 领域层完成两条纵向切片：
+> 领域层完成三条纵向切片：
 >
 > 1. **作息/情绪/记忆**——`domain/schedule.py`、`domain/emotion.py`、`domain/memory.py`（提交 `b5371ba`）。
 > 2. **节日日历与对话节奏**——`domain/calendar.py`、`domain/conversation.py`、随包数据 `holidays/2026.toml`，
->    外加 `alterego calendar {list,today,check}` 三个命令（共 1081 个测试，全局覆盖率 96.62%，
->    `domain/` 99.16%）。
+>    外加 `alterego calendar {list,today,check}` 三个命令。
+> 3. **生日**——`domain/birthday.py`、`domain/_toml.py`（与节日共用的读取助手）、
+>    `birthdays/__init__.py`（唯一 IO）、`data/birthdays.toml`（不进版本库），
+>    外加 `alterego birthday {list,add,set}`（共 1233 个测试，全局覆盖率 96.75%，`domain/` 98.99%）。
+>    生日**不是**新机制：它是 `kind="personal"` 的节日，见 [12](12-calendar-and-conversation.md) § 17。
 >
 > **领域层其余模块与 12 个 Repository 未开始**。阶段 E–M 均未开始。
 >

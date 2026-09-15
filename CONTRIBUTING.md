@@ -107,9 +107,13 @@ alter-ego/
 ├── src/alterego/
 │   ├── kernel/          # 内核：配置、总线、注册表、插件、时钟、调度、错误
 │   ├── domain/          # 领域：纯函数业务逻辑（人设/情绪/记忆/关系/日程...）
-│   │   └── ...          #   schedule / emotion / memory / calendar / conversation 已实现
+│   │   └── ...          #   schedule / emotion / memory / calendar / conversation
+│   │                    #   / birthday 已实现；_toml.py 是两个加载器共用的取值助手
 │   ├── holidays/        # 随包节日数据（2026.toml）+ 唯一的读盘入口
 │   │                    #   数据在这里、规则在 domain/calendar.py，因为领域层不做 IO
+│   ├── birthdays/       # 生日记录的唯一 IO（data/birthdays.toml）
+│   │                    #   与 holidays/ 同一形状，但那边是随包公共知识、
+│   │                    #   这边是用户自己告诉它的私人数据（所以数据住 data/、不进库）
 │   ├── sim/             # 推演：六阶段流水线、意图、预算、TickContext
 │   ├── storage/         # 存储：SQLite 实现（connection/migrator/backend）、Repository、迁移
 │   │   └── sqlite/      #   └─ migrations/ 里的 .sql 是 schema 的唯一出处

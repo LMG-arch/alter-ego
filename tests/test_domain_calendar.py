@@ -194,10 +194,48 @@ def test_ids_are_unique_within_a_year() -> None:
         HolidayCalendar(holidays=(SPRING_FESTIVAL, twin))
 
 
-def test_two_holidays_cannot_claim_the_same_day() -> None:
-    clash = Holiday(id="clash", name="撞车的节", kind="traditional", day=date(2026, 2, 18))
+def test_two_holidays_cannot_share_a_day_off() -> None:
+    clash = Holiday(
+        id="clash",
+        name="撞车的节",
+        kind="traditional",
+        day=date(2026, 2, 18),
+        days_off=(date(2026, 2, 18),),
+    )
     with pytest.raises(ValueError, match="同时被"):
         HolidayCalendar(holidays=(SPRING_FESTIVAL, clash))
+
+
+def test_a_day_without_days_off_does_not_claim_the_date() -> None:
+    """不放假的节日可以和别的节撞在同一天。
+
+    这条不是漏洞而是规则：它让生日（`kind="personal"`，`days_off` 恒为空）
+    能直接叠加进一份节日日历，而不用先说服日历允许共存。
+    如果哪天有人把「占不占这一天」改回 `span`，这个测试会挂。
+    """
+    clash = Holiday(id="clash", name="情人节", kind="western", day=date(2026, 2, 18))
+    calendar = HolidayCalendar(holidays=(SPRING_FESTIVAL, clash))
+
+    assert any(item.name == "情人节" for item in calendar.holidays)
+    # 情人节没让春节少放一天假，也没让自己变成假日。
+    assert calendar.day_kind(date(2026, 2, 18)) == "holiday"
+    assert calendar.day_kind(date(2026, 2, 20)) == "workday"
+
+
+def test_a_birthday_does_not_make_the_day_a_holiday() -> None:
+    """生日不放假：那天原本是工作日就还是工作日。"""
+    birthday = Holiday(
+        id="birthday:user",
+        name="你的生日",
+        kind="personal",
+        day=date(2026, 6, 3),
+        lead_days=7,
+    )
+    calendar = HolidayCalendar(holidays=(birthday,))
+
+    assert calendar.day_kind(date(2026, 6, 3)) == "workday"  # 2026-06-03 是周三
+    assert calendar.day_kind(date(2026, 6, 6)) == "weekend"
+    assert calendar.context(date(2026, 6, 3)).phase == "during"
 
 
 def test_a_makeup_day_cannot_land_on_a_day_off() -> None:

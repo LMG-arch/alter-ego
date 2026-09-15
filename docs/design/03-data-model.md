@@ -950,6 +950,23 @@ inner_voice       = '刚看到那个独立游戏的视频，好想跟他说一�
 现在加进去会同时改 domain 的 Literal、`001_initial.sql` 的 CHECK 与上表三处，
 而那时还没有任何代码会写入这个值。取舍与触发条件见 [12](12-calendar-and-conversation.md) § 15.1。
 
+**生日也不建表。** 它和节日共用同一套运行期表示（`Holiday(kind="personal")`），
+所以落库会带来同样的不一致风险，而它比节日更没必要——生日的**权威副本只有一个**，
+就是用户手写的那份 `data/birthdays.toml`。建表就等于把「用户自己的文件」
+变成一个需要同步的缓存，而缓存和真源对不上时，谁说了算会立刻变成一个新问题。
+
+具体地，`relationship` 表**不加 `birthday` 列**。理由有三条：
+
+1. 生日对**三种主体**都存在（`self` / `user` / `npc`），而 `relationship` 只描述 NPC。
+   把 `self` 和 `user` 的生日塞进 NPC 表，或者为它们各开一张表，都不如一份文件干净。
+2. `relationship` 不保证每个 NPC 都有一行。「记得生日但还没建档」是常态，
+   而 `birthday` 列会让这种状态变得无法表示（要么强制先建档，要么允许 `NULL` 两重含义）。
+3. 生日是用户手写的**事实**，不是推演出来的**状态**。这个仓库里推演产生的量
+   （`affinity` / `familiarity` / `trust` / `tension`）才进 `relationship`。
+
+判定依据很简单：**这份数据是「它想出来的」还是「你告诉它的」？** 后者不进库。
+实现见 [12](12-calendar-and-conversation.md) § 17.3。
+
 ---
 
 ## 5. 索引策略

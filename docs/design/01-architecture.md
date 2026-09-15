@@ -443,6 +443,8 @@ src/alterego/domain/
 ├── memory.py         # ✅ 已实现
 ├── schedule.py       # ✅ 已实现（日程生成待做）
 ├── calendar.py       # ✅ 已实现 → 12-calendar-and-conversation.md
+├── birthday.py       # ✅ 已实现 → 12-calendar-and-conversation.md § 17
+├── _toml.py          # ✅ 已实现：节日与生日共用的取值助手
 ├── relationship.py   # 待实现
 ├── world.py          # 待实现
 ├── post.py           # 待实现
@@ -455,6 +457,10 @@ src/alterego/domain/
 > 它是「`domain/calendar.py` 的数据文件 + 它的读取器」。领域层不许做 IO（红线 2），
 > 所以读盘这件事必须放在领域层外面，而放在内核里又会让内核知道节日是什么。
 > 与 `storage/sqlite/migrations/` 的处理方式一致：数据和它的读取器住在一起。
+>
+> **`src/alterego/birthdays/` 是它的第二个**，但数据住在 `data/` 而不在包内：
+> 节日是「出厂知识」（谁装都一样），生日是「你的数据」（升级时一个字都不能动）。
+> 两个目录、两份 IO 代码，共用 `domain/_toml.py` 的解析——见 [12](12-calendar-and-conversation.md) § 17.3。
 
 下面的草图描述**目标接口**；已实现部分以 `src/alterego/domain/` 下的代码为准，
 本节的签名与公式与之保持一致。

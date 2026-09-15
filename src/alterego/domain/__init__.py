@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from alterego.domain import emotion, memory, schedule
+from alterego.domain import birthday, calendar, conversation, emotion, memory, schedule
 
 
-__all__ = ["emotion", "memory", "schedule"]
+__all__ = ["birthday", "calendar", "conversation", "emotion", "memory", "schedule"]

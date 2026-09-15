@@ -268,6 +268,8 @@ v1 采用**单进程多线程**模型：
 | `relationship.py` | 关系状态、好感度演变规则、关系亲密度分层 |
 | `schedule.py` | 作息模板、当前时段判定、冲突处理 | ✅ 已实现（**日程生成**待做，见 [12](design/12-calendar-and-conversation.md) § 9）|
 | `calendar.py` | 节日日历：日型、节前/节后强度曲线、今天归哪个节日 | ✅ 已实现，见 [12](design/12-calendar-and-conversation.md) |
+| `birthday.py` | 生日：三种主体、闰日、按年展开、同一天合并成一条 | ✅ 已实现，见 [12](design/12-calendar-and-conversation.md) § 17 |
+| `_toml.py` | 节日与生日共用的 TOML 取值助手（六种强制转换） | ✅ 已实现，见 [12](design/12-calendar-and-conversation.md) § 17.3 |
 | `world.py` | 世界设定、NPC 档案、社交网络拓扑 |
 | `post.py` | 动态内容模型 |
 | `conversation.py` | 会话与消息模型、回复时机、主动话题、复读检测 | ✅ 已实现（对话节奏部分），见 [12](design/12-calendar-and-conversation.md) § 10 |
@@ -1148,6 +1150,8 @@ alter-ego/
 │   │   ├── emotion.py               # ✅ 已实现：二维情绪、四条更新规则、标签推导
 │   │   ├── memory.py                # ✅ 已实现：强度衰减、检索重排、遗忘与激活、巩固
 │   │   ├── calendar.py              # ✅ 已实现：日型、节前/节后强度曲线、今天归哪个节日
+│   │   ├── birthday.py              # ✅ 已实现：三种主体、闰日、按年展开、同一天合并成一条
+│   │   ├── _toml.py                 # ✅ 已实现：节日与生日共用的取值助手
 │   │   ├── conversation.py          # ✅ 已实现：回复时机、主动话题、复读检测（对话节奏部分）
 │   │   ├── media.py                 # build_portrait_prompt()：一致性骨架的唯一入口
 │   │   ├── untrusted.py             # INJECTION_PATTERNS 与外部内容包裹
@@ -1158,6 +1162,8 @@ alter-ego/
 │   ├── holidays/                    # 随包的节日数据 + 唯一的读盘入口
 │   │   ├── __init__.py              # ✅ 已实现：load_year / load_calendar / available_years
 │   │   └── 2026.toml                # ✅ 已实现：10 个节日，confirmed = false
+│   ├── birthdays/                   # 生日记录（你自己的数据，住 data/）的读取器
+│   │   └── __init__.py              # ✅ 已实现：load_book / save_book / render
 │   ├── sim/                         # 推演引擎
 │   │   ├── engine.py
 │   │   ├── context.py
@@ -1418,3 +1424,4 @@ PR 模板中包含勾选清单，未勾选不予合并。
 | 2026-09-15 | v0.2.0 | 新增四类能力设计：§ 6.1 六类→**八类插件**（新增 `image` / `source`）；§ 9.2 修正表数（16→**26**，补入 6 张新表 + 2 个视图）；§ 10.2 页面 8→**13**、SSE 事件补 4 类；§ 15 非目标中「图像生成」移出；§ 17 新增分册 07–11；新增 ADR-0008/0009/0010 | LMG-arch |
 | 2026-09-15 | v0.2.1 | § 13 目录树标注 `domain/` 三个已实现模块；§ 3 领域层草图对齐实现：`strength_at` 公式以 [04](design/04-simulation-loop.md) § 7.2 为准（按 kind 分半衰期）、`ScheduleBlock` 字段名以 DDL 为准、`update_emotion` 增补 `block` 参数、`Emotion.label` 词表改为开放 | LMG-arch |
 | 2026-09-15 | v0.2.2 | 新增分册 [12](design/12-calendar-and-conversation.md)（节日日历与对话节奏）；§ 5.2 领域层表补入 `calendar.py` 并标注实现状态；§ 7.5 作息与 § 7.6 世界接入节日上下文；节日**不**进 `world.events`（提前几天就知道是它特有的性质） | LMG-arch |
+| 2026-09-15 | v0.3.0 | [12](design/12-calendar-and-conversation.md) 新增 § 17 生日：生日 = `personal` 类的节日，不另开平行模型；数据住 `data/birthdays.toml`（你自己的数据，不进版本库）；新增 `domain/birthday.py`、`domain/_toml.py` 与 `birthdays/` 读取器；`day_kind()` 改为只按 `days_off` 判定「谁占哪一天」；§ 5.2 领域层表补入 `birthday.py` 与 `_toml.py` | LMG-arch |

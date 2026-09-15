@@ -223,6 +223,17 @@ class Percepts:
 
 定义、强度曲线与支配规则见 [12-calendar-and-conversation.md](12-calendar-and-conversation.md) § 4 与 § 6。
 
+**生日走的是完全相同的三个字段，不新增字段。** 感知阶段读到的那份日历已经是
+「节日 + 生日」合并后的结果（生日 = `kind="personal"` 的节日），所以
+`holiday.kind` 就是区分二者的唯一依据：
+
+* 生日**不放假**，所以 `day_type` 不受它影响（那天原本是工作日照样是工作日）；
+* 生日的计划性来自 `lead_days`，与节日共用同一条强度曲线，所以「提前几天就知道」直接成立；
+* 需要区分时读 `holiday.kind == "personal"`（阶段名也不同：生日前 / 生日当天 / 生日后）。
+
+一句话：**`Percepts` 不需要知道「生日」这个概念存在**，它只知道今天有一条 `Holiday` 带
+`kind="personal"`。理由与合并规则见 [12](12-calendar-and-conversation.md) § 17。
+
 **内置感知逻辑**（纯代码，不调 LLM）：
 
 ```python

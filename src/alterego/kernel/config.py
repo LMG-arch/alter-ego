@@ -555,6 +555,15 @@ class Config:
         return self.data_dir / "outbox"
 
     @property
+    def birthdays_path(self) -> Path:
+        """生日记录文件（`data/birthdays.toml`）。
+
+        和上面几个一样是**派生路径**而不是配置项：能被配置的只有
+        「数据目录在哪」，文件名跟着它走。见 ``alterego.birthdays``。
+        """
+        return self.data_dir / "birthdays.toml"
+
+    @property
     def plugin_search_paths(self) -> tuple[Path, ...]:
         """插件搜索路径（已解析为绝对路径）。"""
         return tuple(_absolute(p) for p in self.plugins.search_paths)

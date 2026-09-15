@@ -245,6 +245,58 @@
 - 测试 173 个：`test_holiday_data.py` / `test_holidays.py` / `test_domain_calendar.py` /
   `test_domain_conversation.py` / `test_cli.py`（新增部分）
 
+**生日（阶段 D 第三条纵向切片，已实现）**
+
+「还要会过生日」——生日**不是**第二套机制，而是同一套节日机制换一个日期来源。
+完整设计（含三处标签分叉、三份实测对照表、一个已修的逻辑 bug）见
+[`docs/design/12-calendar-and-conversation.md`](docs/design/12-calendar-and-conversation.md) § 17。
+
+- `domain/_toml.py` —— 节日与生日共用的取值助手（`as_str` / `as_int` / `as_bool` /
+  `as_date` / `as_dates` / `as_strs`）。抽出来是因为两个加载器各写一份的话，
+  校验口径会各自漂移，而**报错信息里的 `where` 是唯一能告诉用户「哪一行写错了」的东西**。
+  `as_int` 拒绝 `bool`，`as_date` 拒绝 `datetime`——Python 里 `True == 1` 且
+  `datetime` 是 `date` 的子类，不显式挡就是在给自己埋雷
+- `domain/calendar.py` —— 新增 `kind` 字段（`festival` / `personal`）与「**谁占哪一天**」规则：
+  只有 `days_off` 非空的节日才认领日期。**生日不放假，于是它一天也不占**，
+  国庆与某人的生日在同一天时两条都在，不需要特判
+- `domain/birthday.py` —— 纯函数，无 IO。`Birthday` / `BirthdayBook` /
+  `check_month_day()` / `date_in_year()`。三种主体（`self` / `user` / `npc`）默认提前量不同：
+  自己 7 天、用户 14 天、NPC 3 天。**用户提前量最大不是偏心，是因为只有用户这条会真的
+  影响「问你那天想怎么过」这类安排的提前量**；NPC 的 3 天只是一个打招呼的余量。
+  按年展开时平年 `02-29` 归到 `02-28`（`date_in_year` 是**唯一**把年份贴上去的地方）
+- 同一天两个人合并成一条：`lead_days = max(...)`、`aftermath_days = max(...)`、
+  `verified = all(...)`、活动取并集且保留首次出现顺序，`id = "birthday:" + "+".join(sorted(tag))`。
+  合并后 `user` 排在 `npc` 前面（`_file_order`），因为用户那条是本人报的
+- **修掉一个静默的错误**：`context()` 用 `max()` 在候选里挑支配节日，平手时生日要优先，
+  于是给「生日」补了一个升序 rank——但 `max()` 挑的是**最大**的那条，
+  升序 rank 正好把生日排到最后，**结果一路朝着一个看似合理的错误答案走**。
+  修法是把 rank 取负。教训写进了 § 17.9
+- `birthdays/__init__.py` —— 生日记录的唯一 IO（`load_book` / `save_book` / `render`）。
+  **文件不存在 = 空记录，文件坏掉 = 直接报错**：前者是「还没记」，
+  后者是「记了但读不出来」，把后者也悄悄当成空记录的话，用户下次 `add` 就会把
+  已有的文件覆盖掉。`save_book` 必须传 `newline="\n"`，
+  否则 Windows 上写出来的是 CRLF，提交后每次改动都显示成整个文件被重写
+- 数据住 `data/birthdays.toml` 而**不是** `holidays/`：`holidays/` 是随包发布的公共知识，
+  生日是你自己告诉它的、不进版本库的私人数据。两者只在 TOML 形状上相似
+- **不新增任何配置项**。提前量是每条记录自己的字段，
+  它自己那条、你和 NPC 那两条各有各的值，塞进全局配置反而说不清谁听谁的
+- `kernel/config.py` —— 只加一个派生的 `birthdays_path` 属性（`data_dir / "birthdays.toml"`），
+  不走 `Setting` 元数据，因为它不是可调项
+- `cli.py` —— `alterego birthday {list,add,set}`。`add` 与 `set` 参数完全相同、语义相反：
+  `add` 挡「已经记过」、`set` 挡「没记过」，**默认都不覆盖**。
+  `--on 02-30` 现在回显用户**原样输入的 `02-30`** 而不是领域层看到的 `2-30`
+  ——错误信息把你的输入重新格式化了一遍，你会先怀疑自己按错了哪一位。
+  `birthday list` 还会在缺「自己」或「用户」时提醒补上：
+  记了一列别人的生日不等于它自己会过生日
+- 修掉一处**文档承诺了但没实现**的命令：`alterego birthday check` 在 6 处被引用，
+  而实际只实现了 `list` / `add` / `set`。用户照着敲会得到一个用法错误，
+  然后合理地认为整个功能是坏的。全部改为 `birthday list`
+- 测试新增 152 个（全库 1233 个）：`test_domain_birthday.py`（88，新）/
+  `test_birthdays.py`（26，新）/ `test_cli.py`（58，其中生日部分 33）/
+  `test_domain_calendar.py`（73，补充「谁占哪一天」用例）。
+  CLI 用例用 autouse fixture 把生日文件换成临时文件，
+  **绝不碰开发者本机真实的 `data/birthdays.toml`**
+
 ### 变更
 
 - **迁移文件从此只管 DDL**。四个 `.sql` 里没有任何 `PRAGMA` 头、没有 `IF NOT EXISTS`、
@@ -421,6 +473,27 @@
   （`MemorySearchHit` / `MemoryStats`）
 - `docs/DESIGN.md` § 13 标注 `domain/` 三个已实现模块，变更记录加 v0.2.1 行
 - `docs/design/06-roadmap.md` 阶段 D 的进度说明更新为「存储层 + 领域层第一条纵向切片已完成」
+
+**生日的文档同步（P7）**
+
+- `docs/design/12-calendar-and-conversation.md` 新增 **§ 17 生日**（17.1–17.12）：
+  为什么生日就是 `kind="personal"` 的节日、三种主体的默认提前量与理由、
+  数据为什么住 `data/` 而不在 `holidays/`、同一天两人怎么合并、生日为什么不放假、
+  ⚠️ 平手时「生日优先」那个取负号的坑（含推广教训）、不知道就不编、CLI 用法与样例输出、
+  明确**不做**的三件事（农历换算 / 主动播报 / 生日生图）。同时更新 TOC、
+  § 13 的实测表（`calendar.py` 640→561 行、80→73 测试、`cli.py` 300→544 行、25→58 测试）、
+  § 14.1 的命令清单、§ 16 交叉引用表
+- `docs/DESIGN.md` § 5.2 领域层表 += `birthday.py` / `_toml.py`；§ 13 目录树加 `birthdays/`
+- `docs/design/01-architecture.md` § 1.1 的 `domain/` 树加两行；
+  「一个包外的邻居」段落补 `birthdays/` 与 `holidays/` 的对照（同一形状、不同的知识归属）
+- `docs/design/03-data-model.md` 新增「**生日也不建表**」段：
+  权威副本只有 `data/birthdays.toml`，`relationship` 不加 `birthday` 列的三条理由，
+  以及判定依据——「这份数据是『它想出来的』还是『你告诉它的』？后者不进库」
+- `docs/design/04-simulation-loop.md` § 3.1 说明生日**不新增任何 `Percepts` 字段**：
+  感知阶段拿到的日历已经是合并后的结果，`holiday.kind == "personal"` 是唯一的区分依据
+- `docs/design/05-channels.md` § 8 命令树加 `birthday {list,add,set}` 组与 `birthday list` 样例输出
+- `docs/design/06-roadmap.md` 当前进度从「两条纵向切片」改为三条，并写入新的测试与覆盖率数字
+- `CONTRIBUTING.md` 项目结构树加 `birthdays/` 与 `domain/_toml.py`
 
 ### 架构
 

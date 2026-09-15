@@ -58,6 +58,12 @@ data/*.db-shm
 data/backups/
 data/outbox/
 data/cache/
+
+# ── 个人数据 ──
+# 生日记录是用户自己的数据，绝不能进版本库：提交一次就等于把它钉在历史里，
+# 之后删掉也还在。注意 `data/` 目录本身**没有**被整体忽略
+# （`data/plugins/`、`data/.gitkeep` 是要提交的），所以这里必须点名这个文件。
+data/birthdays.toml
 *.sqlite
 *.sqlite3
 

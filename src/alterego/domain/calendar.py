@@ -20,8 +20,17 @@ from __future__ import annotations
 
 import tomllib
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from typing import Any, Final, Literal, get_args
+
+from alterego.domain._toml import (
+    as_bool,
+    as_date,
+    as_dates,
+    as_int,
+    as_str,
+    as_strs,
+)
 
 
 __all__ = [
@@ -158,6 +167,26 @@ def _take(activities: tuple[str, ...], intensity: float) -> tuple[str, ...]:
     return activities[: min(count, len(activities))]
 
 
+def _personal_rank(holiday: Holiday) -> int:
+    """平手时的排序键：个人日子（生日 / 纪念日）排 0，其余排 1。
+
+    这个数字进的是「前面的都打平了」之后才生效的那一段。它要解决的是一个
+    每年都会发生的真实撞车：生日落在国庆、元旦、春节里。
+
+    为什么个人日子优先：节日是所有人共享的那一天，生日是这个人独有的那一天。
+    同一天里更该被说出来的是后者，也更难被替代——
+    「国庆快乐」明天说后天说都还对，「生日快乐」过了那天就再也补不回来。
+
+    ⚠️ 这是一个**升序**的序（越小越优先），和 `sorted()` / `min()` 同一个方向。
+    `context()` 用的是 `max()`，所以那里必须取负号——
+    只加一个数字而不改比较方向，结果是平手时**反着选**，
+    而且选出来的那个仍然是个说得通的答案（另一条节日），所以不会报错、
+    只会安静地把生日盖掉。`test_domain_birthday.py` 里那条「打平生日优先」
+    就是专门盯这一处的。
+    """
+    return 0 if holiday.kind == "personal" else 1
+
+
 # ────────────────────────────────────────────────────────────
 # 节日
 # ────────────────────────────────────────────────────────────
@@ -225,7 +254,13 @@ class Holiday:
 
     @property
     def span(self) -> tuple[date, ...]:
-        """实际放假的日期。未核实放假区间时退化为「只有锚点那天」。"""
+        """`start` / `end` / `covers()` 用的日期区间。未核实放假区间时退化为「只有锚点那天」。
+
+        ⚠️ **这不是「放假的日期」**。`days_off` 为空时它仍然会给出锚点那一天
+        （否则 `start` 无从算起），于是 `covers()` 对元宵、情人节、圣诞、生日
+        都会返回 `True`。要问「这天放假吗」请看 `days_off`，或者
+        `HolidayCalendar.day_kind()`——那里才是唯一的判断点。
+        """
         return self.days_off or (self.day,)
 
     @property
@@ -319,6 +354,12 @@ class HolidayCalendar:
     日历**只回答它装着的年份**：拿别的年份问 `day_kind()` 会直接报错，
     而不是默默按「没有节日」处理。跨年时请把两份日历 `merge()` 起来——
     「12 月 29 日知道 1 月 1 日放假」正是需要跨年视野的场景。
+
+    **谁占哪一天**：只有 `days_off` 非空的节日才「占」日期。不放假的日子
+    （元宵 / 情人节 / 圣诞 / 生日）可以和任何东西撞在同一天——
+    日历没有理由替用户在一份祝福和另一份祝福之间二选一。
+    于是生日这类 `kind="personal"` 的记录可以**直接叠加**进一份节日日历，
+    一行既有数据都不用改。
     """
 
     holidays: tuple[Holiday, ...]
@@ -336,7 +377,13 @@ class HolidayCalendar:
             if key in seen:
                 raise ValueError(f"节日的 (id, 年份) 重复：{key}")
             seen.add(key)
-            for moment in holiday.span:
+            if not holiday.days_off:
+                # 不放假的节日（元宵 / 情人节 / 圣诞 / 生日）**不占这一天**：
+                # 它们可以和别的节撞在同一天，日历没有理由替用户二选一。
+                # 这条 `continue` 也是生日能直接并进节日日历、
+                # 只靠叠加而不必改动既有数据的原因。
+                continue
+            for moment in holiday.days_off:
                 if moment in used:
                     raise ValueError(
                         f"{moment} 同时被「{used[moment]}」和「{holiday.name}」放假——"
@@ -381,18 +428,30 @@ class HolidayCalendar:
         优先级：补班 > 放假 > 周末。
         补班日通常落在周六周日，所以必须先判——否则会把它当成休息日，
         而「调休上班」恰恰是朴素实现最容易忽略的一格。
+
+        「放假」一律只看 `days_off`，**不看 `covers()`**：`span` 在没有 `days_off`
+        时会退化成「锚点那一天」（好让 `covers()` 有个确定的区间），
+        拿它判放假的话元宵、情人节、圣诞、生日全都会变成「放假」。
+        真正卡住这条的是**生日**：生日不放假，那天照常上班上课。
         """
         self._require_year(day)
         if any(day in holiday.makeup_days for holiday in self.holidays):
             return "makeup_workday"
-        if any(holiday.covers(day) for holiday in self.holidays):
+        if any(day in holiday.days_off for holiday in self.holidays):
             return "holiday"
         return "weekend" if day.weekday() >= 5 else "workday"
 
     def find(self, day: date) -> Holiday | None:
-        """这一天正在过哪个节日（`Holiday.span` 之内）。"""
+        """这一天正在过哪个节日（`Holiday.span` 之内）。
+
+        撞在同一天时个人日子优先，和 `context()` 的平手规则一致——
+        同一天的两个入口不能给不一样的答案（P6）。
+        """
         self._require_year(day)
-        return next((holiday for holiday in self.holidays if holiday.covers(day)), None)
+        matching = [holiday for holiday in self.holidays if holiday.covers(day)]
+        if not matching:
+            return None
+        return min(matching, key=lambda item: (_personal_rank(item), item.id))
 
     def context(self, day: date) -> HolidayContext:
         """`day` 处在节日的哪个阶段、强度多少、今天该做什么。
@@ -409,19 +468,25 @@ class HolidayCalendar:
 
         `during` 的强度恒为 1.0，必然胜出，无需特判。
         平手时先看阶段序（过节 > 节前 > 节后），再按离今天更近，
-        保证同一天同一份日历永远给同一个答案（P6）。
+        最后个人日子优先——生日撞上国庆这种事每年都会发生（10 月 1 日生的不少），
+        而「今天也是你的生日」不该被一句「国庆快乐」盖过去。
+        四段都确定，所以同一天同一份日历永远给同一个答案（P6）。
         """
         self._require_year(day)
 
-        # (强度, 阶段序, 距离, 结果)——四元组的前三段都确定，所以 max 的结果唯一。
-        candidates: list[tuple[float, int, int, HolidayContext]] = []
+        # (强度, 阶段序, 距离, 个人日子序, 结果)——前四段都确定，max 的结果唯一。
+        # 注意最后那一段取了负号：`_personal_rank` 是**升序**的序，
+        # 而这里用的是 `max()`，不取负号就是平手时反过来挑。
+        candidates: list[tuple[float, int, int, int, HolidayContext]] = []
         for holiday in self.holidays:
+            rank = _personal_rank(holiday)
             if holiday.covers(day):
                 candidates.append(
                     (
                         1.0,
                         0,
                         0,
+                        rank,
                         HolidayContext(
                             holiday=holiday,
                             phase="during",
@@ -441,6 +506,7 @@ class HolidayCalendar:
                         intensity,
                         1,
                         gap,
+                        rank,
                         HolidayContext(
                             holiday=holiday,
                             phase="anticipating",
@@ -460,6 +526,7 @@ class HolidayCalendar:
                         intensity,
                         2,
                         since,
+                        rank,
                         HolidayContext(
                             holiday=holiday,
                             phase="aftermath",
@@ -472,7 +539,7 @@ class HolidayCalendar:
 
         if not candidates:
             return HolidayContext()
-        return max(candidates, key=lambda item: (item[0], -item[1], -item[2]))[3]
+        return max(candidates, key=lambda item: (item[0], -item[1], -item[2], -item[3]))[4]
 
     def upcoming(self, day: date, *, within_days: int = 14) -> tuple[Holiday, ...]:
         """`day` 起 `within_days` 天内（含当天）会过的节日，按先后排序。
@@ -488,7 +555,7 @@ class HolidayCalendar:
             for holiday in self.holidays
             if 0 <= (holiday.start - day).days <= within_days
         ]
-        ahead.sort(key=lambda pair: pair[0])
+        ahead.sort(key=lambda pair: (pair[0], _personal_rank(pair[1]), pair[1].id))
         return tuple(holiday for _, holiday in ahead)
 
     def unverified(self) -> tuple[Holiday, ...]:
@@ -571,61 +638,23 @@ def _parse_holiday(raw: Any, *, where: str) -> Holiday:
         raise ValueError(f"{where} 的 kind 必须是 {list(HOLIDAY_KINDS)} 之一，收到 {kind!r}")
 
     return Holiday(
-        id=_as_str(raw["id"], where=f"{where} 的 id"),
-        name=_as_str(raw["name"], where=f"{where} 的 name"),
+        id=as_str(raw["id"], where=f"{where} 的 id"),
+        name=as_str(raw["name"], where=f"{where} 的 name"),
         kind=kind,
-        day=_as_date(raw["day"], where=f"{where} 的 day"),
-        days_off=_as_dates(raw.get("days_off", []), where=f"{where} 的 days_off"),
-        makeup_days=_as_dates(raw.get("makeup_days", []), where=f"{where} 的 makeup_days"),
-        lead_days=_as_int(raw.get("lead_days", 3), where=f"{where} 的 lead_days"),
-        aftermath_days=_as_int(raw.get("aftermath_days", 1), where=f"{where} 的 aftermath_days"),
-        verified=_as_bool(raw.get("verified", False), where=f"{where} 的 verified"),
-        note=_as_str(raw.get("note", ""), where=f"{where} 的 note"),
-        prep_activities=_as_strs(
+        day=as_date(raw["day"], where=f"{where} 的 day"),
+        days_off=as_dates(raw.get("days_off", []), where=f"{where} 的 days_off"),
+        makeup_days=as_dates(raw.get("makeup_days", []), where=f"{where} 的 makeup_days"),
+        lead_days=as_int(raw.get("lead_days", 3), where=f"{where} 的 lead_days"),
+        aftermath_days=as_int(raw.get("aftermath_days", 1), where=f"{where} 的 aftermath_days"),
+        verified=as_bool(raw.get("verified", False), where=f"{where} 的 verified"),
+        note=as_str(raw.get("note", ""), where=f"{where} 的 note"),
+        prep_activities=as_strs(
             raw.get("prep_activities", []), where=f"{where} 的 prep_activities"
         ),
-        during_activities=_as_strs(
+        during_activities=as_strs(
             raw.get("during_activities", []), where=f"{where} 的 during_activities"
         ),
-        aftermath_activities=_as_strs(
+        aftermath_activities=as_strs(
             raw.get("aftermath_activities", []), where=f"{where} 的 aftermath_activities"
         ),
     )
-
-
-def _as_str(value: Any, *, where: str) -> str:
-    if not isinstance(value, str):
-        raise ValueError(f"{where} 必须是字符串，收到 {value!r}")
-    return value
-
-
-def _as_bool(value: Any, *, where: str) -> bool:
-    if not isinstance(value, bool):
-        raise ValueError(f"{where} 必须是布尔值，收到 {value!r}")
-    return value
-
-
-def _as_int(value: Any, *, where: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{where} 必须是整数，收到 {value!r}")
-    return value
-
-
-def _as_date(value: Any, *, where: str) -> date:
-    # TOML 的日期是裸写的（`day = 2026-02-17`），tomllib 直接给 date 对象。
-    # 注意 datetime 是 date 的子类，要排掉——带时间的写法说明作者想错了。
-    if not isinstance(value, date) or isinstance(value, datetime):
-        raise ValueError(f"{where} 必须是 TOML 日期，写成 `{where.split()[-1]} = 2026-02-17` 这样")
-    return value
-
-
-def _as_dates(value: Any, *, where: str) -> tuple[date, ...]:
-    if not isinstance(value, list):
-        raise ValueError(f"{where} 必须是日期数组，收到 {value!r}")
-    return tuple(_as_date(item, where=f"{where}[{index}]") for index, item in enumerate(value))
-
-
-def _as_strs(value: Any, *, where: str) -> tuple[str, ...]:
-    if not isinstance(value, list):
-        raise ValueError(f"{where} 必须是字符串数组，收到 {value!r}")
-    return tuple(_as_str(item, where=f"{where}[{index}]") for index, item in enumerate(value))

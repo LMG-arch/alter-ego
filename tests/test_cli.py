@@ -8,10 +8,15 @@ CLI 是用户唯一真正会碰的界面，所以哪怕是「只打印帮助」�
 
 from __future__ import annotations
 
+from datetime import date
+from pathlib import Path
+
 import pytest
 
 from alterego import __version__
+from alterego.birthdays import load_book
 from alterego.cli import build_parser, main
+from alterego.domain.birthday import DEFAULT_LEAD_DAYS
 
 
 class TestBuildParser:
@@ -216,3 +221,315 @@ class TestCalendarCheck:
         assert captured.out == ""
         assert str(YEAR + 1) in captured.err
         assert str(YEAR) in captured.err, "得告诉用户有哪些年份可用"
+
+
+# ────────────────────────────────────────────────────────────
+# birthday · 这一组读写的是用户自己的文件
+# ────────────────────────────────────────────────────────────
+#
+# `_birthday_path()` 默认指向 `data/birthdays.toml`，也就是开发机上那份真实数据。
+# 不把它换掉的话，这些测试会读开发者的私人文件，而且**会写**——
+# 跑一次测试改一次真数据，是最不该有的副作用。
+# 所以下面这个 autouse fixture 对整个模块生效：谁都不许碰到真实路径。
+
+
+@pytest.fixture(autouse=True)
+def _isolated_birthday_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """把生日文件换成本次测试专属的临时文件（默认不存在）。
+
+    返回路径给用例自己用：需要检查写进去的内容时直接 ``load_book(路径)``。
+    """
+    path = tmp_path / "birthdays.toml"
+    monkeypatch.setattr("alterego.cli._birthday_path", lambda: path)
+    return path
+
+
+def _add(*args: str) -> int:
+    """跑一次 ``birthday add``，参数按需给。"""
+    return main(["birthday", "add", *args])
+
+
+class TestBirthdayAdd:
+    def test_it_writes_the_file(self, _isolated_birthday_file: Path) -> None:
+        assert _add("--who", "user", "--on", "06-03") == 0
+        assert _isolated_birthday_file.is_file()
+
+    def test_it_says_what_it_recorded(self, capsys: pytest.CaptureFixture[str]) -> None:
+        _add("--who", "user", "--on", "06-03")
+        out = capsys.readouterr().out
+        assert "已记下" in out
+        assert "06-03" in out
+
+    def test_a_default_name_is_used(self, capsys: pytest.CaptureFixture[str]) -> None:
+        # 不写 --name 时也得有个像样的称呼，否则列表里是一列空白。
+        _add("--who", "user", "--on", "06-03")
+        assert "你" in capsys.readouterr().out
+
+    def test_the_lead_days_follow_the_subject(self, capsys: pytest.CaptureFixture[str]) -> None:
+        _add("--who", "self", "--on", "06-03")
+        out = capsys.readouterr().out
+        assert str(DEFAULT_LEAD_DAYS["self"]) in out
+
+    def test_a_custom_lead_days_wins(self, capsys: pytest.CaptureFixture[str]) -> None:
+        _add("--who", "user", "--on", "06-03", "--lead-days", "20")
+        assert "20" in capsys.readouterr().out
+
+    def test_npc_needs_an_id(self, capsys: pytest.CaptureFixture[str]) -> None:
+        # 没有 npc_id 就没法把这条记录和某个人对上，而「对上」是它以后
+        # 主动去准备礼物的前提。
+        assert _add("--who", "npc", "--on", "06-03") == 2
+        assert "npc_id" in capsys.readouterr().err
+
+    def test_an_npc_is_recorded(self, capsys: pytest.CaptureFixture[str]) -> None:
+        assert _add("--who", "npc", "--npc-id", "npc-1", "--name", "张三", "--on", "06-03") == 0
+        assert "张三" in capsys.readouterr().out
+
+    def test_unverified_is_marked(self, _isolated_birthday_file: Path) -> None:
+        _add("--who", "npc", "--npc-id", "npc-1", "--on", "06-03", "--unverified")
+        book = load_book(_isolated_birthday_file)
+        assert book.birthdays[0].verified is False
+
+    def test_a_duplicate_is_refused(self, capsys: pytest.CaptureFixture[str]) -> None:
+        _add("--who", "user", "--on", "06-03")
+        capsys.readouterr()
+        assert _add("--who", "user", "--on", "06-04") == 2
+        assert "set" in capsys.readouterr().err
+
+    def test_a_refused_duplicate_changes_nothing(
+        self, capsys: pytest.CaptureFixture[str], _isolated_birthday_file: Path
+    ) -> None:
+        """被挡住了就不能顺手把文件改掉——「报错 + 已经改了」是最坏的一种。"""
+        _add("--who", "user", "--on", "06-03")
+        _add("--who", "user", "--on", "06-04")
+        capsys.readouterr()
+        assert load_book(_isolated_birthday_file).birthdays[0].month_day == "06-03"
+
+    def test_a_bad_date_is_a_usage_error(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(SystemExit) as exc:
+            _add("--who", "user", "--on", "02-30")
+        assert exc.value.code == 2
+        assert "02-30" in capsys.readouterr().err
+
+    def test_a_bad_format_is_a_usage_error(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(SystemExit) as exc:
+            _add("--who", "user", "--on", "6月3日")
+        assert exc.value.code == 2
+        assert "MM-DD" in capsys.readouterr().err
+
+    def test_a_bad_subject_is_a_usage_error(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(SystemExit) as exc:
+            _add("--who", "邻居", "--on", "06-03")
+        assert exc.value.code == 2
+        assert "usage: alterego" in capsys.readouterr().err
+
+
+class TestBirthdaySet:
+    def test_setting_an_unknown_one_is_refused(self, capsys: pytest.CaptureFixture[str]) -> None:
+        # 「以为改了、其实是新加了一条」会让用户手上多出一条重复记录，
+        # 而重复记录里错的那条照样会在那天生效。
+        assert main(["birthday", "set", "--who", "user", "--on", "06-03"]) == 2
+        assert "add" in capsys.readouterr().err
+
+    def test_it_changes_the_date(
+        self, capsys: pytest.CaptureFixture[str], _isolated_birthday_file: Path
+    ) -> None:
+        _add("--who", "user", "--on", "06-03")
+        capsys.readouterr()
+        assert main(["birthday", "set", "--who", "user", "--on", "06-04"]) == 0
+        assert "已改" in capsys.readouterr().out
+        assert load_book(_isolated_birthday_file).birthdays[0].month_day == "06-04"
+
+    def test_it_keeps_the_name_and_lead_days(self, _isolated_birthday_file: Path) -> None:
+        """`set --on` 只该改一天。
+
+        顺手把称呼改回「你」、把调过的提前量改回默认值，是一次操作改了四样东西——
+        而用户看不到另外三样被改了。
+        """
+        _add(
+            "--who",
+            "npc",
+            "--npc-id",
+            "npc-1",
+            "--name",
+            "张三",
+            "--on",
+            "06-03",
+            "--lead-days",
+            "20",
+        )
+        main(["birthday", "set", "--who", "npc", "--npc-id", "npc-1", "--on", "06-04"])
+        birthday = load_book(_isolated_birthday_file).birthdays[0]
+        assert birthday.month_day == "06-04"
+        assert birthday.name == "张三"
+        assert birthday.lead_days == 20
+
+    def test_it_does_not_add_a_second_record(self, _isolated_birthday_file: Path) -> None:
+        _add("--who", "user", "--on", "06-03")
+        main(["birthday", "set", "--who", "user", "--on", "06-04"])
+        assert len(load_book(_isolated_birthday_file)) == 1
+
+
+class TestBirthdayList:
+    def test_an_empty_book_says_so(self, capsys: pytest.CaptureFixture[str]) -> None:
+        assert main(["birthday", "list"]) == 0
+        out = capsys.readouterr().out
+        assert "一条都还没有" in out
+        assert "birthday add" in out
+
+    def test_the_header_shows_the_path(self, capsys: pytest.CaptureFixture[str]) -> None:
+        # 用户改的是文件，不是数据库。不给路径的话下一个问题必然是「它在哪」。
+        main(["birthday", "list"])
+        assert "birthdays.toml" in capsys.readouterr().out
+
+    def test_it_lists_what_was_added(self, capsys: pytest.CaptureFixture[str]) -> None:
+        _add("--who", "user", "--name", "小明", "--on", "06-03")
+        capsys.readouterr()
+        main(["birthday", "list"])
+        out = capsys.readouterr().out
+        assert "小明" in out
+        assert "06-03" in out
+
+    def test_an_unverified_date_is_flagged(self, capsys: pytest.CaptureFixture[str]) -> None:
+        _add("--who", "npc", "--npc-id", "npc-1", "--name", "张三", "--on", "06-03", "--unverified")
+        capsys.readouterr()
+        main(["birthday", "list"])
+        assert "未确认" in capsys.readouterr().out
+
+    def test_it_reminds_you_about_itself_and_you(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """记了别人的生日不等于它自己会过生日。
+
+        「还要会过生日」这句话最直接的意思就是它自己也要过——所以「自己」和「用户」
+        两条缺了必须说出来，否则用户看到一列生日会以为齐了。
+        """
+        _add("--who", "npc", "--npc-id", "npc-1", "--on", "06-03")
+        capsys.readouterr()
+        main(["birthday", "list"])
+        out = capsys.readouterr().out
+        assert "还没记" in out
+        assert "--who self" in out
+
+    def test_it_stops_reminding_once_both_are_in(self, capsys: pytest.CaptureFixture[str]) -> None:
+        _add("--who", "self", "--on", "01-01")
+        _add("--who", "user", "--on", "06-03")
+        capsys.readouterr()
+        main(["birthday", "list"])
+        assert "还没记" not in capsys.readouterr().out
+
+    def test_the_window_hides_the_far_away(
+        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """窗口之外的不列。
+
+        「今天」得钉住：拿真实时钟当参照的话，这个用例会在 12-30 那天失败。
+        """
+        monkeypatch.setattr("alterego.cli._today", lambda: date(2026, 6, 1))
+        _add("--who", "user", "--on", "12-31")
+        capsys.readouterr()
+        assert main(["birthday", "list", "--days", "1"]) == 0
+        assert "12-31" not in capsys.readouterr().out
+
+
+class TestCalendarWithBirthdays:
+    """生日并进节日日历之后，`calendar` 那几条命令也得认它。
+
+    这一组是「同一个机制」的证据：生日不是另一套流程，
+    它只是又一个 `personal` 种类的 `Holiday`。
+    """
+
+    def test_the_list_counts_birthdays_separately(self, capsys: pytest.CaptureFixture[str]) -> None:
+        _add("--who", "user", "--name", "小明", "--on", "06-03")
+        capsys.readouterr()
+        assert main(["calendar", "list", "--year", str(YEAR)]) == 0
+        out = capsys.readouterr().out
+        assert "含 1 个生日" in out
+        assert "小明" in out
+
+    def test_a_birthday_does_not_make_the_day_a_holiday(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """生日不放假。那天原本是星期几就还是星期几。
+
+        2026-06-03 是星期三。若 ``days_off`` 被当成「这天归我」，
+        这一行会写成「放假」——而它什么都不该改。
+        """
+        _add("--who", "self", "--on", "06-03")
+        capsys.readouterr()
+        assert main(["calendar", "today", "--date", f"{YEAR}-06-03"]) == 0
+        first = capsys.readouterr().out.splitlines()[0]
+        assert "工作日" in first
+
+    def test_the_day_itself_is_the_birthday(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """⭐ 2026-06-03 的接缝测试。
+
+        这天没有法定节日，所以它证明的是「生日真的会出现在『今天』里」，
+        并且用的是生日自己那套阶段名（「生日当天」而不是「过节」）。
+        真正的平手（生日撞节日）在 `test_domain_birthday.py` 里测——
+        CLI 手上没有能造出那两个节日的年份数据。
+        """
+        _add("--who", "user", "--name", "小明", "--on", "06-03")
+        capsys.readouterr()
+        assert main(["calendar", "today", "--date", f"{YEAR}-06-03"]) == 0
+        out = capsys.readouterr().out
+        assert "生日当天" in out
+        assert "小明" in out
+
+    def test_the_approach_shows_up_days_early(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """需求原文：「提前几天就知道」。生日也必须是这样。"""
+        _add("--who", "user", "--name", "小明", "--on", "06-03")
+        capsys.readouterr()
+        assert main(["calendar", "today", "--date", f"{YEAR}-05-25"]) == 0
+        out = capsys.readouterr().out
+        assert "生日前" in out
+        assert "小明" in out
+
+    def test_the_upcoming_block_says_it_comes_every_year(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # 节日的「放假 3 天」对生日没有意义——它每年都是同一天。
+        _add("--who", "user", "--name", "小明", "--on", "06-03")
+        capsys.readouterr()
+        assert main(["calendar", "today", "--date", f"{YEAR}-05-25"]) == 0
+        assert "每年这天" in capsys.readouterr().out
+
+    def test_check_says_how_many_birthdays_are_recorded(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _add("--who", "user", "--on", "06-03")
+        capsys.readouterr()
+        main(["calendar", "check", "--year", str(YEAR)])
+        out = capsys.readouterr().out
+        assert "生日记录" in out
+        assert "1 条" in out
+
+    def test_check_does_not_confuse_birthdays_with_festivals(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """生日的「没核对」不该混进节日的待核对名单。
+
+        两件事要去核的对象不同（一个是国务院公告，一个是本人），
+        混在一行里会让人不知道该去核哪个。
+        """
+        _add("--who", "npc", "--npc-id", "npc-1", "--name", "张三", "--on", "06-03", "--unverified")
+        capsys.readouterr()
+        main(["calendar", "check", "--year", str(YEAR)])
+        backlog = capsys.readouterr().out.split("生日记录")[0]
+        assert "张三" not in backlog
+
+    def test_a_birthday_alone_still_shows_a_year(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """没有那一年的节日数据时，生日要能自己撑起一份日历。
+
+        否则「明年它记得我生日吗」的答案是「命令报错了」。
+        """
+        _add("--who", "user", "--name", "小明", "--on", "06-03")
+        capsys.readouterr()
+        assert main(["calendar", "list", "--year", str(YEAR + 2)]) == 0
+        assert "小明" in capsys.readouterr().out
+
+    def test_the_missing_festival_data_is_admitted(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # 只列出「小明的生日」却顶着「2028 年节日」的标题，是在骗人。
+        _add("--who", "user", "--name", "小明", "--on", "06-03")
+        capsys.readouterr()
+        main(["calendar", "list", "--year", str(YEAR + 2)])
+        assert "没有" in capsys.readouterr().err

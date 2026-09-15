@@ -24,6 +24,10 @@
 14. [界面](#14-界面)
 15. [边界与不做](#15-边界与不做)
 16. [交叉引用](#16-交叉引用)
+17. [生日](#17-生日)
+
+> § 17 是同类机制的第二个使用者：生日 = `personal` 类的节日。
+> 它排在最后，是为了让 § 1–16 的编号和锚点保持不变。
 
 ---
 
@@ -506,13 +510,15 @@ decide_reply(*, now, block, emotion, text_length, consecutive_instant, roll)
 | --- | --- | --- | --- |
 | `src/alterego/holidays/2026.toml` | ~195 | 随包数据，10 个节日 | `tests/test_holiday_data.py`（19 项） |
 | `src/alterego/holidays/__init__.py` | ~118 | 唯一的读盘入口 | `tests/test_holidays.py`（17 项） |
-| `src/alterego/domain/calendar.py` | ~640 | 纯函数：日型、强度、支配规则 | `tests/test_domain_calendar.py`（80 项） |
+| `src/alterego/domain/calendar.py` | ~561 | 纯函数：日型、强度、支配规则 | `tests/test_domain_calendar.py`（73 项） |
 | `src/alterego/domain/conversation.py` | ~430 | 纯函数：回复时机、主动话题、复读 | `tests/test_domain_conversation.py`（54 项） |
-| `src/alterego/cli.py` | ~300 | `alterego calendar {list,today,check}` | `tests/test_cli.py`（25 项） |
+| `src/alterego/cli.py` | ~544 | `alterego calendar {list,today,check}` | `tests/test_cli.py`（58 项） |
+
+（生日的实现清单在 § 17.12。）
 
 **本批次新增依赖为零。** `tomllib` 与 `unicodedata` 都是标准库（P5）。架构红线 22 项全过，其中第 5 组的 `print` 检查覆盖整个 `src/alterego`——包括 `cli.py`，所以 CLI 用显式的 `sys.stdout.write`，不去松动那条红线。
 
-覆盖率：全局 96.62%、`domain/` 99.16%（门槛分别是 85% / 95%）。
+覆盖率（含 § 17）：全局 96.75%、`domain/` 98.99%（门槛分别是 85% / 95%）。
 
 ---
 
@@ -521,10 +527,16 @@ decide_reply(*, now, block, emotion, text_length, consecutive_instant, roll)
 ### 14.1 CLI
 
 ```
-alterego calendar list [--year 2026]          一年的节日一览
+alterego calendar list [--year 2026]          一年的节日一览（含生日，并标出个数）
 alterego calendar today [--date 2026-09-26] [--days 14]
 alterego calendar check [--year 2026]         数据可信度：哪些日期还没核对
+
+alterego birthday list [--days N]             记过谁的生日，下次还有几天
+alterego birthday add  --who {self,user,npc} --on MM-DD ……
+alterego birthday set  ……（参数与 add 完全相同）
 ```
+
+生日的三个子命令见 § 17.10。
 
 退出码：`0` 正常 / `2` 数据缺失或年份越界（配置类错误，不是崩溃）。`--year` 与 `--date` 默认按**内核时区**算「今天」，不是进程本地时区——见 § 14.2。
 
@@ -628,3 +640,247 @@ if not holiday.days_off:
 | 配置项必须带说明 | [10-settings-center.md](10-settings-center.md) |
 | 标准库优先、不轻易加依赖 | [AGENTS.md](../../AGENTS.md) § 5（P5） |
 | 七条设计原则 | [DESIGN.md](../DESIGN.md) § 3 |
+| 生日（`personal` 类节日） | 本文 § 17 |
+
+---
+
+## 17. 生日
+
+> 需求原文：「还要会过生日。」
+>
+> 这一节的前提是「过节」已经做完（§ 1–16）。生日**不是**新做一套机制，
+> 而是同一套机制接上第二份数据。
+
+### 17.1 生日就是一个 `personal` 类的节日
+
+第一个决定是：**不加 `Birthday` 这套平行的领域模型**，而是让生日直接变成
+`Holiday(kind="personal")` 并进同一份 `HolidayCalendar`。
+
+理由是这个仓库里已经有一条验证过的路径：强度曲线（§ 4）、两个时点（§ 5）、
+支配规则（§ 6）、日型（§ 7）、与作息模板的衔接（§ 9）全都建立在
+「一个 `Holiday` 有一个 `day`、一个 `lead_days`、一个 `aftermath_days`」之上。
+生日恰好只差这三样东西，而这三样它全都有。
+
+代价是三处表要分叉，而不是零代价：
+
+| 表 | 节日的值 | 生日的值 | 为什么不能统一 |
+| --- | --- | --- | --- |
+| `HOLIDAY_PHASE_LABELS` | 节前 / 过节 / 节后 | 生日前 / 生日当天 / 生日后 | 「过节」形容「今天是我生日」不对 |
+| `HOLIDAY_KIND_LABELS` | 法定 / 传统 / 西方 | 个人 | 生日不在任何一份公告里 |
+| 提前量 / 余温默认值 | 数据文件逐条给 | 按主体给（§ 17.3） | 自己的生日和别人的生日不是一回事 |
+
+收益是 `day_kind()`、`upcoming()`、`context()`、`_view()` 一行都没改。
+**判断依据**：如果一处改动让「同一件事」在两个地方各有实现，那是错的；
+如果只是标签不同，那是数据不同。
+
+### 17.2 三种主体
+
+```python
+BirthdaySubject = Literal["self", "user", "npc"]
+```
+
+| 主体 | 默认称呼 | 默认提前 | 默认余温 |
+| --- | --- | --- | --- |
+| `self` | 自己 | 7 天 | 3 天 |
+| `user` | 你 | **14 天** | 3 天 |
+| `npc` | 对方 | 3 天 | 1 天 |
+
+**用户的生日提前得比自己的久，这是有意的。** 提前量是「什么时候开始准备」，
+而准备自己的生日只是「想起来」；准备你的生日要挑礼物、要腾出时间，
+做不完的后果也更严重。NPC 最短，因为它只有一个日程位置，
+提前三周开始惦记一个只打过两次招呼的人不像人。
+
+`npc` 必须带 `npc_id`，其余主体**不许**带——`key` 就是 `npc_id` 或主体名，
+是文件里唯一的身份标识。没有 `npc_id` 就没法把「张三的生日」和
+`relationship` 表里的某一行对上，而「对上」是将来送礼物、提话题的前提。
+
+### 17.3 数据住在 `data/birthdays.toml`，不在 `holidays/`
+
+|  | `src/alterego/holidays/*.toml` | `data/birthdays.toml` |
+| --- | --- | --- |
+| 谁的数据 | 程序的数据（法条 + 天文 + 行政公告） | **你的数据** |
+| 谁装的都一样吗 | 一样 | 不一样 |
+| 升级会不会覆盖 | 会，也应该覆盖 | **一个字都不能动** |
+| `verified` 的含义 | 「还没对着权威日历核过」 | 「还没跟本人确认过」 |
+| 读它的代码 | `src/alterego/holidays/` | `src/alterego/birthdays/` |
+
+所以两个目录、两份 IO 代码，都只做读盘和写盘，规则都留在 `domain/`
+（红线 2：`domain/` 不开文件）。格式与节日文件同源，共用
+`domain/_toml.py` 里的六个取值助手——**同一种文件格式只应该有一个解析实现**。
+
+`data/birthdays.toml` 进了 `.gitignore`：提交一次就等于把别人的生日钉在
+版本历史里，之后删掉也还在历史里。
+
+### 17.4 不新增任何配置项
+
+生日是**记录**，不是配置。能被配置的只有「数据目录在哪」，文件名跟着它走：
+
+```python
+@property
+def birthdays_path(self) -> Path:
+    return self.data_dir / "birthdays.toml"
+```
+
+于是 `templates/alterego.toml` 不用改，`test_kernel_config.py` 的
+「模板必须覆盖每一个键」也不用改。**加一个配置项的成本是这个项目里最贵的成本之一**
+（AGENTS.md § 7）：它要一个 `description`、一个 `effect`、一个分组、
+一个范围，而收益只是「把已经能推导出来的东西再写一遍」。
+
+### 17.5 按年展开，文件里只存 `MM-DD`
+
+文件里存 `month = 6` / `day = 3`，不存年份——生日每年都过。读的时候按年展开：
+
+```python
+def as_holidays(self, year: int) -> tuple[Holiday, ...]:
+```
+
+`date_in_year(year, month, day)` 是**唯一**算「今年是哪天」的地方，`Birthday.next_after()`
+也调它。一处实现，所以闰日的规则只有一条：
+
+> **`02-29` 生在平年落到 `02-28`。**
+
+不是 03-01。理由：生日是「那一天」，往前一天比往后一天更接近本人的心理预期，
+而往后一天会跨月。这个选择没有唯一正确答案，但它必须**只有一个**——
+`birthday list` 显示的星期几直接取 `sorted_by_next()` 给出的那个 `date`，
+不再自己算一次当年日期。
+
+### 17.6 同一天两个人：合并成一条
+
+`BirthdayBook` 允许两条记录落在同一天（夫妻、母子）。`as_holidays()` 把它们
+并成**一条** `Holiday`：
+
+| 字段 | 规则 |
+| --- | --- |
+| `id` | `"birthday:" + "+".join(sorted(tag))`，所以与文件顺序无关 |
+| `name` | `"小明、爸爸的生日"`，按 `_file_order`（主体序 → 月 → 日） |
+| `lead_days` | **`max()`** |
+| `aftermath_days` | `max()` |
+| `verified` | `all()` |
+| `days_off` | `()` |
+| 活动 | 并集，保留首次出现的顺序 |
+
+`max()` 而不是「后加进来的那个说了算」：早一点想起来不会冒犯谁，晚一点会。
+`verified = all()` 是保守方向——两个里有一个没核实，日期就该显示为待确认。
+
+活动取并集时**必须保留顺序**：`_take()` 是按顺序截前几件的，
+「先挑礼物、再想怎么开口」和反过来是两回事。
+
+`_file_order` 里 `user` 排在 `npc` 前面，所以名字是「小明、爸爸」而不是反过来。
+
+### 17.7 生日不放假
+
+`days_off = ()`。于是 `day_kind()` 里那一天原本是什么就还是什么
+（工作日照样是工作日，周末照样是周末）——**它过生日不等于你放假**。
+
+这一条还顺带解决了一个数据问题：`HolidayCalendar.__post_init__` 会拒绝
+「两个节日占同一天」，但**只有 `days_off` 里的日期算「占」**。
+不放假的节日（元宵、情人节、圣诞、生日）不占日子，可以和别的节撞在同一天——
+日历没有理由替用户二选一。生日因此能直接并进节日日历，既有数据一行都不用改。
+
+> ⚠️ 这是一条**规则改动**，不是 bug 修复。原来那条「两个节日不能同一天」的
+> 测试改的是夹具（给它加上 `days_off`），不是把规则放松。
+
+### 17.8 平手时生日优先——这里出过一个安静的 bug
+
+`_personal_rank(holiday)` 在平手时让人物日子（生日 / 纪念日）排前面：
+
+```python
+return 0 if holiday.kind == "personal" else 1
+```
+
+⚠️ **这是一个升序的序**（越小越优先），和 `sorted()` / `min()` 同一个方向。
+`find()` 用 `min()`、`upcoming()` 用 `sort()`，都对；但 `context()` 用的是
+`max()`，所以那里必须取负号：
+
+```python
+return max(candidates, key=lambda item: (item[0], -item[1], -item[2], -item[3]))[4]
+```
+
+只加一个数字而不改比较方向的下场是：**平手时反着选**，而且选出来的仍然是
+一个说得通的答案（另一条节日），所以不报错、不空值、看起来完全正常，
+只有生日安静地消失。第一版就是这么写的，`test_a_birthday_wins_a_tie_against_a_festival`
+把它抓了出来。
+
+这条经验可以推广：**给一个「取最大」的选择加排序键，键的方向变了就得取负号**；
+这类错误的特征是没有反馈回路。
+
+### 17.9 不知道某人的生日，就不要编一个
+
+- **文件不存在不是错误**：空书是合法默认状态（`load_book` 记一条 `debug` 日志）。
+  写死成「读不到就抛」的话，一个刚装好的实例连 `calendar today` 都跑不起来。
+- **文件存在但是坏的，必须抛**：静默跳过的后果是「某个人的生日凭空消失」，
+  而那天看起来完全正常——比启动时炸一次难查得多。
+- `alterego birthday list` 在「自己」或「用户」还没记时提醒一句。
+  记了别人的生日不等于它自己会过生日，而它自己的生日恰恰是
+  「还要会过生日」这句话最直接的意思。
+
+### 17.10 CLI
+
+```
+alterego birthday list [--days N]                   记过谁的生日，下次还有几天
+alterego birthday add  --who {self,user,npc} --on MM-DD [--name 称呼]
+                       [--npc-id ID] [--lead-days N] [--aftermath-days N] [--unverified]
+alterego birthday set  ……（参数与 add 完全相同）
+```
+
+`add` 与 `set` 接受**完全相同**的参数，区别只在语义：`add` 挡「已经记过」，
+`set` 挡「没记过」。默认都不覆盖——盖掉一条生日记录不会有任何提示，
+而写错一个月份的下场是「那天什么也没发生，当事人也不会说」，
+这种错误没有任何反馈回路，所以宁可多问一句。
+
+`set --on` 只该改一天：称呼、提前量、消退期从已有记录继承，
+否则一次「只改一天」的操作会顺手改掉另外三样，而用户看不到。
+
+`--on` 的解析（`_month_day`）在 argparse 阶段就调用 `check_month_day`，
+所以 `--on 02-30` 是**用法错误**（退出码 2），而不是写进文件之后才在下次读取时炸。
+写进文件的坏日期没人会再看第二眼，它要到那天才发作，而那天正好是
+「什么也没发生」——没有比这更难查的失败了。
+
+样例输出：
+
+```
+$ alterego birthday list
+生日记录 · 2 条 · D:\ai\个人agent\data\birthdays.toml
+──────────────────────────────────────────────────────────
+  06-03  周三  用户  小明      下次 261 天后 · 提前 14 天
+  11-08  周日  NPC   张三      下次 54 天后 · 提前 3 天  ⚠ 日期未确认
+```
+
+```
+$ alterego calendar today --date 2026-05-25
+2026-05-25  周一  工作日
+──────────────────────────────────────────────────────────
+生日前 小明、爸爸的生日（9 天后）  强度 ████░░░░░░ 0.47
+  这段时间大概会：挑礼物 · 想想要不要提前订蛋糕
+
+未来 14 天
+  06-03  周三  小明、爸爸的生日  9 天后 · 每年这天
+```
+
+`calendar list` 会数出生日的个数（`2026 年节日 · 共 11 个（含 1 个生日）`），
+`calendar check` 会单独说一句「生日记录 N 条」——**生日的「没核对」不混进
+节日的待核对名单**，因为要去核的对象不同（一个是国务院公告，一个是本人）。
+
+### 17.11 不做
+
+- **不做农历生日换算**。生日是公历 `MM-DD`。要过农历生日的话，
+  输入端会是「哪一年的农历几月初几」，那是另一件事，等有人真的需要再做。
+- **不做「生日提醒」这类主动播报**。主动提起的时机由 § 10.2 的
+  `should_open_topic()` 决定；`lead_days` 只影响日程与提示词，不是一个通知定时器。
+- **不做生日生图**。走 `image` 插件现有契约，`domain/birthday.py` 不需要知道。
+
+### 17.12 实现清单
+
+| 文件 | 行数 | 职责 | 门禁 |
+| --- | --- | --- | --- |
+| `src/alterego/domain/birthday.py` | ~460 | 纯函数：主体、闰日、按年展开、合并 | `tests/test_domain_birthday.py`（88 项） |
+| `src/alterego/domain/_toml.py` | ~63 | 节日与生日共用的六个取值助手 | 两个文件的数据测试 |
+| `src/alterego/birthdays/__init__.py` | ~133 | 唯一的读盘 / 写盘入口 | `tests/test_birthdays.py`（26 项） |
+| `src/alterego/domain/calendar.py` | ~561 | 加 `personal` 种类、谁占哪一天、平手序 | `tests/test_domain_calendar.py`（73 项） |
+| `src/alterego/kernel/config.py` | ~812 | 派生属性 `birthdays_path` | `tests/test_kernel_config.py` |
+| `src/alterego/cli.py` | ~544 | `alterego birthday {list,add,set}` | `tests/test_cli.py`（58 项） |
+
+**本批次新增依赖为零。** `tomllib` 是标准库（P5）。架构红线 22 项全过。
+
+覆盖率：全局 96.75%、`domain/` 98.99%（门槛分别是 85% / 95%）。
+
