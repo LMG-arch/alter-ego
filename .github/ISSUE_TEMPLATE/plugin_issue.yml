@@ -101,13 +101,13 @@ body:
       label: 自查清单（来自 02-plugin-api.md § 16）
       options:
         - label: 类同时继承 `Plugin` 与对应的接口（如 `Stage` / `Channel`）
-        - label: `api_version` 与内核兼容
-        - label: `entry` 格式为 `模块:类名`
+        - label: "`api_version` 与内核兼容"
+        - label: "`entry` 格式为 `模块:类名`"
         - label: 所有时间判断用 `ctx.now()`，没用 `datetime.now()`
         - label: 所有随机数用 `ctx.rng`，没用全局 `random`
         - label: 所有日志用 `ctx.logger`，没用 `print`
         - label: 需要的能力通过 `ctx.registry.get` 获取，没有跨插件 import
-        - label: `on_stop()` 是幂等的
+        - label: "`on_stop()` 是幂等的"
         - label: 已运行 `alterego plugins reload <id>` 验证
     validations:
       required: true

@@ -131,6 +131,11 @@ exclude = [
     "data",
     "logs",
 ]
+# ⚠️ 只处理 Python 文件。
+# 默认的 include 在某些 ruff 版本下会把 Markdown 里的 ```python 代码块
+# 也当作可格式化对象——而文档示例是「为可读性刻意排版」的（比如为了让签名
+# 一行读完而超出 100 列），自动重排会破坏文档的表达意图。
+include = ["*.py", "*.pyi"]
 
 [tool.ruff.lint]
 select = [
