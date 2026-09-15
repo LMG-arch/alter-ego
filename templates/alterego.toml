@@ -1,0 +1,246 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  AlterEgo · 拟我  ——  默认配置模板
+#
+#  这是 `alterego init` 复制到 config/alterego.toml 的起始文件。
+#  它同时是**所有配置项的权威参考**：每一行都有注释，每个键都有默认值。
+#
+#  配置加载优先级（后者覆盖前者）：
+#    1. 本文件的默认值（内置）
+#    2. config/alterego.toml          （用户配置）
+#    3. ALTEREGO_* 环境变量            （容器/CI 友好）
+#    4. 命令行参数                     （仅一次运行）
+#
+#  ⚠️ 不要在 schema 里出现 "secret" 类型的键。所有密钥走环境变量：
+#       ${VAR_NAME} 语法会被解析为环境变量的值，例如
+#       api_key = "${ALTEREGO_LLM_API_KEY}"
+#     若变量未设置则启动失败并给出明确提示（P2 显式优于隐式）。
+#
+#  文档：docs/DESIGN.md § 12 配置与部署
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ───────────────────────────────────────────────────────────────────────────
+#  [core]  核心设置
+# ───────────────────────────────────────────────────────────────────────────
+[core]
+data_dir = "data"                   # 数据库、备份、缓存、outbox 的根目录
+log_level = "INFO"                  # DEBUG | INFO | WARNING | ERROR
+log_format = "console"              # console（人读）| json（机器读）
+locale = "zh_CN"                    # 影响日期、星期、数字的显示
+timezone = "Asia/Shanghai"          # 所有存储时间都带此时区偏移
+random_seed = 42                    # 推演随机种子；留空则每次启动随机
+                                    # ⚠️ 固定种子 = 可复现推演（P6）
+
+# ───────────────────────────────────────────────────────────────────────────
+#  [simulation]  推演节奏
+#
+#  三种模式的取舍见 docs/design/04-simulation-loop.md § 1
+#    realtime  1x   5 分钟粒度   288 tick/天   成本最低，体感最"日常"
+#    fast      60x  5 分钟粒度   相当于 1 天过 24 分钟
+#    turbo     300x 15 分钟粒度  相当于 1 天过 4.8 分钟（观察用，会大量调用 LLM）
+# ───────────────────────────────────────────────────────────────────────────
+[simulation]
+mode = "realtime"                   # realtime | fast | turbo
+tick_interval_minutes = 5           # 虚拟时间的粒度（一个 tick 内时间冻结）
+speed_multiplier = 1                # 虚拟时间 : 真实时间
+npc_tick_interval_minutes = 30      # NPC 独立推演的间隔（虚拟时间）
+enable_npc_conversations = true     # 允许 NPC 之间互动
+max_consecutive_tick_failures = 5   # 连续失败这么多次进入降级模式
+                                    # 见 docs/design/01-architecture.md § 8
+
+# ───────────────────────────────────────────────────────────────────────────
+#  [disturb_budget]  打扰预算 —— 决定它有多"克制"
+#
+#  ⚠️ 这份预算是项目拟人感的核心。被拦下的意图不会消失，而是降级为
+#     内心活动（ADR-0005）。调高这些数字会让它变烦人，调低会让它变冷淡。
+# ───────────────────────────────────────────────────────────────────────────
+[disturb_budget]
+daily_message_limit = 3             # 每天主动发消息上限
+daily_message_limit_urgent = 5      # 紧急度 > 0.8 时的放宽上限
+daily_post_limit = 4                # 每天发动态上限
+quiet_hours = ["23:30", "08:00"]    # 免打扰时段（虚拟时间）
+min_interval_minutes = 90           # 两条主动消息的最小间隔
+consecutive_no_reply_limit = 3      # 连续 N 次无人回复 → 暂停 24 小时（熔断）
+pending_topic_ttl_hours = 12        # 被拦下的话题在多久内可以"重新提起"
+
+# ───────────────────────────────────────────────────────────────────────────
+#  [llm]  模型调用
+# ───────────────────────────────────────────────────────────────────────────
+[llm]
+default_provider = "openai_compatible"
+timeout_seconds = 60
+max_retries = 3                     # 重试策略见 01-architecture.md § 8.4
+
+# 分层路由：把"需要聪明"的调用和"够用就行"的调用分开
+# 这一个决定让成本降到 1/6.6（见 06-roadmap.md § 5.3）
+[llm.routing]
+strong = "openai_compatible"        # 强模型的 provider
+cheap  = "openai_compatible"        # 廉价模型的 provider
+decision = "strong"                 # 意图决策：需要理解情境与语气
+expression = "strong"               # 表达生成：用户直接看到，质量要求高
+reflection = "cheap"                # 情绪反思：几乎不需要聪明
+npc = "cheap"                       # NPC 对话：量大，要求低
+persona = "strong"                  # 人设生成：低频但一次性决定全局
+memory = "cheap"                    # 记忆摘要与巩固
+
+# 成本上限与超限行为
+[llm.budget]
+daily_usd_limit = 2.0               # 每日成本上限（美元）
+monthly_usd_limit = 40.0            # 每月成本上限
+max_calls_per_day = 800             # 调用次数兜底（防死循环烧钱）
+max_tokens_per_day = 2000000        # token 兜底
+on_exceed = "degrade"               # degrade | stop | warn
+                                    #   degrade：strong→cheap，规则兜底，它继续活着
+                                    #   stop   ：停用所有 LLM 阶段
+                                    #   warn   ：只告警不限制（调试用）
+                                    # 见 04-simulation-loop.md § 10.4
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  [persona]  人设
+#
+#  人设由 LLM 生成（alterego init 时），之后固化在数据库里。
+#  下面的字段决定"能否被改写"。
+# ═══════════════════════════════════════════════════════════════════════════
+[persona]
+evolution_enabled = false           # 是否允许人设随经历缓慢演化
+                                    # ⚠️ 默认关闭：演化会带来人格漂移风险（见 R2）
+evolution_interval_days = 30        # 开启时，多久评估一次
+evolution_max_field_delta = 0.15    # 单个数值字段的变化上限，超过则拒绝
+generation_model = "persona"        # 用哪档模型生成人设（指向 llm.routing 的键）
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  [channels]  渠道开关
+#
+#  ⚠️ 重要：企业微信「群机器人」与钉钉「自定义机器人」是**单向**渠道，
+#     只能发不能收（ADR-0004）。v1 唯一的入站渠道是 web。
+# ═══════════════════════════════════════════════════════════════════════════
+[channels]
+# 启用的渠道插件 id 列表
+enabled = [
+  "channel.file",                   # 双向，离线兜底
+  "channel.web",                    # 双向 ← v1 唯一的入站渠道
+]
+
+[channels.file]
+out_dir = "data/outbox"             # 出站消息写到这里
+inbox_dir = "data/inbox"            # 每 5 秒轮询一次，处理后移到 processed/
+format = "markdown"                 # markdown | txt | jsonl
+
+[channels.web]
+host = "127.0.0.1"                  # ⚠️ 默认只监听本机。改成 0.0.0.0 需自担风险
+port = 8765
+auth = "token"                      # token | password | none（none 仅限本机）
+                                    # token 模式会在 .alterego-token 写入随机串
+
+[channels.dingtalk_webhook]
+# 单向出站。必须使用「加签」模式（安全设置里勾选），否则消息会被拒收。
+# webhook = "${DINGTALK_WEBHOOK}"   # access_token 部分
+# secret  = "${DINGTALK_SECRET}"    # 加签密钥
+enabled = false
+
+[channels.wecom_webhook]
+# 单向出站。企业微信群机器人。
+# webhook = "${WECOM_WEBHOOK}"
+enabled = false
+
+# ───────────────────────────────────────────────────────────────────────────
+#  [routing]  通知路由 —— 什么消息推到哪个渠道
+#
+#  主渠道 = 第一个 direction 含 "in" 的渠道。IM 是"让它能找到你"，
+#  Web 是"你能回复它"。
+# ───────────────────────────────────────────────────────────────────────────
+[routing]
+primary = "web"                     # 入站主渠道
+outbound = ["web"]                  # 出站渠道（可加 "dingtalk_webhook" 推到手机）
+level = "important"                 # all | important | urgent
+                                    #   all       ：什么都推（会很吵）
+                                    #   important ：主动消息、发动态、重要事件 ← 推荐
+                                    #   urgent    ：只有紧急情况（它快崩了）
+interactive_dedup_hours = 24        # 同一内容在这么久内不重复推
+
+[routing.filters]
+# 进一步抑制：这两项与 disturb_budget 的 quiet_hours 叠加生效
+suppress_quiet_hours = true         # 免打扰时段不推 IM
+suppress_when_web_active = true     # 用户正在看 Web 时不推 IM（避免双响）
+
+# ───────────────────────────────────────────────────────────────────────────
+#  [storage]  存储
+# ───────────────────────────────────────────────────────────────────────────
+[storage]
+backend = "sqlite"                  # 后端插件 id
+db_path = "data/alterego.db"
+journal_mode = "WAL"                # ⚠️ 不要改。WAL 是"一写多读"的前提
+synchronous = "NORMAL"              # WAL 下的安全/性能平衡点
+busy_timeout_ms = 5000
+foreign_keys = true
+temp_store = "MEMORY"
+checkpoint_on_start = true          # 启动时做一次 WAL checkpoint
+integrity_check_on_start = true     # 启动时 PRAGMA integrity_check
+backup_before_destructive_migration = true
+                                    # 破坏性迁移前自动备份到 data/backups/
+
+# ───────────────────────────────────────────────────────────────────────────
+#  [retention]  数据保留 —— 控制数据库增长（默认约 515 MB/年）
+#
+#  tick_log 占增长的 81%，是唯一需要担心的表。
+# ───────────────────────────────────────────────────────────────────────────
+[retention]
+tick_log_keep_days = 90             # 超过这个天数的 tick 按 tick_log_detail 处理
+tick_log_detail = "full"            # full（含 state_snapshot_json）| summary
+                                    # ⚠️ 改成 summary 后年增长降到 ~75 MB，
+                                    #    代价是"回看某天的完整状态"能力下降
+activity_log_keep_days = 365        # 被拦下的意图记录保留多久（不建议调小）
+memory_keep_forever = true          # 记忆永远不删（遗忘是标记，不是删除）
+event_log_enabled = false           # 事件日志默认关闭（只用于调试）
+auto_vacuum = true                  # 定期 VACUUM 回收空间
+
+# ───────────────────────────────────────────────────────────────────────────
+#  [plugins]  插件
+# ───────────────────────────────────────────────────────────────────────────
+[plugins]
+enabled = [
+  "llm.openai_compatible",
+  "storage.sqlite",
+  "capability.activity",
+  "capability.post",
+  "capability.chat",
+]
+
+# 本地插件的搜索路径，按顺序查找，先找到的优先
+# plugins/<name>/ 的优先级高于 pip 安装的（entry_points）插件
+search_paths = ["plugins", "~/.alterego/plugins"]
+
+auto_reload = true                  # 监听 mtime，1 秒轮询，改动即热重载
+auto_reload_interval_seconds = 1
+circuit_breaker_threshold = 5       # 插件连续失败这么多次 → 自动熔断（禁用）
+isolate_failures = true             # 插件异常不影响主流程
+
+# 单个插件的配置块，键名 = 插件 id
+# [plugins.config."channel.dingtalk_webhook"]
+# webhook = "${DINGTALK_WEBHOOK}"
+
+# ───────────────────────────────────────────────────────────────────────────
+#  [web]  Web 界面（需要 pip install "alterego[web]"）
+# ───────────────────────────────────────────────────────────────────────────
+[web]
+enabled = true
+# host/port/auth 见上面 [channels.web]（两处等价，保留此处以兼容旧配置）
+sse_keepalive_seconds = 20          # SSE 心跳间隔，防中间层断开连接
+sse_max_connections = 20            # 同时连接上限
+page_size = 50                      # 列表页每页条数
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  密钥（不要写在这里！）
+#
+#  放到 config/secrets.env（已在 .gitignore 中排除），或用环境变量：
+#
+#    ALTEREGO_LLM_API_KEY=sk-xxxxx
+#    ALTEREGO_LLM_BASE_URL=https://api.deepseek.com/v1
+#    ALTEREGO_LLM_MODEL_STRONG=deepseek-chat
+#    ALTEREGO_LLM_MODEL_CHEAP=deepseek-chat
+#    DINGTALK_WEBHOOK=...
+#    DINGTALK_SECRET=SECxxxxx
+#    WECOM_WEBHOOK=...
+#
+#  在下面这样引用（启动时解析，未设置则报错并提示变量名）：
+#    api_key = "${ALTEREGO_LLM_API_KEY}"
+# ═══════════════════════════════════════════════════════════════════════════

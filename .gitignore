@@ -1,0 +1,160 @@
+# ─────────────────────────────────────────────────────────────
+# AlterEgo · 拟我 —— 拟人化生活模拟 Agent
+# ─────────────────────────────────────────────────────────────
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+wheels/
+pip-wheel-metadata/
+
+# ── 虚拟环境 ──
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# ── 测试与覆盖率 ──
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+.hypothesis/
+.tox/
+.nox/
+
+# ── 类型检查与缓存 ──
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+.pyre/
+
+# ── 打包与工具 ──
+.uv/
+.uv-cache/
+poetry.lock.bak
+Pipfile.lock
+
+# ═════════════════════════════════════════════════════════════
+# ⚠️ 运行时数据：这些绝不能提交
+# ═════════════════════════════════════════════════════════════
+
+# ── 数据库与备份 ──
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/backups/
+data/outbox/
+data/cache/
+*.sqlite
+*.sqlite3
+
+# ── 日志 ──
+logs/
+*.log
+*.log.*
+
+# ── 密钥与令牌 ──
+.env
+.env.*
+!.env.example
+.alterego-token
+secrets/
+*.pem
+*.key
+credentials.json
+
+# ── 本地配置覆盖 ──
+config/alterego.local.toml
+config/*.local.toml
+alterego.local.toml
+
+# ── 用户数据（人格实例、记忆、导出）──
+instances/
+persona.local.toml
+exports/
+*.export.json
+*.export.jsonl
+
+# ═════════════════════════════════════════════════════════════
+# 编辑器与系统
+# ═════════════════════════════════════════════════════════════
+
+# ── VS Code ──
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/*.code-snippets
+
+# ── JetBrains ──
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# ── Vim ──
+*.swp
+*.swo
+*~
+tags
+.vim/
+
+# ── macOS ──
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# ── Windows ──
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# ── Linux ──
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# ═════════════════════════════════════════════════════════════
+# 插件与临时文件
+# ═════════════════════════════════════════════════════════════
+
+# 本地开发的插件（不应提交到主仓库）
+plugins/*/
+!plugins/.gitkeep
+!plugins/README.md
+!plugins/tokenizer_jieba/
+!plugins/example_*/
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig
+*.rej
+*.pid
+*.seed
+
+# 生成的前端产物（本项目无构建步骤，但保留规则以防万一）
+src/alterego/channels/web/static/*.min.js
+src/alterego/channels/web/static/*.min.css

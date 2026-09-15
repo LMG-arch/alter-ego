@@ -1,0 +1,207 @@
+name: 🐛 Bug 报告
+description: 报告一个可复现的问题
+title: "[Bug] "
+labels: ["bug", "需要分类"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。为了让问题能被快速定位，请尽量填完整。
+
+        **如果涉及密钥，请务必脱敏后再粘贴配置。**
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已搜索过现有 issue，没有重复
+          required: true
+        - label: 我已阅读 `docs/DESIGN.md`，确认这不是设计意图内的行为
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: AlterEgo 版本
+      description: 运行 `alterego --version` 的输出
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: 提交哈希（如果是源码运行）
+      description: 运行 `git rev-parse --short HEAD`
+      placeholder: "a1b2c3d"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: 操作系统
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Ubuntu / Debian
+        - 其他 Linux
+        - Docker
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python 版本
+      description: 运行 `python --version`
+      placeholder: "3.11.9"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: 推演模式
+      options:
+        - realtime（1 倍速）
+        - fast（60 倍速）
+        - turbo（300 倍速）
+        - 未运行推演（只用了 CLI / Web）
+    validations:
+      required: false
+
+  - type: input
+    id: providers
+    attributes:
+      label: LLM 提供商与模型
+      description: 例如 DeepSeek / deepseek-chat。**不要填 API Key。**
+      placeholder: "DeepSeek / deepseek-chat (strong) + deepseek-chat (cheap)"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: channels
+    attributes:
+      label: 启用的渠道
+      options:
+        - label: web
+        - label: console
+        - label: file
+        - label: dingtalk_webhook
+        - label: wecom_webhook
+
+  - type: checkboxes
+    id: plugins
+    attributes:
+      label: 自装插件类型
+      options:
+        - label: 无自装插件
+        - label: llm
+        - label: storage
+        - label: channel
+        - label: capability
+        - label: stage
+        - label: tool
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 实际行为
+      description: 发生了什么？包括完整的报错信息与堆栈。
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+      description: 你认为应该发生什么？设计文档里有对应说明吗？（附章节链接更好）
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 请给出最小复现步骤。**步骤越具体，修得越快。**
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: reproducibility
+    attributes:
+      label: 复现概率
+      options:
+        - 必定复现
+        - 经常复现（>50%）
+        - 偶尔复现（<50%）
+        - 只出现过一次
+        - 还不知道
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志
+      description: |
+        运行 `alterego serve --verbose` 后把相关日志贴上来。
+        日志在 `logs/` 目录。**请检查并删除其中的密钥与个人信息。**
+      render: shell
+      placeholder: |
+        $ alterego serve --verbose
+        ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: 配置片段
+      description: |
+        相关的 `alterego.toml` 片段。**务必把 API Key、Webhook 地址、Secret 替换成 `***`。**
+      render: toml
+      placeholder: |
+        [simulation]
+        mode = "fast"
+        tick_interval_minutes = 5
+
+        [llm]
+        provider = "openai_compatible"
+        base_url = "https://api.deepseek.com"
+        api_key = "***"
+    validations:
+      required: false
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 诊断输出
+      description: 请运行以下命令并粘贴输出
+      render: shell
+      value: |
+        $ alterego status
+        $ alterego plugins list
+        $ alterego channels doctor
+        $ alterego db status
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充说明
+      description: 任何其他有助于定位的信息（截图、录屏、猜测的原因等）
+    validations:
+      required: false

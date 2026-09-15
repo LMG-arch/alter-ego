@@ -1,0 +1,120 @@
+name: 🔌 插件问题
+description: 报告自己开发插件时遇到的问题
+title: "[Plugin] "
+labels: ["plugin", "需要分类"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        插件开发遇到问题？请先确认你已经读过
+        [`docs/design/02-plugin-api.md`](../blob/main/docs/design/02-plugin-api.md)，
+        特别是**第 16 节 开发 Checklist** 与**常见错误表**。
+
+  - type: input
+    id: plugin-id
+    attributes:
+      label: 插件 id
+      placeholder: "my_weather"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 插件类型（kind）
+      options:
+        - llm
+        - storage
+        - channel
+        - capability
+        - stage
+        - tool
+        - 多种
+    validations:
+      required: true
+
+  - type: input
+    id: api-version
+    attributes:
+      label: api_version
+      placeholder: "1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: load-stage
+    attributes:
+      label: 问题出现的阶段
+      options:
+        - 加载时（发现 / 校验 / 导入 / 实例化）
+        - on_load 时
+        - on_start 时
+        - 运行时（on_tick / on_event / Stage.run）
+        - 热重载时
+        - 卸载时
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: manifest
+    attributes:
+      label: plugin.toml 内容
+      description: "**请删除密钥相关配置。**"
+      render: toml
+      placeholder: |
+        [plugin]
+        id = "my_weather"
+        version = "0.1.0"
+        api_version = 1
+        kind = "stage"
+        entry = "__init__:WeatherMoodStage"
+
+        [config]
+        city = { type = "string", required = true }
+    validations:
+      required: true
+
+  - type: textarea
+    id: code
+    attributes:
+      label: 插件代码（最小复现）
+      description: 请精简到能复现问题的最少代码
+      render: python
+    validations:
+      required: true
+
+  - type: textarea
+    id: error
+    attributes:
+      label: 错误信息
+      description: 完整输出，包括 `alterego plugins list` 的结果
+      render: shell
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: 自查清单（来自 02-plugin-api.md § 16）
+      options:
+        - label: 类同时继承 `Plugin` 与对应的接口（如 `Stage` / `Channel`）
+        - label: `api_version` 与内核兼容
+        - label: `entry` 格式为 `模块:类名`
+        - label: 所有时间判断用 `ctx.now()`，没用 `datetime.now()`
+        - label: 所有随机数用 `ctx.rng`，没用全局 `random`
+        - label: 所有日志用 `ctx.logger`，没用 `print`
+        - label: 需要的能力通过 `ctx.registry.get` 获取，没有跨插件 import
+        - label: `on_stop()` 是幂等的
+        - label: 已运行 `alterego plugins reload <id>` 验证
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充说明
+    validations:
+      required: false

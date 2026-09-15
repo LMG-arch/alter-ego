@@ -1,0 +1,20 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 设计文档
+    url: https://github.com/LMG-arch/alter-ego/blob/main/docs/DESIGN.md
+    about: 先读总设计文档——它是本项目的事实来源
+  - name: 🏗️ 架构说明
+    url: https://github.com/LMG-arch/alter-ego/blob/main/docs/design/01-architecture.md
+    about: 分层职责、依赖方向、架构红线
+  - name: 🔌 插件开发
+    url: https://github.com/LMG-arch/alter-ego/blob/main/docs/design/02-plugin-api.md
+    about: 插件清单、生命周期、扩展点、完整示例
+  - name: 🔁 推演循环
+    url: https://github.com/LMG-arch/alter-ego/blob/main/docs/design/04-simulation-loop.md
+    about: 六阶段流水线、意图系统、打扰预算、情绪与记忆模型
+  - name: 🤝 贡献指南
+    url: https://github.com/LMG-arch/alter-ego/blob/main/CONTRIBUTING.md
+    about: 开发流程、提交规范、测试要求、文档纪律
+  - name: 💬 提问与讨论
+    url: https://github.com/LMG-arch/alter-ego/discussions
+    about: 不确定是不是 bug？先来讨论区聊聊
