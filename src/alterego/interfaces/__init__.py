@@ -31,6 +31,13 @@ from alterego.interfaces.llm import (
     LLMProvider,
     LLMRequest,
     LLMResponse,
+    LLMUsage,
+    UsageSink,
+)
+from alterego.interfaces.repository import (
+    ActivityRecord,
+    ActivityRepository,
+    MemoryRepository,
 )
 from alterego.interfaces.simulation import (
     Capability,
@@ -45,6 +52,8 @@ from alterego.interfaces.storage import StorageBackend
 
 
 __all__ = [
+    "ActivityRecord",
+    "ActivityRepository",
     "Capability",
     "CapabilityResult",
     "Channel",
@@ -55,6 +64,8 @@ __all__ = [
     "LLMProvider",
     "LLMRequest",
     "LLMResponse",
+    "LLMUsage",
+    "MemoryRepository",
     "OutboundMessage",
     "PromptSource",
     "SendResult",
@@ -62,4 +73,5 @@ __all__ = [
     "StageResult",
     "StorageBackend",
     "Tool",
+    "UsageSink",
 ]

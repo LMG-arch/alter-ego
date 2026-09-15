@@ -873,6 +873,40 @@ CREATE VIEW IF NOT EXISTS v_trace AS
 
 ---
 
+### 3.4 v0.4.0 新增：记忆梳理的两个时间戳
+
+`005_memory_consolidation.sql` 只做两件事，都是「加一个可空时间戳 + 一个部分索引」：
+
+```sql
+ALTER TABLE memory ADD COLUMN consolidated_at TEXT;
+
+CREATE INDEX idx_memory_unconsolidated
+    ON memory (persona_id, kind, occurred_at DESC)
+    WHERE consolidated_at IS NULL;
+
+ALTER TABLE activity_log ADD COLUMN distilled_at TEXT;
+
+CREATE INDEX idx_activity_undistilled
+    ON activity_log (persona_id, started_at DESC)
+    WHERE distilled_at IS NULL;
+```
+
+| 列 | 谁写它 | 语义 |
+| --- | --- | --- |
+| `memory.consolidated_at` | `consolidate` 成功后 | 这条记忆已经被归纳过一次，别再归纳 |
+| `activity_log.distilled_at` | `distill` 成功后 | 这段行为已经被整理成记忆，别再整理 |
+
+两个索引都带 `WHERE ... IS NULL`：要查的永远是「**还没**处理的那批」，
+而全表里绝大多数行都是非 NULL。部分索引让「找出待处理的几条」不随数据量增长。
+
+**为什么用「处理时间戳」而不是「处理过了」这个布尔**：两个动词都要能回答
+「上次梳理是什么时候」，而这个问题的答案直接来自同一列。布尔还要额外记时间。
+
+`memory.source` 因此多了一种取值 `consolidation`（见 § 4.2），
+用来回答「这条记忆是它自己经历的，还是模型从别处整理来的」。
+
+---
+
 ## 4. 表字段说明
 
 ### 4.1 需重点说明的字段
@@ -881,10 +915,16 @@ CREATE VIEW IF NOT EXISTS v_trace AS
 
 | 字段 | 含义 | 是否变化 |
 | --- | --- | --- |
-| `importance` | 写入时评定的**固有重要度**（0~1）。由 LLM 或规则评定，之后**不再改变** | ❌ 不变 |
+| `importance` | 写入时评定的**固有重要度**（0~1）。由 LLM 或规则评定 | ⚠️ 只被梳理降权一次 |
 | `strength` | **当前可召回强度**。随时间指数衰减，被回忆时回升 | ✅ 每 6 虚拟小时重算 |
 
 分离两者的原因：一条记忆「很重要」（importance=0.9），但太久没想起来会「暂时想不起来」（strength 降到 0.2）。如果合并为一个字段，就无法表达「重要但不记得」这种真实状态。
+
+`importance` 唯一的例外是 `consolidate`：源记忆被归纳之后乘
+`CONSOLIDATION_IMPORTANCE_FACTOR`（0.6，见 § 6.5）。**降的是 `importance` 而不是
+`strength`**——`strength` 是「想不想得起来」，由回忆行为驱动；
+而「这件事没那么重要了，因为我已经从它身上想明白了」属于 `importance`。
+写进去之后仍是只读的：同一条记忆不会被反复降权，因为 `consolidated_at` 挡住了第二次。
 
 #### `activity_log.suppressed_intent` / `suppress_reason`
 
@@ -1119,44 +1159,97 @@ def preprocess_for_fts(text: str) -> str:
 
 **索引一致性注意**：预处理必须**写入时与查询时使用同一函数**，否则匹配失败。`MemoryRepository` 统一封装这个逻辑。
 
-### 6.5 记忆巩固
+### 6.5 记忆梳理
 
-每 6 虚拟小时执行一次，把零散的 `episodic` 记忆压缩成 `semantic` 记忆：
+「让模型把散落的东西整理成记忆」有两件事要做，它们共用同一条流水线：
+
+| 动词 | 读什么 | 写什么 |
+| --- | --- | --- |
+| `distill` | `activity_log` 里 `distilled_at IS NULL` 的行为 | `episodic` / `semantic` / `emotional` 记忆 |
+| `consolidate` | `memory` 里 `kind='episodic'` 且 `consolidated_at IS NULL` 的记忆 | `semantic` 记忆 |
+
+两者都是「读素材 → 渲染提示词 → 一次调用模型 → 严格解析 JSON → 落库」，
+差别只在取素材的查询与最后标哪个时间戳。实现在两个模块里：
+
+- `domain/consolidation.py` —— 纯函数：渲染、解析、去重、降权系数。没有 IO。
+- `sim/consolidation.py` —— 编排：取素材、调模型、开事务、写库。**不开数据库连接**，
+  仓储与 `StorageBackend` 由组装根（`cli_memory.py`）构造好传进来（红线 3）。
 
 ```python
-async def consolidate(repo: MemoryRepository, llm: LLMProvider, now: datetime) -> list[Memory]:
-    """取最近 6 小时未巩固的 episodic 记忆 → LLM 归纳 → 写入 semantic 记忆"""
+# sim/consolidation.py —— 形状，不是逐字实现
+@dataclass(frozen=True, slots=True)
+class WorkReport:
+    source_items: int = 0     # 读到几条素材
+    drafted: int = 0          # 模型给出几条
+    saved: int = 0            # 真的写进去几条（去重后）
+    downgraded: int = 0       # consolidate 才有的降权条数
+    preview: tuple[str, ...] = ()
+    skipped: str | None = None    # 素材不够时的原因
 
-    recent = repo.list_recent(kind="episodic", since=now - timedelta(hours=6),
-                              not_consolidated=True)
-    if len(recent) < 3:
-        return []       # 太少不值得归纳
 
-    prompt = render("memory_consolidate", memories=recent)
-    result = await llm.complete(LLMRequest(prompt=prompt, response_format="json"))
-    # 期望输出: [{"summary": "...", "importance": 0.7, "tags": [...]}]
+async def distill(work: MemoryWorkbench, *, now: datetime, dry_run: bool = False) -> WorkReport:
+    """行为日志 → 记忆。素材不足 MIN_SOURCE_ITEMS 条时直接返回，不调模型。"""
+    materials = work.activities.list_undistilled(work.persona_id, since=now - WINDOW)
+    if len(materials) < MIN_SOURCE_ITEMS:
+        return WorkReport(source_items=len(materials), skipped="素材太少，不值得梳理")
+    if dry_run:
+        return WorkReport(source_items=len(materials), preview=...)
 
-    created = []
-    for item in json.loads(result.text)["memories"]:
-        mem = Memory(
-            kind="semantic",
-            content=item["summary"],
-            summary=item["summary"],
-            importance=item["importance"],
-            source="consolidation",
-            source_ref=",".join(m.id for m in recent),
-            entities=tuple(item.get("entities", [])),
-            occurred_at=now,
-            ...
-        )
-        repo.save(mem)
-        created.append(mem)
+    prompt = work.prompts.render(_TEMPLATE, persona_name=..., activities=..., ...)
+    # 红线 7：LLM 调用只经网关，网关负责路由、重试、计量、日志
+    response = await work.gateway.complete(PURPOSE, prompt, temperature=0.4,
+                                          max_tokens=2048, response_format="json")
+    drafts = parse_memory_drafts(response.text)      # 有一个坏的，整批丢弃
 
-    repo.mark_consolidated([m.id for m in recent])
-    return created
+    saved = 0
+    with work.backend.transaction():                 # 一次事务，仓储自己不 BEGIN
+        for draft in drafts:
+            work.memories.save(draft.to_memory(persona_id=..., memory_id=..., ...))
+            saved += 1
+        work.activities.mark_distilled([m.id for m in materials])
+    return WorkReport(source_items=len(materials), drafted=len(drafts), saved=saved)
 ```
 
-**副作用**：巩固后原始 episodic 记忆的 `strength` 会被降低（信息已上提），模拟「细节模糊了但记住了大概」。
+模型要输出的东西（`src/alterego/prompts/memory_consolidate.md` 里写死的那一段）：
+
+```json
+[
+  {"kind": "episodic", "content": "下午跟阿哲聊到搬家的事，他好像有点烦",
+   "importance": 0.6, "valence": -0.2, "entities": ["阿哲"]},
+  {"kind": "semantic", "content": "写代码的时候反倒是最轻松的", "importance": 0.5}
+]
+```
+
+**顶层是数组，不是 ``{"memories": [...]}``。** 只有 `content` 必填，其余有缺省值
+（`kind="episodic"`、`importance=0.5`、`valence=0.0`）。原因：模型漏写一个键是常事，
+为此丢掉整条记忆不值当；但**写坏一条就丢掉整批**——半个批次落库比一条不落更难解释。
+
+**只写 `kind='semantic'` 是错的。** 归纳的产物经常是一条更清楚的**经历**
+（「那次他说想搬家」），把它强行升成 semantic 会让记忆越来越抽象。
+所以模板把三种 kind 都摆在模型面前，由它自己判断。
+
+**副作用**：`consolidate` 之后源记忆的 `importance` 乘以
+`CONSOLIDATION_IMPORTANCE_FACTOR`（0.6）——信息已上提，细节该淡了。
+降的是 `importance` 而不是 `strength`：`strength` 是回忆出来的，不该由程序回填。
+
+**阈值与参数**（`domain/consolidation.py` 与 `sim/consolidation.py` 顶部）：
+
+| 常量 | 值 | 为什么 |
+| --- | --- | --- |
+| `WINDOW_HOURS` | 6.0 | 与一次 tick 批次的粒度对齐 |
+| `MIN_SOURCE_ITEMS` | 3 | 两条素材归纳不出什么，白白花钱 |
+| `MAX_ITEMS` | 10 | 一次梳理的上限，防止模型刷屏 |
+| `SUMMARY_LIMIT` | 60 | 摘要是一句话，不是一段 |
+| 温度 / `max_tokens` | 0.4 / 2048 | 梳理要稳，不要发挥 |
+
+**触发方式**：v0.4.0 只提供命令行（`alterego memory distill|consolidate`），
+定时触发（每 6 虚拟小时一次）排在它后面——先把「梳理得好不好」调顺，
+再决定要不要让它自己按点做。
+
+**幂等性靠时间戳**，不靠「跑过了」这个记忆：`distill` 标 `activity_log.distilled_at`，
+`consolidate` 标 `memory.consolidated_at`。同一天跑第二遍，第一遍的成果不会被重复梳理。
+两次梳理都没有查出东西，不算失败——`WorkReport.saved == 0` 时命令行会说明
+「素材已标记为梳理过，不会重复问」。
 
 ---
 
@@ -1168,9 +1261,12 @@ async def consolidate(repo: MemoryRepository, llm: LLMProvider, now: datetime) -
 | --- | --- | --- |
 | 表镜像（一行 ↔ 一个对象） | `domain/` | 它是数据模型本身，不是存储实现细节；换后端不该换类型 |
 | 业务规则与纯函数（`strength_at` / `rank_memories` / `update_emotion`） | `domain/` | 无 IO、无全局，可直接单测 |
+| 梳理的纯函数（`extract_json_array` / `parse_memory_drafts` / `summarize`） | `domain/consolidation.py` | 同上——「模型吐的这个东西能不能用」是一条可枚举的规则，不是 IO |
+| 梳理的编排（取素材、调模型、开事务、标时间戳） | `sim/consolidation.py` | 它要碰网关与仓储；红线 3 要求它只见 `StorageBackend` 与 Repository Protocol |
 | SQL、事务、JSON 序列化、往返映射 | `storage/` | 换 `sqlite` 为 `postgres` 时只有这一层要重写 |
 
-**已经实现（本批次）**：`domain/schedule.py` / `domain/emotion.py` / `domain/memory.py`。
+**已经实现（本批次）**：`domain/schedule.py` / `domain/emotion.py` / `domain/memory.py`
+/ `domain/consolidation.py`（纯函数）与 `sim/consolidation.py`（编排）。
 
 ### 6.9.1 只有查询才需要的类型
 
@@ -1236,12 +1332,13 @@ class MemoryRepository(Protocol):
     def save_many(self, memories: list[Memory]) -> None: ...
     def get(self, memory_id: str) -> Memory | None: ...
     def search_fts(self, query: str, persona_id: str, limit: int = 50) -> list[MemorySearchHit]: ...
-    def list_recent(self, persona_id: str, since: datetime, *, kind: str | None = None,
+    def list_recent(self, persona_id: str, *, since: datetime, kind: str | None = None,
                     not_consolidated: bool = False, limit: int = 100) -> list[Memory]: ...
     def update_strength(self, updates: list[tuple[str, float]]) -> None: ...
     def mark_recalled(self, memory_ids: list[str], at: datetime) -> None: ...
     def mark_forgotten(self, memory_ids: list[str]) -> None: ...
-    def mark_consolidated(self, memory_ids: list[str]) -> None: ...
+    def mark_consolidated(self, memory_ids: list[str], at: datetime) -> None: ...
+    def set_importance(self, updates: list[tuple[str, float]]) -> None: ...
     def stats(self, persona_id: str) -> MemoryStats: ...
 
 class RelationshipRepository(Protocol):
@@ -1262,6 +1359,9 @@ class ActivityRepository(Protocol):
     def list_range(self, persona_id: str, start: datetime, end: datetime,
                    *, outbound_only: bool = False) -> list[Activity]: ...
     def suppressed_only(self, persona_id: str, limit: int = 50) -> list[Activity]: ...
+    def list_undistilled(self, persona_id: str, *, since: datetime,
+                         limit: int = 200) -> list[ActivityRecord]: ...
+    def mark_distilled(self, activity_ids: list[str], at: datetime) -> None: ...
 
 class PostRepository(Protocol):
     def save(self, post: SocialPost) -> None: ...
@@ -1306,6 +1406,19 @@ class BudgetRepository(Protocol):
 - 所有写操作在调用方的 `with storage.transaction():` 内执行时会被合并为单事务
 - Repository 实现不得包含业务逻辑（如「重要度如何计算」属于领域层）
 
+**上面是完整愿景，不是当前进度。** 到 v0.4.0 为止真正落地的是两个：
+
+| 接口 | 住哪 | 谁在用 |
+| --- | --- | --- |
+| `MemoryRepository` | `src/alterego/interfaces/repository.py` 定义形状，`storage/sqlite/repositories.py` 实现 | `alterego memory`、检索 |
+| `ActivityRepository` | 同上 | `alterego memory distill`、`alterego db` |
+
+两者都**只做「一行 ↔ 一个对象」**：没有衰减计算、没有「重要度该不该降」的判断，
+那些在 `domain/` 里。判断「哪些还没被梳理过」是例外——它是查询，
+不是业务规则，所以 `not_consolidated` / `list_undistilled` 落在仓储上。
+
+其余接口等到有真实调用方时再实现。**先写实现再找用处的接口，形状一定是错的。**
+
 ---
 
 ## 8. 迁移机制
@@ -1317,7 +1430,8 @@ src/alterego/storage/sqlite/migrations/
 ├── 001_initial.sql          # 表 1–20：人格、世界、记忆、会话、推演、事件流、预算
 ├── 002_media.sql            # 表 21–22：图片资产与生图计量
 ├── 003_sources.sql          # 表 23–25：外部信息来源
-└── 004_observability.sql    # 表 26：结构化日志 + 3 处补列 + 2 个视图
+├── 004_observability.sql    # 表 26：结构化日志 + 3 处补列 + 2 个视图
+└── 005_memory_consolidation.sql   # 2 处补列 + 2 个部分索引（见 § 3.4）
 ```
 
 命名规范：`NNN_description.sql`，`NNN` 为三位数字，**严格递增且不许跳号**。

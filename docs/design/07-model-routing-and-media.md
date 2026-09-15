@@ -485,6 +485,40 @@ reflection = { daily_usd_limit = 0.50 }
 
 ## 9. 配置参考
 
+> **本节写的是目标形状，不是当前实现。** 到 v0.4.0 为止只有**两层**：
+> `[llm.providers.<名字>]` 与 `[llm.routing]`，`routing` 的值直接落在
+> 「档位」或「供应商名」上。`[llm.models.*]` 别名层、顶层 `[budget]`
+> 与 `[media]` 都还没实现（见 § 3.1 的迁移计划）。
+>
+> 已经能跑的两层长这样（`templates/alterego.toml` 里的真实内容）：
+>
+> ```toml
+> [llm]
+> default_provider = "openai_compatible"
+> timeout_seconds = 60
+> max_retries = 3                 # 每次调用最多重试几次，退避 0.5s → 1s → 2s → … 上限 8s
+>
+> [llm.routing]
+> strong = "openai_compatible"    # 档位 → 供应商名：两边必须对得上
+> cheap  = "openai_compatible"    # 对不上时命令停下来点名，不默默降级
+> decision  = "strong"            # 用途 → 档位；用途也可以直接写供应商名
+> expression = "strong"
+> reflection = "cheap"
+> npc        = "cheap"
+> persona    = "strong"
+> memory     = "cheap"            # 记忆梳理（distill 与 consolidate）走这一档
+>
+> [llm.providers.openai_compatible]
+> base_url = "https://api.openai.com/v1"
+> api_key_env = "OPENAI_API_KEY"  # 密钥本身不写在这里
+> model = "gpt-4o-mini"
+> ```
+>
+> **`distill` 与 `consolidate` 没有各自的用途键**，两者都走 `memory`。
+> 理由：它们是同一件事（把素材整理成文字）的两个入口，用两个键只会让
+> 「换一个便宜的模型来省钱」这件事要多改一处。
+> 等真的需要分别调参时再加，那时也就知道该调什么了。
+
 ```toml
 # ── 供应商 ──
 [llm.providers.deepseek]
@@ -573,3 +607,4 @@ max_images_per_day = 20
 | 日期 | 版本 | 变更 | 作者 |
 | --- | --- | --- | --- |
 | 2026-09-15 | v0.1.0 | 初稿：三层配置模型、`image` 插件类型、三层一致性机制与 80% 验收阈值、`media_usage` 与 `v_cost_daily` | LMG-arch |
+| 2026-09-15 | v0.4.0 | 补记**已落地**的两层形状：`[llm.providers.<名字>]` + `[llm.routing]`（值落在档位或供应商名上）；`memory` 用途同时服务 `distill` 与 `consolidate`；网关的重试退避与「每次尝试都记账」；`core.user_name` | LMG-arch |

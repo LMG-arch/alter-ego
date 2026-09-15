@@ -225,13 +225,15 @@ check_forbidden \
 #               是同一件事。组装根引用具体实现是架构允许的，不是漏洞。
 #   cli_db.py   同一件事的延伸：`alterego db` 那几个维护命令住在这里。
 #               它是因为 cli.py 撞上 900 行上限才拆出去的，职责没变。
+#   cli_memory.py  同理，`alterego memory` 的两条梳理命令。
+#               组装根多几个不要紧——要紧的是**别再冒出第四个地方**。
 #   storage/    实现自己。`backend.py` / `migrator.py` 当然要互相 import。
 check_forbidden_excluding \
     "sqlite 实现只被组装根与存储层引用" \
     "from alterego\.storage\.sqlite|import alterego\.storage\.sqlite" \
     "$SRC" \
-    "cli(_db)?\.py:|/storage/" \
-    "除 cli.py / cli_db.py（组装根）与 storage/ 之外，一律通过 StorageBackend Protocol 访问。想要具体实现，让组装根构造好再传进来。"
+    "cli(_db|_memory)?\.py:|/storage/" \
+    "除 cli.py / cli_db.py / cli_memory.py（组装根）与 storage/ 之外，一律通过 StorageBackend Protocol 访问。想要具体实现，让组装根构造好再传进来。"
 
 check_forbidden \
     "sim/ 不直接依赖具体 LLM 客户端" \

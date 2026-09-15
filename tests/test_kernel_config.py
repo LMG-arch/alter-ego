@@ -214,6 +214,13 @@ def test_config_for_unknown_plugin_is_empty() -> None:
     assert Config.load().plugins.config_for("nope.plugin") == {}
 
 
+def test_the_name_it_calls_you_by_is_configurable() -> None:
+    """提示词里不写「用户」而写它给你起的名字——所以这个值不能是空的。"""
+    assert Config.load().core.user_name == "你"
+    config = Config.load(overrides={"core": {"user_name": "小满"}})
+    assert config.core.user_name == "小满"
+
+
 # ═══════════════════════════════════════════════════════════════════════
 #  校验
 # ═══════════════════════════════════════════════════════════════════════
@@ -224,6 +231,7 @@ def test_config_for_unknown_plugin_is_empty() -> None:
     [
         pytest.param({"core": {"log_level": "VERBOSE"}}, id="log_level"),
         pytest.param({"core": {"timezone": "Not/AZone"}}, id="timezone"),
+        pytest.param({"core": {"user_name": "   "}}, id="user_name_blank"),
         pytest.param({"simulation": {"mode": "warpspeed"}}, id="mode"),
         pytest.param({"simulation": {"tick_interval_minutes": 0}}, id="tick_interval_zero"),
         pytest.param(
@@ -252,6 +260,42 @@ def test_invalid_values_are_rejected_at_build_time(overrides: dict[str, object])
     with pytest.raises(ConfigError) as excinfo:
         Config.load(env={}, overrides=overrides)
     assert excinfo.value.code == "config_error"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        pytest.param({"simulation": 3}, "配置段必须是表", id="section_is_a_scalar"),
+        pytest.param({"core": {"log_level": 1}}, "期望字符串", id="string"),
+        pytest.param({"core": {"user_name": 7}}, "期望字符串", id="user_name"),
+        pytest.param({"simulation": {"tick_interval_minutes": "soon"}}, "期望整数", id="integer"),
+        pytest.param({"llm": {"budget": {"monthly_usd_limit": "一分钱"}}}, "期望数字", id="number"),
+        pytest.param({"web": {"enabled": "maybe"}}, "期望布尔值", id="boolean"),
+        pytest.param(
+            {"disturb_budget": {"quiet_hours": ["深夜", "08:00"]}}, "期望 HH:MM", id="time"
+        ),
+    ],
+)
+def test_a_wrong_type_is_named_at_build_time(overrides: dict[str, object], message: str) -> None:
+    """类型写错要当场点名——拖到推演中途才 TypeError 就没人知道是哪一行配置。"""
+    with pytest.raises(ConfigError) as excinfo:
+        Config.load(env={}, overrides=overrides)
+
+    assert message in str(excinfo.value)
+
+
+def test_a_boolean_written_as_a_string_is_still_accepted() -> None:
+    """环境变量全是字符串：``ALTEREGO_WEB__ENABLED=false`` 得能认出来。"""
+    config = Config.load(env={"ALTEREGO_WEB__ENABLED": "false"})
+
+    assert config.web.enabled is False
+
+
+def test_a_seed_of_none_means_every_run_differs() -> None:
+    """``random_seed = null`` 是「不复现」的显式写法，不能被当成「没写」。"""
+    config = Config.load(env={}, overrides={"core": {"random_seed": None}})
+
+    assert config.core.random_seed is None
 
 
 def test_localhost_without_auth_is_allowed() -> None:

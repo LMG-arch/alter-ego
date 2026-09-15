@@ -150,6 +150,7 @@ class CoreConfig:
     log_level: str
     locale: str
     timezone: str
+    user_name: str          # 它对你的称呼（见下表）
     random_seed: int | None
 
 @dataclass(frozen=True)
@@ -210,6 +211,17 @@ dataclass 默认值  →  alterego/defaults.toml  →  config/alterego.toml
 | 用户命名的段 | `[channels.<id>]` → `channels.options`、`[llm.<name>]` → `llm.providers`、`[plugins.config."<id>"]` → `plugins.config`（自动折叠） |
 | 未知键 | 只记录进 `Config.unknown_keys` 并告警，不失败——插件可能需要它们（P4） |
 | 权威参考 | `templates/alterego.toml` 必须覆盖所有键，测试断言其 `unknown_keys == ()` |
+
+**`core.user_name` 是给提示词用的，不是给日志用的。** 它的值会直接出现在
+`chat_reply` / `reach_out` / `memory_consolidate` 这些模板里，取代以往写死的
+「用户」二字——「用户」是产品经理的词，不是一个人称呼另一个人的词。
+默认值 `"你"` 就是这个原因：即使什么都不配，读起来也像人在说话。
+校验只要求非空白：写 `"小满"` 行，写 `"你"` 也行，写 `"   "` 会被启动时拒绝。
+
+> 配置值的类型错误（`log_level = 1`、`timeout_seconds = "soon"`）由
+> `kernel/config_values.py` 负责点名，报错里带键名与原值。
+> 它与 `config.py` 分家，是因为「读哪个文件、合并哪几层」和
+> 「这个值该是 int 还是 str」是两件互不相关的事，也是两个独立的改动理由。
 
 ### 2.3 `bus.py` — 事件总线
 

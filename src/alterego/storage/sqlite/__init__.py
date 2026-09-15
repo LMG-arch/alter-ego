@@ -4,7 +4,8 @@
 且 Python 标准库就能用（设计原则 P5：标准库优先）。
 代价与边界见 docs/adr/0003-sqlite-as-sole-storage-backend.md。
 
-⚠️ 本目录的代码只被两处引用：**组装根**（``cli.py`` / ``cli_db.py``）与存储层自己。
+⚠️ 本目录的代码只被两处引用：**组装根**（``cli.py`` / ``cli_db.py`` /
+``cli_memory.py``）与存储层自己。
 其余代码一律通过 `StorageBackend` Protocol 访问，不得 `import alterego.storage.sqlite`——
 包括 `sim/`，也包括将来会写在外面的每一个 Repository。
 这条已由 `scripts/check_architecture.sh` 第 3 组红线覆盖整个 `src/`。
@@ -19,7 +20,21 @@
 from __future__ import annotations
 
 from alterego.storage.sqlite.backend import MIN_COMPATIBLE_VERSION, SqliteStorageBackend
+from alterego.storage.sqlite.connection import SqliteConnection
 from alterego.storage.sqlite.migrator import MigrationPlan
+from alterego.storage.sqlite.repositories import (
+    SqliteActivityRepository,
+    SqliteMemoryRepository,
+    SqliteUsageRepository,
+)
 
 
-__all__ = ["MIN_COMPATIBLE_VERSION", "MigrationPlan", "SqliteStorageBackend"]
+__all__ = [
+    "MIN_COMPATIBLE_VERSION",
+    "MigrationPlan",
+    "SqliteActivityRepository",
+    "SqliteConnection",
+    "SqliteMemoryRepository",
+    "SqliteStorageBackend",
+    "SqliteUsageRepository",
+]

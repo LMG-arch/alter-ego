@@ -32,6 +32,8 @@ log_level = "INFO"                  # DEBUG | INFO | WARNING | ERROR
 log_format = "console"              # console（人读）| json（机器读）
 locale = "zh_CN"                    # 影响日期、星期、数字的显示
 timezone = "Asia/Shanghai"          # 所有存储时间都带此时区偏移
+user_name = "你"                     # 它对你的称呼。提示词里用它，而不是「用户」
+                                     # 这一版还没有用户档案，只能从这里拿
 random_seed = 42                    # 推演随机种子；留空则每次启动随机
                                     # ⚠️ 固定种子 = 可复现推演（P6）
 
@@ -116,6 +118,20 @@ on_exceed = "degrade"               # degrade | stop | warn
                                     #   stop   ：停用所有 LLM 阶段
                                     #   warn   ：只告警不限制（调试用）
                                     # 见 04-simulation-loop.md § 10.4
+
+# ───────────────────────────────────────────────────────────────────────────
+#  [llm.providers.<名字>]  供应商细节
+#
+#  [llm.routing] 里的值就是指向这些段的名字——两边必须对得上，
+#  对不上时命令会停下来并告诉你差哪一个，而不是默默降级。
+#
+#  ⚠️ 密钥本身**不写在这里**，这里只写「去哪个环境变量拿」。
+#     配置文件经常被提交、被传阅、被贴进 issue。
+# ───────────────────────────────────────────────────────────────────────────
+[llm.providers.openai_compatible]
+base_url = "https://api.openai.com/v1"   # 任何 OpenAI 兼容端点都行（含本地 vLLM / Ollama）
+api_key_env = "OPENAI_API_KEY"           # 从哪个环境变量读密钥
+model = "gpt-4o-mini"                    # ⚠️ 换成你自己有的那个模型名
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  [persona]  人设

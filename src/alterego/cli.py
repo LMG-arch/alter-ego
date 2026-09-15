@@ -1,7 +1,8 @@
 """命令行入口。
 
 完整命令树见 ``docs/design/05-channels.md`` § 8。当前实现到「能启动、能报版本、
-能查节日日历、能记生日」——后续每加一个功能就多一个子命令，而不是一次性写完再调。
+能查节日日历、能记生日、能维护数据库、能梳理记忆」——后续每加一个功能就多一个
+子命令，而不是一次性写完再调。
 
 退出码约定（``docs/design/01-architecture.md`` § 6.3）::
 
@@ -14,11 +15,16 @@
 关于输出：统一走 ``alterego.cli_io`` 里的 ``_out`` / ``_err``。为什么不用
 ``print``、为什么把它们单独放一个模块，那里写着。
 
-关于分层：**组装根**（composition root）有两个文件——本文件与 ``cli_db.py``。
-``db`` 那几个命令会挑一个具体的存储实现装上，那部分住在 ``cli_db.py``
-（它是因为本文件撞上「单文件 ≤ 900 行」才拆出去的）；本文件只留参数树
-与其余命令组。整个程序里只有这两个文件知道「存储用的是 SQLite」，
-其余代码一律只认 ``StorageBackend`` Protocol。
+关于分层：**组装根**（composition root）有三个文件——
+
+- 本文件：参数树，以及不认识任何具体实现的命令组；
+- ``cli_db.py``：``alterego db`` 那几个维护命令；
+- ``cli_memory.py``：``alterego memory`` 的两条梳理命令。
+
+后两个都要挑一个具体的存储实现（``cli_memory.py`` 还要挑一个具体的模型供应商）
+装上。它们从这里拆出去，一半是因为本文件撞上 `AGENTS.md` § 5 的 900 行上限，
+另一半是因为「谁认识 SQLite」这件事越窄越好查。整个程序里只有这三个文件知道
+「存储用的是 SQLite」，其余代码一律只认 ``StorageBackend`` Protocol。
 ``scripts/check_architecture.sh`` 第 3 组红线把这件事钉住了。
 """
 
@@ -38,6 +44,7 @@ from alterego.cli_db import (
     cmd_db_status,
 )
 from alterego.cli_io import _RULE, _err, _out, _pad
+from alterego.cli_memory import add_memory_parser
 from alterego.domain.birthday import (
     DEFAULT_AFTERMATH_DAYS,
     DEFAULT_LEAD_DAYS,
@@ -605,6 +612,8 @@ def build_parser() -> argparse.ArgumentParser:
     db_restore = db_commands.add_parser("restore", help="从备份恢复（会覆盖现在的库）")
     db_restore.add_argument("file", metavar="FILE", help="要恢复的备份文件")
     db_restore.set_defaults(handler=cmd_db_restore)
+
+    add_memory_parser(commands)
 
     return parser
 

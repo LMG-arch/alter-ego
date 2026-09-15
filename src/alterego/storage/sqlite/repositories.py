@@ -1,0 +1,401 @@
+"""SQLite 仓储实现：记忆、行为日志、用量账本。
+
+三张表、三个类。**这里只做「一行 ↔ 一个对象」**：SQL、JSON 序列化、
+往返映射都在这里；业务规则（重要度怎么衰减、什么时候该降权）在 `domain/`
+（见 `docs/design/03-data-model.md` § 6.9）。
+
+两条实现约定：
+
+**不 BEGIN。** 这里一次都不开事务。调用方在 ``with backend.transaction():``
+里连着调几个写方法，靠 :class:`~alterego.storage.sqlite.connection.SqliteConnection`
+的嵌套事务合并成一个。这很重要——一次记忆巩固要先写新记忆、再给旧记忆降权，
+两步分开提交会在中间态上留下一份「新记忆有了、旧记忆还没降权」的库。
+
+**``SELECT *`` + 按列名取值。** 不写死列顺序：``005`` 之后又加过列，
+而按位置取值的那份代码不会报错，它只会把 ``location`` 读成 ``inner_voice``。
+
+依据: docs/design/03-data-model.md § 7
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import uuid
+from collections.abc import Iterator, Sequence
+from datetime import UTC, datetime
+from typing import Any, cast
+
+from alterego.domain.memory import Memory, MemoryKind, MemorySource
+from alterego.interfaces.llm import LLMUsage
+from alterego.interfaces.repository import ActivityRecord
+from alterego.kernel.errors import IntegrityError, StorageError
+from alterego.storage.sqlite.connection import SqliteConnection
+
+
+__all__ = [
+    "SqliteActivityRepository",
+    "SqliteMemoryRepository",
+    "SqliteUsageRepository",
+]
+
+
+#: 一条 SQL 里最多绑多少个参数。
+#:
+#: SQLite 的变量上限是编译期常量（新版默认三万多，老版 999）。分块比赌
+#: 「这个库够新」便宜：一次梳理可能有几百条行为，跨过上限时 SQLite 抛的
+#: 是「too many SQL variables」——那是个跟问题原因毫无关系的报错。
+_PARAM_CHUNK: int = 500
+
+_MEMORY_INSERT = """
+INSERT INTO memory (
+    id, persona_id, kind, content, summary, importance, strength, valence,
+    entities_json, tags_json, source, source_ref, occurred_at,
+    last_recalled_at, recall_count, forgotten, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+_ACTIVITY_SELECT = """
+SELECT * FROM activity_log
+WHERE persona_id = ?
+  AND distilled_at IS NULL
+  AND started_at >= ?
+ORDER BY started_at ASC, id ASC
+LIMIT ?
+"""
+
+_LLM_USAGE_INSERT = """
+INSERT INTO llm_usage (
+    id, persona_id, tick_id, purpose, tier, provider_id, model,
+    prompt_tokens, completion_tokens, total_tokens, latency_ms,
+    cost_usd, cache_hit, retry_count, success, error, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+
+# ── 时间与 JSON 的往返 ──────────────────────────────────────
+
+
+def _now_iso() -> str:
+    """墙上时间。**账单用它，推演不用它。**"""
+    return datetime.now(UTC).astimezone().isoformat(timespec="seconds")
+
+
+def _format_dt(value: datetime) -> str:
+    """时间 → 库里的 TEXT。
+
+    保留原来的时区偏移：虚拟时间带着它所在时区的偏移，
+    换算成 UTC 会让「他昨晚几点睡」这句话在数据库里读不出来。
+    同一台机器上的偏移是固定的，所以字符串序仍然是时间序。
+    """
+    return value.isoformat()
+
+
+def _parse_dt(value: Any) -> datetime | None:
+    """库里的 TEXT → 时间。`None` 原样返回。"""
+    if value is None or value == "":
+        return None
+    text = str(value)
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise StorageError("时间字段不是合法的 ISO 格式", value=text) from exc
+
+
+def _require_dt(value: Any, *, column: str) -> datetime:
+    parsed = _parse_dt(value)
+    if parsed is None:
+        raise StorageError("必填的时间字段是空的", column=column)
+    return parsed
+
+
+def _load_str_list(raw: Any) -> list[str]:
+    """``*_json`` 列 → 字符串列表。
+
+    库里写了 ``CHECK (json_valid(...))``，所以解析失败意味着有人绕过
+    SQLite 改了库。这时应该报出来，而不是当成空列表悄悄继续。
+    """
+    try:
+        loaded = json.loads(str(raw))
+    except json.JSONDecodeError as exc:
+        raise StorageError("JSON 列解析失败", value=str(raw)) from exc
+    if not isinstance(loaded, list):
+        raise StorageError("JSON 列不是数组", value=str(raw))
+    return [str(item) for item in loaded]
+
+
+def _dump_json(items: Sequence[str]) -> str:
+    """字符串列表 → JSON。``ensure_ascii=False`` 让人直接读库也能看懂。"""
+    return json.dumps(list(items), ensure_ascii=False)
+
+
+def _chunks(items: Sequence[str], size: int) -> Iterator[Sequence[str]]:
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
+
+
+def _placeholders(count: int) -> str:
+    return ", ".join("?" * count)
+
+
+# ── 记忆 ────────────────────────────────────────────────────
+
+
+def _memory_params(memory: Memory) -> tuple[Any, ...]:
+    """把一条 :class:`Memory` 摊成 INSERT 的参数。
+
+    两个必填字段在这里校验而不是在 :meth:`SqliteMemoryRepository.save` 里，
+    是为了只写一遍——顺便让类型检查器也能看见 ``created_at`` 不是 `None`。
+    """
+    if not memory.id:
+        raise StorageError(
+            "记忆缺少 id",
+            hint="id 由调用方生成。仓储不替它编一个——"
+            "否则「同一批巩固跑了两遍」会变成两条看不出区别的记忆。",
+        )
+    created_at = memory.created_at
+    if created_at is None:
+        raise StorageError(
+            "记忆缺少 created_at",
+            memory_id=memory.id,
+            hint="created_at 是记账时间，不是发生时间；传虚拟时间。",
+        )
+
+    return (
+        memory.id,
+        memory.persona_id,
+        memory.kind,
+        memory.content,
+        memory.summary,
+        float(memory.importance),
+        float(memory.strength),
+        float(memory.valence),
+        _dump_json(memory.entities),
+        _dump_json(memory.tags),
+        memory.source,
+        memory.source_ref,
+        _format_dt(memory.occurred_at),
+        _format_dt(memory.last_recalled_at) if memory.last_recalled_at else None,
+        int(memory.recall_count),
+        1 if memory.forgotten else 0,
+        _format_dt(created_at),
+    )
+
+
+def _row_to_memory(row: sqlite3.Row) -> Memory:
+    """一行 → 一条记忆。
+
+    ``kind`` / ``source`` 在库里是普通 TEXT（DDL 里没写 CHECK，取值清单
+    由领域层持有），所以要 cast 一次；取值非法时 ``Memory.__post_init__``
+    自己会抛 —— 让领域层当唯一的裁判，不在这里再抄一份清单。
+    """
+    return Memory(
+        id=str(row["id"]),
+        persona_id=str(row["persona_id"]),
+        kind=cast("MemoryKind", row["kind"]),
+        content=str(row["content"]),
+        summary=str(row["summary"]),
+        importance=float(row["importance"]),
+        strength=float(row["strength"]),
+        valence=float(row["valence"]),
+        entities=tuple(_load_str_list(row["entities_json"])),
+        tags=tuple(_load_str_list(row["tags_json"])),
+        source=cast("MemorySource", row["source"]),
+        source_ref=row["source_ref"],
+        occurred_at=_require_dt(row["occurred_at"], column="occurred_at"),
+        last_recalled_at=_parse_dt(row["last_recalled_at"]),
+        recall_count=int(row["recall_count"]),
+        forgotten=bool(row["forgotten"]),
+        created_at=_parse_dt(row["created_at"]),
+    )
+
+
+class SqliteMemoryRepository:
+    """:class:`~alterego.interfaces.repository.MemoryRepository` 的 SQLite 实现。"""
+
+    __slots__ = ("_conn",)
+
+    def __init__(self, conn: SqliteConnection) -> None:
+        self._conn = conn
+
+    def save(self, memory: Memory) -> None:
+        try:
+            self._conn.execute(_MEMORY_INSERT, _memory_params(memory))
+        except IntegrityError as exc:
+            # 抓的是 kernel 的 ``IntegrityError``，不是 ``sqlite3.IntegrityError``——
+            # 连接层已经把后者换掉了。抓错类的那段 ``except`` 永远不会命中，
+            # 而它看起来又很像在工作。
+            raise IntegrityError(
+                "写入记忆失败",
+                memory_id=memory.id,
+                hint="主键冲突通常意味着同一条记忆被写了两遍。",
+                **exc.context,
+            ) from exc
+
+    def save_many(self, memories: Sequence[Memory]) -> None:
+        """逐条 INSERT。
+
+        没用 ``executemany``：一次巩固最多产出十条，省下的那点时间买不到
+        「哪一条写坏了」这个信息——``executemany`` 只会告诉你「有一批坏了」。
+        """
+        for memory in memories:
+            self.save(memory)
+
+    def get(self, memory_id: str) -> Memory | None:
+        row = self._conn.query_one("SELECT * FROM memory WHERE id = ?", (memory_id,))
+        return None if row is None else _row_to_memory(row)
+
+    def list_recent(
+        self,
+        persona_id: str,
+        *,
+        since: datetime,
+        kind: MemoryKind | None = None,
+        not_consolidated: bool = False,
+        limit: int = 100,
+    ) -> list[Memory]:
+        sql = """
+            SELECT * FROM memory
+            WHERE persona_id = ?
+              AND occurred_at >= ?
+        """
+        params: list[Any] = [persona_id, _format_dt(since)]
+        if kind is not None:
+            sql += " AND kind = ?"
+            params.append(kind)
+        if not_consolidated:
+            sql += " AND consolidated_at IS NULL"
+        # 时间相同时按 id 排：不这么做，同一秒里的两条记忆顺序由 SQLite 决定，
+        # 提示词每次都不一样，输出也跟着飘（P6）。
+        sql += " ORDER BY occurred_at ASC, id ASC LIMIT ?"
+        params.append(int(limit))
+
+        return [_row_to_memory(row) for row in self._conn.query(sql, params)]
+
+    def mark_consolidated(self, memory_ids: Sequence[str], at: datetime) -> None:
+        """给这批记忆盖上巩固时间戳。
+
+        只更新 ``consolidated_at``，**不碰 content / summary / tags_json**——
+        所以 ``trg_memory_au`` 不会触发，FTS 索引不受影响。这是刻意的：
+        巩固不改变记忆的文字，只改变它在时间里的位置。
+        """
+        stamp = _format_dt(at)
+        for chunk in _chunks(memory_ids, _PARAM_CHUNK):
+            self._conn.execute(
+                f"UPDATE memory SET consolidated_at = ? WHERE id IN ({_placeholders(len(chunk))})",
+                (stamp, *chunk),
+            )
+
+    def set_importance(self, updates: Sequence[tuple[str, float]]) -> None:
+        """批量改重要度。新值由 ``domain.apply_consolidation()`` 算好传进来。"""
+        if not updates:
+            return
+        self._conn.raw.executemany(
+            "UPDATE memory SET importance = ? WHERE id = ?",
+            [(float(value), memory_id) for memory_id, value in updates],
+        )
+
+
+# ── 行为日志 ────────────────────────────────────────────────
+
+
+def _row_to_activity(row: sqlite3.Row) -> ActivityRecord:
+    return ActivityRecord(
+        id=str(row["id"]),
+        intent=str(row["intent"]),
+        description=str(row["description"]),
+        started_at=_require_dt(row["started_at"], column="started_at"),
+        category=str(row["category"] or ""),
+        location=str(row["location"] or ""),
+        inner_voice=str(row["inner_voice"] or ""),
+        duration_minutes=int(row["duration_minutes"] or 0),
+    )
+
+
+class SqliteActivityRepository:
+    """:class:`~alterego.interfaces.repository.ActivityRepository` 的 SQLite 实现。"""
+
+    __slots__ = ("_conn",)
+
+    def __init__(self, conn: SqliteConnection) -> None:
+        self._conn = conn
+
+    def list_undistilled(
+        self,
+        persona_id: str,
+        *,
+        since: datetime,
+        limit: int = 200,
+    ) -> list[ActivityRecord]:
+        rows = self._conn.query(
+            _ACTIVITY_SELECT,
+            (persona_id, _format_dt(since), int(limit)),
+        )
+        return [_row_to_activity(row) for row in rows]
+
+    def mark_distilled(self, activity_ids: Sequence[str], at: datetime) -> None:
+        stamp = _format_dt(at)
+        for chunk in _chunks(activity_ids, _PARAM_CHUNK):
+            self._conn.execute(
+                "UPDATE activity_log SET distilled_at = ? "
+                f"WHERE id IN ({_placeholders(len(chunk))})",
+                (stamp, *chunk),
+            )
+
+
+# ── 用量账本 ────────────────────────────────────────────────
+
+
+class SqliteUsageRepository:
+    """把 :class:`~alterego.interfaces.llm.LLMUsage` 写进 ``llm_usage``。
+
+    结构上满足 :class:`~alterego.interfaces.llm.UsageSink`，所以网关不需要
+    认识这个类名，也不必 import 存储层。
+
+    ``persona_id`` 与 ``tick_id`` 在**构造时**绑定，因为一次 tick 造一个 sink，
+    而 ``record()`` 的签名里没有位置放它们。
+
+    ``cost_usd`` 目前恒为 0：本项目还没有价目表，记一个猜出来的数字比记 0
+    更糟——猜的数字会被当真。
+    """
+
+    __slots__ = ("_conn", "_persona_id", "_tick_id")
+
+    def __init__(
+        self, conn: SqliteConnection, *, persona_id: str, tick_id: str | None = None
+    ) -> None:
+        self._conn = conn
+        self._persona_id = persona_id
+        self._tick_id = tick_id
+
+    def record(self, usage: LLMUsage) -> None:
+        self.record_many([usage])
+
+    def record_many(self, usages: list[LLMUsage]) -> None:
+        if not usages:
+            return
+        self._conn.raw.executemany(
+            _LLM_USAGE_INSERT,
+            [self._params(usage) for usage in usages],
+        )
+
+    def _params(self, usage: LLMUsage) -> tuple[Any, ...]:
+        return (
+            uuid.uuid4().hex,
+            self._persona_id,
+            self._tick_id,
+            usage.purpose,
+            usage.tier,
+            usage.provider_id,
+            usage.model,
+            int(usage.prompt_tokens),
+            int(usage.completion_tokens),
+            int(usage.total_tokens),
+            int(usage.latency_ms),
+            0.0,  # cost_usd：见类文档
+            0,  # cache_hit：本批次还没有缓存层
+            int(usage.retry_count),
+            1 if usage.success else 0,
+            usage.error,
+            _format_dt(usage.at) if usage.at is not None else _now_iso(),
+        )

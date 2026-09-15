@@ -29,10 +29,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from datetime import time
 from pathlib import Path
-from types import UnionType
-from typing import Any, Literal, cast, get_args, get_origin, get_type_hints
+from typing import Any, Literal, cast, get_args
 
 from alterego.kernel.clock import resolve_timezone
+from alterego.kernel.config_values import build_section
 from alterego.kernel.errors import ConfigError
 
 
@@ -99,6 +99,9 @@ class CoreConfig:
     log_format: Literal["console", "json"] = "console"
     locale: str = "zh_CN"
     timezone: str = "Asia/Shanghai"
+    #: 它对你的称呼。提示词里用它，而不是「用户」——
+    #: 「用户」是产品经理的词，不是一个人称呼另一个人的词。
+    user_name: str = "你"
     #: 固定种子 = 可复现推演（P6）。``None`` 表示每次启动随机。
     random_seed: int | None = 42
 
@@ -109,6 +112,11 @@ class CoreConfig:
                 "log_level 非法",
                 log_level=self.log_level,
                 supported=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+            )
+        if not self.user_name.strip():
+            raise ConfigError(
+                "user_name 不能是空白",
+                hint="它是它对你的称呼；写「你」也行，但不能空着。",
             )
         # 提前解析一次：时区写错是最常见的配置错误，必须在启动时就暴露
         resolve_timezone(self.timezone)
@@ -528,7 +536,7 @@ class Config:
         merged = _resolve_env_references(merged, environ)
 
         known, unknown = _split_known(merged, cls)
-        config = _build(cls, known)
+        config = build_section(cls, known)
         return _replace(config, source=source, unknown_keys=tuple(unknown))
 
     # ── 派生路径 ────────────────────────────────────────────
@@ -762,114 +770,6 @@ def _split_known(merged: Mapping[str, Any], cls: type[Any]) -> tuple[dict[str, A
 
 def _field_names(cls: type[Any]) -> frozenset[str]:
     return frozenset(f.name for f in fields(cls))
-
-
-def _build(cls: type[Any], data: Mapping[str, Any]) -> Any:
-    """按 dataclass 的字段类型递归构造，并做宽松类型转换。
-
-    「宽松」指的是 ``"3"`` → ``3`` 这种 TOML/环境变量带来的字符串，
-    而不是「错的东西也接受」——转换不了仍然报错。
-    """
-    hints = _type_hints(cls)
-    kwargs: dict[str, Any] = {}
-    for info in fields(cls):
-        if info.name not in data:
-            continue
-        kwargs[info.name] = _coerce(hints[info.name], data[info.name], info.name)
-    return cls(**kwargs)
-
-
-#: ``get_type_hints`` 很贵（要解析全部注解字符串），而配置类就那么几个。
-#: 刻意不用 ``functools.cache``：它的 ``Hashable`` 约束对 ``type[...]`` 不友好，
-#: 而这里一个普通 dict 就够——进程生命周期内不会失效。
-_TYPE_HINTS: dict[type[Any], dict[str, Any]] = {}
-
-
-def _type_hints(cls: type[Any]) -> dict[str, Any]:
-    """取解析后的字段类型（按类缓存）。
-
-    **必须走 ``get_type_hints``**：本模块用了 ``from __future__ import annotations``，
-    于是 ``fields(cls)[i].type`` 是字符串 ``"SimulationConfig"`` 而不是类对象，
-    直接拿它做 ``is_dataclass()`` 判断会一律失败，嵌套配置段就会悄悄退化成 dict。
-    这个坑是静默的：不报错，只是 ``cfg.simulation.mode`` 突然变成 ``dict``。
-    """
-    cached = _TYPE_HINTS.get(cls)
-    if cached is None:
-        cached = get_type_hints(cls)
-        _TYPE_HINTS[cls] = cached
-    return cached
-
-
-def _coerce(annotation: Any, value: Any, key: str) -> Any:
-    """把配置里的原始值变成目标类型。"""
-    origin = get_origin(annotation)
-    args = get_args(annotation)
-
-    if origin is Literal:
-        if value not in args:
-            raise ConfigError("取值不在允许范围内", key=key, value=value, supported=list(args))
-        return value
-
-    # ``int | None`` 这类可选值：None 原样保留，否则按非 None 的那一侧转换
-    if origin is UnionType:
-        inner_types = [arg for arg in args if arg is not type(None)]
-        if value is None or len(inner_types) != 1:
-            return value
-        return _coerce(inner_types[0], value, key)
-
-    if origin in (tuple, frozenset, list):
-        items = value if isinstance(value, (list, tuple)) else [value]
-        inner = args[0] if args else str
-        if origin is list:
-            return [_coerce(inner, item, key) for item in items]
-        return origin(_coerce(inner, item, key) for item in items)
-
-    if isinstance(annotation, type) and is_dataclass(annotation):
-        if not isinstance(value, Mapping):
-            raise ConfigError("配置段必须是表（table）", key=key, value=value)
-        return _build(annotation, value)
-
-    if origin is not None:
-        # 其他泛型（如 Mapping[str, Any]）：原样保留，由使用方自己解释
-        return value
-
-    return _cast_scalar(annotation, value, key)
-
-
-def _cast_scalar(annotation: Any, value: Any, key: str) -> Any:
-    """标量转换。``bool`` 必须显式判断，因为 ``isinstance(True, int)`` 为真。"""
-    if annotation is Path and isinstance(value, str):
-        return Path(value)
-    if annotation is bool:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str) and value.lower() in {"true", "false", "1", "0", "yes", "no"}:
-            return value.lower() in {"true", "1", "yes"}
-        raise ConfigError("期望布尔值", key=key, value=value)
-    if annotation is int and isinstance(value, (int, float, str)) and not isinstance(value, bool):
-        try:
-            return int(value)
-        except (TypeError, ValueError) as exc:
-            raise ConfigError("期望整数", key=key, value=value) from exc
-    if annotation is float and isinstance(value, (int, float, str)) and not isinstance(value, bool):
-        try:
-            return float(value)
-        except (TypeError, ValueError) as exc:
-            raise ConfigError("期望数字", key=key, value=value) from exc
-    if annotation is time and isinstance(value, str):
-        try:
-            hour, minute = value.split(":")[:2]
-            return time(int(hour), int(minute))
-        except ValueError as exc:
-            raise ConfigError(
-                "期望 HH:MM 形式的时间",
-                key=key,
-                value=value,
-                hint='例如 quiet_hours = ["23:30", "08:00"]',
-            ) from exc
-    if annotation is str and not isinstance(value, str):
-        raise ConfigError("期望字符串", key=key, value=value)
-    return value
 
 
 def _replace(config: Config, **changes: Any) -> Config:

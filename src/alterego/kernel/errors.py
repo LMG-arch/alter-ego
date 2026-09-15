@@ -45,12 +45,14 @@ __all__ = [
     "LLMRateLimitError",
     "LLMResponseError",
     "LLMTimeoutError",
+    "LLMTransportError",
     "MigrationError",
     "PluginDependencyError",
     "PluginError",
     "PluginLoadError",
     "PluginManifestError",
     "PluginRuntimeError",
+    "PromptError",
     "SimulationError",
     "StorageError",
     "TickAborted",
@@ -211,6 +213,30 @@ class LLMBudgetExceeded(LLMError):
     """
 
     code: ClassVar[str] = "llm_budget_exceeded"
+
+
+class LLMTransportError(LLMError):
+    """网络层失败：连不上、连接被切断、证书不行。可重试。
+
+    与 :class:`LLMTimeoutError` 分开计数是有用的：超时通常意味着
+    「这个模型太慢」，连不上通常意味着「地址或网络不对」——
+    前者该调小模型，后者该去改 ``base_url``。
+    两者的可重试性相同，但错误率报表上的含义完全不同。
+    """
+
+    code: ClassVar[str] = "llm_transport_error"
+    retryable: ClassVar[bool] = True
+
+
+class PromptError(LLMError):
+    """提示词模板缺失、为空，或与调用方给的参数对不上。
+
+    **不可重试**：它几乎总是代码问题（模板改了但调用方没跟），
+    重试一百次还是同一个错。抛在这里是为了让失败发生在
+    **发请求之前**——一次注定失败的调用也要按 token 付钱。
+    """
+
+    code: ClassVar[str] = "prompt_error"
 
 
 # ─────────────────────────────────────────────────────────────

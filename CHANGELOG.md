@@ -337,6 +337,47 @@
   `test_storage_backend.py`（+2）/ `test_storage_sqlite.py`（1 个改写）。
   覆盖率：`cli_db.py` 95.05%、`cli_io.py` 95.65%、全库 96.59%
 
+**让模型替你梳理（`alterego memory`，已实现）**
+
+记忆表建好了、衰减公式写好了、检索权重调好了——但**没有一条记忆是自己长出来的**。
+这一批补上「素材 → 记忆」这一步，两个动词共用一条流水线
+（读素材 → 渲染提示词 → 一次调用 → 严格解析 JSON → 落库）：
+
+- `alterego memory distill` —— 把这段时间**做过的事**（`activity_log`）
+  整理成新的记忆。它做过什么、心里怎么想的，此前只留在行为日志里，
+  第二天就查不出来了
+- `alterego memory consolidate` —— 把散落的**经历**归纳成新的认识。
+  读过三次关于「搬家」的琐事，该留下一条「阿哲要搬走了」的语义记忆，
+  而不是三条待检索的琐事
+- `domain/consolidation.py` —— 梳理的纯函数：`parse_memory_drafts`、
+  `extract_json_array`、`MemoryDraft`。**模型输出是外部输入**，
+  所以解析失败就整批丢弃（`MAX_ITEMS` 兜底），绝不半信半疑地入库
+- `sim/consolidation.py` —— 编排。`distill` 与 `consolidate` 的差别只在
+  「读哪张表、写完降不降权」，其余流程一字不差
+- `llm/gateway.py` + `llm/providers/openai_compatible.py` —— 第一次有代码
+  真的去调模型。用途分档（`[llm.routing]`）、失败重试（退避 0.5s → 1s → 2s，
+  上限 8s）、每次**尝试**都记一笔账（不是每次调用成功才记，
+  否则重试率这个指标会凭空消失）
+- `llm/prompts.py` + `src/alterego/prompts/memory_consolidate.md` —— 提示词
+  从代码里搬进文件，占位符两侧都校验：模板要的没给会报错，
+  给了模板用不上的也报错。少给一个 `{user_name}` 会安静地渲染成字面量，
+  这种错在生产里能藏很久
+- `interfaces/repository.py` —— `MemoryRepository` / `ActivityRepository` 契约。
+  **先写实现再找用处的接口，形状一定是错的**，所以这一批只定义了
+  真正被调用的那几个方法，其余留白
+- 迁移 `005_memory_consolidation.sql` —— `memory.consolidated_at` +
+  `activity_log.distilled_at`，各带一个部分索引。
+  用时间戳而不是布尔值：以后想知道「这条记忆是哪天被归纳出来的」时，
+  布尔值已经把它丢了。部分索引 `WHERE ... IS NULL` 还有额外好处——
+  它索引的是「还没处理的」，随着数据变多而变小
+- `core.user_name` —— 提示词里不再写「用户」。默认 `"你"`，
+  即使什么都不配，读起来也像人在说话
+- 测试新增 240 个（全库 1513 个）：`test_domain_consolidation.py` /
+  `test_sim_consolidation.py` / `test_llm_gateway.py` / `test_llm_providers.py` /
+  `test_llm_prompts.py` / `test_storage_repositories.py` / `test_cli_memory.py`。
+  覆盖率：`llm/gateway.py` 100%、`llm/prompts.py` 100%、`domain/memory.py` 100%、
+  `sim/consolidation.py` 98.44%、**全库 96.74%**
+
 ### 变更
 
 - **迁移文件从此只管 DDL**。四个 `.sql` 里没有任何 `PRAGMA` 头、没有 `IF NOT EXISTS`、
@@ -354,6 +395,14 @@
   `idx_log_correlation` 两种写法）
 - `docs/DESIGN.md § 9.1` 的版本口径修正：`PRAGMA user_version` 是版本真源
   （整数、不用建表就能读、空库上也能读），`schema_version` 表是**审计记录**
+- **配置值的类型构造搬进 `kernel/config_values.py`**（`config.py` 903 → 722 行）。
+  撞上 `AGENTS.md` § 5 的「单文件 ≤ 900 行」不假，但拆的边界不是「哪里长切哪里」：
+  「读哪个文件、合并哪几层」与「这个值该是 int 还是 str」是两件互不相关的事，
+  也是两个独立的改动理由。搬过去的是纯函数——不碰文件、不碰环境变量
+- **类型写错现在当场点名**（`_coerce` 的报错带键名与原值）：
+  `log_level = 1` → 「期望字符串」，`quiet_hours = ["深夜", "08:00"]` → 「期望 HH:MM」。
+  此前这类错误会拖到推演中途才变成 `TypeError`，那时已经没人知道是哪一行配置
+- `templates/alterego.toml` 补上 `user_name` 并修正一处注释里的多余空格
 
 - `[llm.budget]` 更名为 `[budget]`，新增 `max_images_per_day = 20` 与 `[budget.per_purpose]`。
   更名理由：闸门现在统管 LLM 与生图，挂在 `llm` 下名不副实
@@ -402,6 +451,22 @@
   回忆 1 次就翻倍（真实的复习效应是 `1 + 0.35 × recall_count`）
 
 ### 修复
+
+- **`_registry()` 用错了注册键**（`cli_memory.py`）。`ServiceRegistry` 是按
+  **接口类型**索引的，而这里拿具体的 provider 类当键。结果不是报错，
+  是注册成功、查询失败——一条需要读代码才能发现的路径
+- **`_fail()` 把同样的上下文打印了两遍**（`cli_memory.py`）。错一次要人看两遍
+- **`--dry-run` 也要求配好模型供应商**（`cli_memory.py`）。预演的全部意义就是
+  「先看看会怎么跑」，而它却在你还没填 `base_url` 时先失败了——
+  这等于把最需要预演的人挡在门外
+- **重试只记了最后一次的账**（`llm/gateway.py`）。原先只在调用最终成功时记一笔，
+  于是「重试率」这个指标永远读作 0，而重试恰恰是成本偷偷变高的地方。
+  现在**每次尝试都记**，成功与否都记
+- **一段永不执行的 `except`**（`storage/sqlite/repositories.py`）。
+  下层已经把 `sqlite3.IntegrityError` 翻译成了内核异常，
+  再捕获库自己的异常类就是死代码——它不报错，只是在需要它的那天不会生效
+- **`config.py` 的 903 行**（见「变更」）。文件大小上限是**被 CI 卡住的设计约束**，
+  不是建议值
 
 - **备份会互相抵消（静默数据丢失）**。`SqliteConnection.backup_to()` 在写之前执行
   `target.unlink()`——理由是 `VACUUM INTO` 拒绝写一个已存在的文件，

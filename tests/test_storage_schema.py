@@ -86,7 +86,11 @@ MIGRATION_FILES = (
     "002_media.sql",
     "003_sources.sql",
     "004_observability.sql",
+    "005_memory_consolidation.sql",
 )
+
+#: 随包迁移能升到的最高版本。从清单推导，加一个迁移就不用再改一遍这里的断言。
+REQUIRED_VERSION = len(MIGRATION_FILES)
 
 
 def _names(backend: SqliteStorageBackend, kind: str) -> set[str]:
@@ -123,7 +127,7 @@ def _insert_persona(backend: SqliteStorageBackend, persona_id: str = "p1") -> No
 # ─────────────────────────────────────────────────────────────
 
 
-def test_the_four_real_migrations_are_discoverable() -> None:
+def test_the_real_migrations_are_discoverable() -> None:
     """头部四项必须齐全、文件名必须合规、版本号必须连号。
 
     这条测试顺带证明了「文件里没有事务控制语句」——
@@ -131,7 +135,7 @@ def test_the_four_real_migrations_are_discoverable() -> None:
     """
     migrations = discover_migrations(MIGRATIONS_DIR)
 
-    assert [item.version for item in migrations] == [1, 2, 3, 4]
+    assert [item.version for item in migrations] == list(range(1, REQUIRED_VERSION + 1))
     assert [item.path.name for item in migrations] == list(MIGRATION_FILES)
     assert all(item.description for item in migrations)
     # 本批次四个迁移都是纯新增，没有一处删表删列。
@@ -212,7 +216,7 @@ def test_migrations_run_from_scratch_without_the_pragma_header(
     """
     assert backend.connection.query_one("PRAGMA journal_mode")[0] == "wal"
     assert backend.connection.query_one("PRAGMA foreign_keys")[0] == 1
-    assert backend.current_schema_version == 4
+    assert backend.current_schema_version == REQUIRED_VERSION
 
 
 # ─────────────────────────────────────────────────────────────
@@ -494,9 +498,9 @@ def test_trace_view_links_rows_by_correlation_id(backend: SqliteStorageBackend) 
 
 
 def test_a_failing_tail_statement_leaves_nothing_behind(tmp_path: Path) -> None:
-    """最后一个文件最后一句炸了，前面四次的成果也必须原样。
+    """最后一个文件最后一句炸了，前面几次的成果也必须原样。
 
-    真实文件整份复制过来，只加一个坏掉的 005——
+    真实文件整份复制过来，只在末尾追加一个坏掉的新迁移——
     「迁移是原子的」这件事只有拿真 schema 跑过才算数。
     """
     directory = tmp_path / "migrations"
@@ -505,8 +509,9 @@ def test_a_failing_tail_statement_leaves_nothing_behind(tmp_path: Path) -> None:
         source = (MIGRATIONS_DIR / name).read_text(encoding="utf-8")
         (directory / name).write_text(source, encoding="utf-8")
 
-    (directory / "005_boom.sql").write_text(
-        "-- migration: 005\n"
+    version = REQUIRED_VERSION + 1
+    (directory / f"{version:03d}_boom.sql").write_text(
+        f"-- migration: {version:03d}\n"
         "-- description: 最后一句故意失败\n"
         "-- destructive: false\n"
         "-- reversible: true\n"
@@ -520,7 +525,7 @@ def test_a_failing_tail_statement_leaves_nothing_behind(tmp_path: Path) -> None:
         with pytest.raises(MigrationError, match="迁移执行失败，已回滚"):
             opened.migrate()
 
-        assert opened.current_schema_version == 4
+        assert opened.current_schema_version == REQUIRED_VERSION
         assert "should_not_survive" not in _names(opened, "table")
         assert opened.connection.raw.in_transaction is False
 
