@@ -70,7 +70,7 @@ flowchart LR
 >    外加 `alterego calendar {list,today,check}` 三个命令。
 > 3. **生日**——`domain/birthday.py`、`domain/_toml.py`（与节日共用的读取助手）、
 >    `birthdays/__init__.py`（唯一 IO）、`data/birthdays.toml`（不进版本库），
->    外加 `alterego birthday {list,add,set}`（共 1233 个测试，全局覆盖率 96.75%，`domain/` 98.99%）。
+>    外加 `alterego birthday {list,add,set}`（共 1234 个测试，全局覆盖率 96.75%，`domain/` 98.99%）。
 >    生日**不是**新机制：它是 `kind="personal"` 的节日，见 [12](12-calendar-and-conversation.md) § 17。
 >
 > **领域层其余模块与 12 个 Repository 未开始**。阶段 E–M 均未开始。

@@ -365,20 +365,22 @@ def _cmd_birthday_list(args: argparse.Namespace) -> int:
     _out(_RULE)
     if not len(book):
         # 「一条都没有」必须说出来。只印一行空表头，看起来像命令没生效。
-        _out("一条都还没有。加一条：")
-        _out("  alterego birthday add --who user --on 06-03")
-        return 0
-    for birthday, when in book.sorted_by_next(today, within_days=args.days):
-        gap = (when - today).days
-        left = "就是今天" if gap == 0 else f"{gap} 天后"
-        flag = "" if birthday.verified else "  ⚠ 日期未确认"
-        # 星期几用 `sorted_by_next` 给出的**那一天**，不再自己算一次当年日期：
-        # 「闰日在平年落到 02-28」只应该有一处实现。
-        _out(
-            f"  {birthday.month_day}  {_weekday(when)}  "
-            f"{_pad(SUBJECT_LABELS[birthday.subject], 6)}{_pad(birthday.name, 10)}"
-            f"下次 {left} · 提前 {birthday.lead_days} 天{flag}"
-        )
+        #
+        # 空记录**不提前 return**：提醒逻辑在下面，而空记录恰恰是最需要提醒的那种情况
+        # （「自己」和「用户」两条都缺）。提前 return 会让最该看到提醒的人看不到。
+        _out("一条都还没有。")
+    else:
+        for birthday, when in book.sorted_by_next(today, within_days=args.days):
+            gap = (when - today).days
+            left = "就是今天" if gap == 0 else f"{gap} 天后"
+            flag = "" if birthday.verified else "  ⚠ 日期未确认"
+            # 星期几用 `sorted_by_next` 给出的**那一天**，不再自己算一次当年日期：
+            # 「闰日在平年落到 02-28」只应该有一处实现。
+            _out(
+                f"  {birthday.month_day}  {_weekday(when)}  "
+                f"{_pad(SUBJECT_LABELS[birthday.subject], 6)}{_pad(birthday.name, 10)}"
+                f"下次 {left} · 提前 {birthday.lead_days} 天{flag}"
+            )
     # 记了别人的生日不等于它自己会过生日。「自己」和「用户」这两条缺了要说出来——
     # 这不是错误，只是没记；但不说的话，用户看到一列生日会以为齐了，
     # 而它自己的生日恰恰是「还要会过生日」这句话最直接的意思。

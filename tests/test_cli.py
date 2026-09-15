@@ -376,6 +376,19 @@ class TestBirthdayList:
         assert "一条都还没有" in out
         assert "birthday add" in out
 
+    def test_an_empty_book_still_reminds_about_itself(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """空记录时提醒**更**不能省。
+
+        两条都缺的时候用「一条都还没有」就返回，会让最需要看到提醒的人反而看不到，
+        而且先出现的必须是 `self`——「还要会过生日」最直接的意思就是它自己得有生日。
+        """
+        main(["birthday", "list"])
+        out = capsys.readouterr().out
+        assert "还没记" in out
+        assert "--who self" in out
+
     def test_the_header_shows_the_path(self, capsys: pytest.CaptureFixture[str]) -> None:
         # 用户改的是文件，不是数据库。不给路径的话下一个问题必然是「它在哪」。
         main(["birthday", "list"])

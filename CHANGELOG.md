@@ -286,13 +286,13 @@
   `add` 挡「已经记过」、`set` 挡「没记过」，**默认都不覆盖**。
   `--on 02-30` 现在回显用户**原样输入的 `02-30`** 而不是领域层看到的 `2-30`
   ——错误信息把你的输入重新格式化了一遍，你会先怀疑自己按错了哪一位。
-  `birthday list` 还会在缺「自己」或「用户」时提醒补上：
+  `birthday list` 还会在缺「自己」或「用户」时提醒补上（**一条没记时也提醒**）：
   记了一列别人的生日不等于它自己会过生日
 - 修掉一处**文档承诺了但没实现**的命令：`alterego birthday check` 在 6 处被引用，
   而实际只实现了 `list` / `add` / `set`。用户照着敲会得到一个用法错误，
   然后合理地认为整个功能是坏的。全部改为 `birthday list`
-- 测试新增 152 个（全库 1233 个）：`test_domain_birthday.py`（88，新）/
-  `test_birthdays.py`（26，新）/ `test_cli.py`（58，其中生日部分 33）/
+- 测试新增 153 个（全库 1234 个）：`test_domain_birthday.py`（88，新）/
+  `test_birthdays.py`（26，新）/ `test_cli.py`（59，其中生日部分 34）/
   `test_domain_calendar.py`（73，补充「谁占哪一天」用例）。
   CLI 用例用 autouse fixture 把生日文件换成临时文件，
   **绝不碰开发者本机真实的 `data/birthdays.toml`**

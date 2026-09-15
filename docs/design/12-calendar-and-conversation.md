@@ -512,7 +512,7 @@ decide_reply(*, now, block, emotion, text_length, consecutive_instant, roll)
 | `src/alterego/holidays/__init__.py` | ~118 | 唯一的读盘入口 | `tests/test_holidays.py`（17 项） |
 | `src/alterego/domain/calendar.py` | ~561 | 纯函数：日型、强度、支配规则 | `tests/test_domain_calendar.py`（73 项） |
 | `src/alterego/domain/conversation.py` | ~430 | 纯函数：回复时机、主动话题、复读 | `tests/test_domain_conversation.py`（54 项） |
-| `src/alterego/cli.py` | ~544 | `alterego calendar {list,today,check}` | `tests/test_cli.py`（58 项） |
+| `src/alterego/cli.py` | ~544 | `alterego calendar {list,today,check}` | `tests/test_cli.py`（59 项） |
 
 （生日的实现清单在 § 17.12。）
 
@@ -847,6 +847,20 @@ $ alterego birthday list
 ```
 
 ```
+$ alterego birthday list        # 一条都没记
+生日记录 · 0 条 · D:\ai\个人agent\data\birthdays.toml
+──────────────────────────────────────────────────────────
+一条都还没有。
+
+还没记 自己、你 的生日。补上：alterego birthday add --who self --on MM-DD
+```
+
+**「一条都没记」时也走那条提醒路径，不提前 `return`。** 空记录恰恰是
+最需要提醒的情况（`self` 和 `user` 两条都缺），而提醒里第一个出现的也是
+`self`——「还要会过生日」最直接的意思就是**它自己**得有生日。
+写着「一条都还没有」就返回的话，唯一同时缺两条的人反而看不到提醒。
+
+```
 $ alterego calendar today --date 2026-05-25
 2026-05-25  周一  工作日
 ──────────────────────────────────────────────────────────
@@ -878,7 +892,7 @@ $ alterego calendar today --date 2026-05-25
 | `src/alterego/birthdays/__init__.py` | ~133 | 唯一的读盘 / 写盘入口 | `tests/test_birthdays.py`（26 项） |
 | `src/alterego/domain/calendar.py` | ~561 | 加 `personal` 种类、谁占哪一天、平手序 | `tests/test_domain_calendar.py`（73 项） |
 | `src/alterego/kernel/config.py` | ~812 | 派生属性 `birthdays_path` | `tests/test_kernel_config.py` |
-| `src/alterego/cli.py` | ~544 | `alterego birthday {list,add,set}` | `tests/test_cli.py`（58 项） |
+| `src/alterego/cli.py` | ~544 | `alterego birthday {list,add,set}` | `tests/test_cli.py`（59 项） |
 
 **本批次新增依赖为零。** `tomllib` 是标准库（P5）。架构红线 22 项全过。
 
