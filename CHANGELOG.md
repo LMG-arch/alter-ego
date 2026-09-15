@@ -147,7 +147,51 @@
 - `tests/golden/`、`tests/fixtures/` 目录就位，CI 的 `可复现性黄金测试` 作业从此真的会跑东西
   （此前是 `⊘ 黄金测试尚未创建，跳过`）
 
+**存储地基（阶段 D 前半，已实现）**
+
+- `storage/sqlite/connection.py` —— SQLite 连接。五个 PRAGMA 集中在一处并在建立连接后立即应用
+  （`journal_mode` 必须最先，因为它不能在事务里改）；**PRAGMA 不吃绑定参数，所以三个字符串
+  PRAGMA 的值走白名单**，杜绝把用户配置拼进 SQL；`transaction()` 支持嵌套（内层并入外层），
+  只有最外层发 `BEGIN` / `COMMIT` / `ROLLBACK`；`sqlite3` 异常统一翻译成内核异常树
+  （`IntegrityError` / `StorageError`），并带上出错的 SQL 首行；`integrity_check()` 与
+  `foreign_key_violations()` 把 PRAGMA 的异常也包成 `StorageError` —— 损坏的库文件会让
+  `PRAGMA integrity_check` **抛异常**而不是返回非 `ok` 行，只捕获 `StorageError` 的调用方
+  否则会看到一段 CLI traceback；`backup_to()` 用 `VACUUM INTO` 且拒绝在事务中执行
+- `storage/sqlite/migrator.py` —— 迁移器。发现并**零容忍**校验迁移文件（文件名格式、
+  头部四个键、版本号与文件名一致、跳号、空文件体、内嵌事务控制）；`plan()` 给出
+  `current → target` 与待执行清单；破坏性迁移在任何 DDL 之前**先**检查备份目录是否可用，
+  拒绝执行而不是「先改了再说」；每个迁移 = 一个脚本 = 一个事务，`schema_version` 记账与
+  `PRAGMA user_version` 写入都在**同一个脚本内**，因此不存在「表建好了、版本号没涨」的中间态
+- `storage/sqlite/backend.py` —— `StorageBackend` 契约实现。把「打开」与「迁移」分开：
+  `open()` 只做版本兼容检查、绝不偷偷改 schema；版本兼容是**双向**的（库比程序新也拒绝，
+  且报错必须带上库文件路径）；`required_schema_version` 由迁移文件推导而不是写死；
+  打开失败的路径会关掉连接（WAL 模式下漏关会留下 `-wal` / `-shm` 两个残留文件）
+- 四个迁移文件（`migrations/001_initial.sql` ~ `004_observability.sql`）：27 张表
+  （26 张设计表 + `schema_version`）、5 个 FTS5 影子表、2 个视图。
+  `003_sources.sql` 里**故意把 `source_item` 放到最后**——SQLite 在 `CREATE TABLE` 时就
+  解析外键目标，所以外键不能指向未来
+- 测试 140 个：`test_storage_sqlite.py`（40）/ `test_storage_migrator.py`（42）/
+  `test_storage_backend.py`（35）/ `test_storage_schema.py`（23，断言**交付的 schema**
+  而不是迁移机器）
+- `docs/plans/2026-09-15-storage-framework.md` —— 本批次的实施计划（含三处契约冲突的判定）
+
 ### 变更
+
+- **迁移文件从此只管 DDL**。四个 `.sql` 里没有任何 `PRAGMA` 头、没有 `IF NOT EXISTS`、
+  没有 `BEGIN` / `COMMIT`、不往 `schema_version` 写任何东西——这四件事全部由迁移器
+  在同一个事务里补齐。理由：**幂等靠版本号，不靠 `IF NOT EXISTS`**。后者会让一个
+  「建了一半」的 schema 看起来像是建好了的，而版本号 + 事务原子性要么全成、要么全不成。
+  迁移器在发现阶段就把这四条列为硬校验（违反直接报错，不是警告）
+- **`v_trace` 的锚点从 `event_log` 改为 `tick_log`，分支从 5 路扩为 6 路**（推演 → 事件 →
+  模型调用 → 生图 → 检索 → 日志）。原因：`event_log` 默认关闭（`06-roadmap.md § 5.4`
+  估算 0 行/天），拿它当锚点等于让链路视图里**一条推演记录都没有**
+- **确认 `event_log` 没有也不应有 `tick_id` 列**。它的 `correlation_id` 已经唯一标识一次
+  推演，再存一份 `tick_id` 就是同一个事实写两遍，而两份必然分叉。`v_trace` 里
+  `event_log` 那一路的 `tick_id` 因此是 `NULL`，这是**有意为之而不是畳漏**
+- 索引名统一为 `idx_<table>_correlation`（此前设计文槽里同时存在 `idx_log_corr` 与
+  `idx_log_correlation` 两种写法）
+- `docs/DESIGN.md § 9.1` 的版本口径修正：`PRAGMA user_version` 是版本真源
+  （整数、不用建表就能读、空库上也能读），`schema_version` 表是**审计记录**
 
 - `[llm.budget]` 更名为 `[budget]`，新增 `max_images_per_day = 20` 与 `[budget.per_purpose]`。
   更名理由：闸门现在统管 LLM 与生图，挂在 `llm` 下名不副实
@@ -197,6 +241,14 @@
   （`choices` 是 `string` 的约束，`int` 应写作 `integer`）——被端到端探针在提交前抓出
 - `tests/test_packages.py` 的 import 排序与 `list.extend` 写法（本地那次 `ruff check`
   跑在这个文件出现**之前**，之后只补跑了 pytest，于是 CI 才第一次看到它）
+- **三份互相矛盾的 `v_trace` DDL**（设计分册 03、09 和真实迁移文件各一份）。
+  它们已经在列名、主键类型、索引名上全部分叉，而 03 分册那份直接引用了不存在的
+  `event_log.tick_id`，一旦有人真的去执行就会出现 `no such column: tick_id`。
+  修法不是「把三份改一致」，而是**只留一份**：物理 schema 的唯一出处是
+  `migrations/*.sql`，分册里的 DDL 全部换成「为什么是这些列」的说明。
+  复制一份 DDL 的代价不是多打几行字，而是从那一刻起存在两个「真相」——而它们必然分叉
+- `v_trace` 的选择列与 `ORDER BY` 不兼容（视图列名在前者里是 `step`、后者拼错成
+  `tick_id`），且 `event_log` 那一路漏了 `payload_json`
 
 ### 安全
 
@@ -236,6 +288,18 @@
 - `docs/adr/0001` 引入架构决策记录机制
 - `docs/guide/README.md` 说明上手指南**为什么现在还是空的**（还没有能照着敲的命令）
 - `plugins/example_plugin/README.md` 说明示例插件演示的五件事，以及它为什么放在版本库里
+- `docs/design/03-data-model.md` § 8 重写：§ 8.1 四个真实迁移文件与「外键不能指向未来」、
+  § 8.2 迁移流程 mermaid 与「`user_version` 是真源、`schema_version` 是审计」、
+  § 8.3 迁移文件**五个禁止项**（每个附理由）+「幂等靠版本号，不靠 `IF NOT EXISTS`」、
+  § 8.4 版本兼容双向检查（`version == 0` 属合法）+ 报错必须带库文件路径、
+  § 8.5 移除 `db rollback`（反向迁移木有设计，`reversible` 目前只是声明式元数据）
+- `docs/design/08-external-sources.md § 8` 删除重复的 `source_item` / `source_feed` /
+  `source_query` DDL，改为指向 `03-data-model.md § 3.2` 的「为什么这一列必须是它」表
+- `docs/design/09-observability.md § 7` 删除重复的 `log_entry` / `v_trace` DDL 与 § 2.3 的
+  `v_cost_daily` DDL，改为「少一列会失去什么」表，并标明完整 DDL 的唯一出处
+- `docs/DESIGN.md § 12` 目录树展开 `storage/sqlite/`（`connection.py` / `migrator.py` /
+  `backend.py` / `migrations/`）；`CONTRIBUTING.md` 项目结构树同步，并修正 `migrations/`
+  曾被错画在 `src/alterego/` 顶层的问题
 
 ### 架构
 

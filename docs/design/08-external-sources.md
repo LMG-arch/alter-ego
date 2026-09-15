@@ -346,66 +346,26 @@ def normalize_url(url: str) -> str:
 
 ## 8. 数据表
 
-新增 3 张表（`migrations/002_sources.sql`），`schema_version` 升到 `2`。
+新增 3 张表（`migrations/003_sources.sql`），`schema_version` 升到 `3`。
 
-```sql
--- 21. source_item · 抓到的外部条目（只存摘要，不存原文）
-CREATE TABLE IF NOT EXISTS source_item (
-    id            TEXT PRIMARY KEY,
-    url           TEXT NOT NULL,
-    url_hash      TEXT NOT NULL UNIQUE,      -- normalize_url() 后的 SHA-256 前 16 字节
-    title         TEXT NOT NULL,
-    source_name   TEXT,                      -- 站点名 / feed 名
-    snippet       TEXT,                      -- 搜索结果自带片段
-    summary       TEXT,                      -- LLM 生成的摘要（≤ 200 字）
-    reaction      TEXT,                      -- Agent 自己的看法
-    topic         TEXT,                      -- 命中的兴趣标签
-    fetched_at    TEXT NOT NULL,
-    last_seen_at  TEXT NOT NULL,
-    dropped_reason TEXT,                     -- 非 NULL = 被丢弃（注入/robots/超长）
-    memory_id     TEXT REFERENCES memory(id) ON DELETE SET NULL,
-    created_at    TEXT NOT NULL
-);
+> **完整 DDL 不在本分册，在 [`03-data-model.md § 3.2`](03-data-model.md)。**
+> 物理 schema 只能有一个出处。本分册早期版本里复制过一份 DDL，结果它与 03 分册
+> 在列名（`snippet` vs `summary`、`fail_count` vs `failure_count`）、
+> `url_hash` 的约束写法、索引名上全都对不上。复制一份 DDL 的代价不是多打几行字，
+> 而是从那一刻起存在两个「真相」——而它们必然分叉。
 
-CREATE INDEX IF NOT EXISTS idx_source_item_topic
-    ON source_item(topic, fetched_at DESC);
-CREATE INDEX IF NOT EXISTS idx_source_item_fetched
-    ON source_item(fetched_at DESC);
+下表回答的是另一个问题：**为什么这些列必须是它，而不是别的**。
 
--- 22. source_feed · 订阅源及其缓存状态
-CREATE TABLE IF NOT EXISTS source_feed (
-    id            TEXT PRIMARY KEY,
-    url           TEXT NOT NULL UNIQUE,
-    title         TEXT,
-    etag          TEXT,                      -- 用于 If-None-Match
-    last_modified TEXT,                      -- 用于 If-Modified-Since
-    last_fetched_at TEXT,
-    last_status   INTEGER,                   -- HTTP 状态码
-    fail_count    INTEGER NOT NULL DEFAULT 0,
-    enabled       INTEGER NOT NULL DEFAULT 1,
-    created_at    TEXT NOT NULL,
-    updated_at    TEXT NOT NULL
-);
-
--- 23. source_query · 检索历史（用于「它最近在关心什么」与去重）
-CREATE TABLE IF NOT EXISTS source_query (
-    id            TEXT PRIMARY KEY,
-    query         TEXT NOT NULL,
-    topic         TEXT,
-    provider_id   TEXT,
-    result_count  INTEGER NOT NULL DEFAULT 0,
-    used_fallback INTEGER NOT NULL DEFAULT 0,   -- 1 = 走了 RSS 降级
-    emotion_label TEXT,                          -- 发起时的情绪（选题依据，可复盘）
-    occurred_at   TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_source_query_time
-    ON source_query(occurred_at DESC);
-```
-
-> **`source_query.emotion_label` 为什么存**：它让「最近它在关心什么」可以按情绪回顾——
-> 「你上次心情不好是 9 月 3 号，那几天它一直在查怎么让人开心」。这是可解释性，
-> 也是这个项目区别于普通 LLM 应用的地方。
+| 本分册要求的列 | 为什么必须是它 |
+| --- | --- |
+| `source_item.url_hash`（唯一索引） | 去重是**唯一索引**而不是「查一下有没有再决定插不插」：后者在并发下会漏，而唯一索引让重复插入变成一次可捕获的 `IntegrityError` |
+| `source_item.summary` 而非全文 | 版权、体积、检索质量（[ADR-0009](../adr/0009-fetched-content-is-untrusted.md)）。正文只在内存里活过一次 LLM 调用 |
+| `source_item.dropped` + `dropped_reason` | 「被丢弃」必须**留痕**。只丢弃不记录，用户看到的就是「这功能时好时坏」——而真相是「它确实抓到过，但判成了注入」 |
+| `source_item.query_id` | 没有它就无法回答「这次检索到底带回来了什么」，检索历史只剩一个数字 |
+| `source_item.feed_id` | RSS 来源与搜索结果共用一张表，但降级原因不同，排查时要能分开 |
+| `source_feed.etag` / `last_modified` | 304 是**唯一不消耗流量也不消耗 LLM** 的路径，因此必须存条件请求头 |
+| `source_query.emotion_label` | 它让「最近它在关心什么」可以按情绪回顾——「你上次心情不好是 9 月 3 号，那几天它一直在查怎么让人开心」。这是可解释性，也是这个项目区别于普通 LLM 应用的地方 |
+| `source_query.tick_id` / `correlation_id` | 检索是推演循环的延伸，不是独立系统；链路视图 `v_trace` 要能看见它 |
 
 ---
 

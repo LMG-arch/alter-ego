@@ -61,6 +61,10 @@ flowchart LR
 
 **每个阶段结束都必须**：测试通过 + 文档同步 + 提交 + 更新 CHANGELOG。
 
+> **当前进度（2026-09-15）**：阶段 A–C 已完成。阶段 D 的**存储层已落地**——
+> `storage/sqlite/` 下的 `connection.py` / `migrator.py` / `backend.py` 与四个迁移文件，
+> 共 140 个测试；**领域层未开始**。阶段 E–M 均未开始。
+
 > **为什么 J/K 排在 L/M 前面**：设置中心与可观测性是**基础设施**。
 > 如果先做生图再补设置页，那生图的十几个新配置项会先以「无标注」的形式存在一段时间，
 > 而人一旦接受了无标注的配置，就很难再回头补。同理，先有 `correlation_id` 再添加新功能，
@@ -164,8 +168,8 @@ alterego plugins list
 
 | 项 | 验收标准 |
 | --- | --- |
-| 数据库 | 26 张表 + 2 个视图全部创建；`schema_version = 1` |
-| 迁移 | 提供 `001_initial.sql`；`alterego db migrate --dry-run` 可预演 |
+| 数据库 | 26 张设计表 + `schema_version` + 2 个视图全部创建（`PRAGMA user_version = 4`） |
+| 迁移 | 提供 `001_initial.sql` ~ `004_observability.sql`；`alterego db migrate --dry-run` 可预演 |
 | 检索 | FTS5 BM25 检索可用；中文分词走 `preprocess_for_fts()`；Top-8 返回带分数分解 |
 | 情绪 | `update_emotion()` 纯函数，顺序为回归→冲击→惯性；有单元测试覆盖 4 条规则 |
 | 记忆 | `strength_at()` 与文档验证表数值一致（误差 < 0.001） |

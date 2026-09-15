@@ -516,7 +516,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     id                  TEXT PRIMARY KEY,
     persona_id          TEXT REFERENCES persona(id) ON DELETE SET NULL,
     tick_id             TEXT,
-    purpose             TEXT NOT NULL,      -- intention|emotion|memory|post|chat|reach_out|npc|persona_gen
+    purpose             TEXT NOT NULL,      -- decision|expression|reflection|emotion|memory|npc|persona|image_prompt|research_query|research_summarize
     tier                TEXT NOT NULL,      -- strong | cheap | custom
     provider_id         TEXT NOT NULL,
     model               TEXT NOT NULL,
@@ -582,6 +582,10 @@ CREATE INDEX IF NOT EXISTS idx_event_topic_time
 CREATE INDEX IF NOT EXISTS idx_event_correlation
     ON event_log(correlation_id);
 
+-- 没有 tick_id 列，这是故意的：correlation_id 已经唯一标识一次推演（一个 tick 一个），
+-- 再存一列 tick_id 等于把同一个值写两遍——两份就得同步，而同步就会漂移。
+-- 代价是 v_trace 里这一支的 tick_id 只能是 NULL，见 § 3.3。
+
 -- ────────────────────────────────────────────────────────────
 -- 20. budget_usage · 打扰预算每日用量
 -- ────────────────────────────────────────────────────────────
@@ -601,11 +605,15 @@ CREATE TABLE IF NOT EXISTS budget_usage (
 );
 
 -- ────────────────────────────────────────────────────────────
--- 初始数据
--- ────────────────────────────────────────────────────────────
-INSERT OR IGNORE INTO schema_version (version, applied_at, description)
-VALUES (1, '2026-09-15T00:00:00+08:00', '初始 schema');
+-- 初始数据：真实迁移文件里**没有这段**——版本号由迁移器在同一个事务里写入。
+-- 文件自己写就会出现「有的文件写了、有的忘了」，而忘掉的那次
+-- 会留下「表建好了、版本号没涨」的状态。见 § 8.3。
 ```
+
+> **本节（§ 3 及 § 3.1–§ 3.3）的 DDL 是设计参考，不是可执行文件。**
+> 真实文件在 `src/alterego/storage/sqlite/migrations/`，与这里的差别只有三处，
+> 全部是有意选择而非抄漏：**没有 `PRAGMA` 头、没有 `IF NOT EXISTS`、没有 `BEGIN`/`COMMIT`**。
+> 原因见 § 8.3。
 
 ### 3.1 v0.2.0 新增：图片资产与生图计量
 
@@ -798,13 +806,16 @@ CREATE INDEX IF NOT EXISTS idx_log_time ON log_entry(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_log_level_time ON log_entry(level, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_log_correlation ON log_entry(correlation_id);
 
--- 给已有可观测表补 correlation_id（幂等：SQLite 无 ADD COLUMN IF NOT EXISTS，
--- 迁移脚本先查 PRAGMA table_info 再决定是否执行）
+-- 给已有可观测表补 correlation_id。
+-- SQLite 没有 ADD COLUMN IF NOT EXISTS，但这里**不需要**「先查 PRAGMA table_info
+-- 再决定要不要执行」：整个迁移跑在一个事务里，而它只会被跑一次（§ 8.3）。
 ALTER TABLE tick_log     ADD COLUMN correlation_id TEXT;
 ALTER TABLE activity_log ADD COLUMN correlation_id TEXT;
 ALTER TABLE llm_usage    ADD COLUMN correlation_id TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_tick_log_correlation ON tick_log(correlation_id);
+CREATE INDEX IF NOT EXISTS idx_activity_log_correlation ON activity_log(correlation_id);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_correlation ON llm_usage(correlation_id);
 
 -- ────────────────────────────────────────────────────────
 -- 视图（不是表）：成本合并与链路追踪
@@ -820,9 +831,16 @@ CREATE VIEW IF NOT EXISTS v_cost_daily AS
            purpose, 'media' AS cost_kind, cost_usd, 1 AS call_count
       FROM media_usage WHERE success = 1;
 
+-- **第一路取 tick_log 而不是 event_log**：event_log 默认关闭（§ 5.3），
+-- 只有它是锚点时，时间线在默认配置下会一条 tick 记录都没有，
+-- 而 tick 恰恰是整条链的起点。event_log 因此降为第二路。
+-- 第二路的 tick_id 是 NULL——event_log 没这列，也不该有。
 CREATE VIEW IF NOT EXISTS v_trace AS
-    SELECT correlation_id, 'tick'   AS step, '推演' AS label, occurred_at AS at,
-           tick_id, NULL AS detail, payload_json
+    SELECT correlation_id, 'tick'   AS step, '推演' AS label, created_at AS at,
+           id AS tick_id, status AS detail, NULL AS payload_json
+      FROM tick_log WHERE correlation_id IS NOT NULL
+    UNION ALL
+    SELECT correlation_id, 'event', '事件', occurred_at, NULL, topic, payload_json
       FROM event_log WHERE correlation_id IS NOT NULL
     UNION ALL
     SELECT correlation_id, 'llm', '模型调用', created_at, tick_id,
@@ -840,10 +858,14 @@ CREATE VIEW IF NOT EXISTS v_trace AS
     SELECT correlation_id, 'log', level, created_at, tick_id,
            message || COALESCE(' · ' || exc_text, ''), NULL
       FROM log_entry WHERE correlation_id IS NOT NULL;
-
-INSERT OR IGNORE INTO schema_version (version, applied_at, description)
-VALUES (4, '2026-09-15T00:00:00+08:00', '多媒体与可观测性');
 ```
+
+> **上面这些 DDL 是设计参考，不是可执行文件。**
+> 真实迁移文件（`src/alterego/storage/sqlite/migrations/*.sql`）里
+> **没有** `PRAGMA`、**没有** `IF NOT EXISTS`、**没有** `BEGIN`/`COMMIT`、
+> **没有** `INSERT INTO schema_version`——四件事全部由迁移器统一负责，
+> 原因与后果见 § 8.3。「迁移文件为什么与文档不一样」这个问题的答案永远是
+> 「因为不加那四句是一次有意的选择」，而不是「抄漏了」。
 
 > **`event_log` 与 `log_entry` 为什么不合并**：`event_log` 是**可回放**的结构化事件流
 > （它的 payload 能被重新投回总线），而 `log_entry` 含第三方库的输出与堆栈，**不可回放**。
@@ -913,7 +935,7 @@ inner_voice       = '刚看到那个独立游戏的视频，好想跟他说一�
 | `schedule_block.category` | `sleep`, `work`, `meal`, `commute`, `leisure`, `social`, `chore`, `other` |
 | `activity_log.category` | `internal`, `social`, `outbound` |
 | `tick_log.status` | `ok`, `partial`, `failed`, `interrupted`, `skipped` |
-| `llm_usage.purpose` | `intention`, `emotion`, `memory`, `post`, `chat`, `reach_out`, `npc`, `persona_gen`, `other` |
+| `llm_usage.purpose` | `decision`, `expression`, `reflection`, `emotion`, `memory`, `npc`, `persona`, `image_prompt`, `research_query`, `research_summarize`（权威清单在 [`07-model-routing-and-media.md § 2.4`](07-model-routing-and-media.md#24-用途purpose清单)） |
 | `llm_usage.tier` | `strong`, `cheap`, `custom` |
 | `post_interaction.kind` | `like`, `comment` |
 | `persona_version.change_type` | `init`, `manual_edit`, `llm_refine`, `evolution` |
@@ -933,6 +955,9 @@ inner_voice       = '刚看到那个独立游戏的视频，好想跟他说一�
 | `idx_tick_status` | 启动时查找 `interrupted` 状态的 tick |
 | `idx_llm_usage_purpose` | `alterego stats` 按用途聚合成本 |
 | `idx_event_correlation` | 按 correlation_id 还原一次完整 tick 的事件流 |
+| `idx_tick_log_correlation` / `idx_activity_log_correlation` | 链路视图 `v_trace` 的两条支路（tick、activity） |
+| `idx_llm_usage_correlation` | 同上，llm 支路 |
+| `idx_log_correlation` | 按 correlation_id 一次性打开某次推演的全部日志 |
 
 ### 5.2 未建索引的取舍
 
@@ -1187,87 +1212,118 @@ class BudgetRepository(Protocol):
 
 ```
 src/alterego/storage/sqlite/migrations/
-├── 001_initial.sql
-├── 002_add_mood_tags.sql
-└── 003_...
+├── 001_initial.sql          # 表 1–20：人格、世界、记忆、会话、推演、事件流、预算
+├── 002_media.sql            # 表 21–22：图片资产与生图计量
+├── 003_sources.sql          # 表 23–25：外部信息来源
+└── 004_observability.sql    # 表 26：结构化日志 + 3 处补列 + 2 个视图
 ```
 
-命名规范：`NNN_description.sql`，`NNN` 为三位数字，严格递增。
+命名规范：`NNN_description.sql`，`NNN` 为三位数字，**严格递增且不许跳号**。
+跳号会让「哪些版本存在」变成需要猜测的事，因此发现阶段会直接报错。
+
+> **`003_sources.sql` 里的建表顺序与我们的编号不同**（先 `source_feed`、
+> 再 `source_query`、最后 `source_item`）：SQLite 在 `CREATE TABLE` 那一刻
+> 就会校验外键目标是否存在，而 `source_item` 引用 `source_query(id)`。
+> **外键不能指向未来。** 编号只在文件名和 `schema_version` 里递增，
+> 与文件内部的语句顺序无关。
 
 ### 8.2 迁移应用流程
 
 ```mermaid
 flowchart TD
-    A["存储插件 on_start"] --> B["读取 PRAGMA user_version"]
-    B --> C{"user_version == 0?"}
-    C -->|是| D["新建库：执行 001_initial.sql"]
-    C -->|否| E["对比 schema_version 表<br/>与 migrations 目录"]
-    D --> F["PRAGMA user_version = N"]
-    E --> G["按序应用缺失的迁移"]
-    G --> H{"每一步成功？"}
-    H -->|否| I["回滚该迁移<br/>退出码 4<br/>提示备份路径"]
-    H -->|是| J["更新 schema_version<br/>PRAGMA user_version"]
-    F --> K["完成"]
-    J --> K
+    A["存储后端 open()"] --> B["读 PRAGMA user_version<br/>（当前版本）"]
+    B --> C["发现并解析 migrations/*.sql<br/>零容忍：文件名、头部四键、跳号"]
+    C --> D["plan()：pending = 版本号 > 当前的迁移"]
+    D --> E{"有破坏性迁移？"}
+    E -->|是且没有备份目录| F["硬失败：不给退路就别改"]
+    E -->|是且有备份目录| G["VACUUM INTO 备份"]
+    E -->|否| H["按序逐个应用"]
+    G --> H
+    H --> I["一个迁移 = 一个脚本 = 一个事务：<br/>BEGIN → DDL → 记 schema_version<br/>→ PRAGMA user_version → COMMIT"]
+    I --> J{"整个脚本成功？"}
+    J -->|否| K["ROLLBACK：该迁移全部撤销<br/>版本号不动；已应用的迁移保持已应用"]
+    J -->|是| H
 ```
+
+**版本号的真源是 `PRAGMA user_version`，不是 `schema_version` 表。**
+两者分工不同：`user_version` 是一个整数，能在不建表、不开事务的情况下读到
+（空库也能读，值是 0），因此适合做**判依据**；`schema_version` 表是**审计记录**，
+回答「第 3 版是什么时候、被谁、以什么名义应用的」。
+如果反过来拿 `schema_version` 做判依据，那么「库是新库还是被清空过」
+就变成了一个需要猜的问题。
 
 ### 8.3 迁移文件规范
 
-每个迁移文件必须是**幂等**的，且自带元数据：
+一个迁移文件 = 一个版本 = **一次事务**。文件只管 DDL，五件事由迁移器统一负责：
+
+| 文件里**不许**出现 | 为什么 |
+| --- | --- |
+| `PRAGMA ...` | 连接参数由连接层统一设置（§ 1）。文件里写 `PRAGMA journal_mode = WAL` 会直接报错——WAL 只能在事务外切换，而文件正在事务里 |
+| `INSERT INTO` / `UPDATE` / `DELETE FROM schema_version` | 版本记账由迁移器在**同一个事务里**写。见下 |
+| `PRAGMA user_version = N` | 同上：版本号与 DDL 必须在同一个事务里推进 |
+| `BEGIN` / `COMMIT` / `ROLLBACK` / `END TRANSACTION` | 事务边界由迁移器负责；文件自己写就不再是一个事务，而这正是「失败就完整回滚」的前提 |
+| `IF NOT EXISTS` | 见下 |
+
+文件头是元数据，四个键**全部必填**：
 
 ```sql
 -- migration: 002
--- description: 为动态增加心情标签
+-- description: 新增图片资产与生图计量两张表
 -- destructive: false
 -- reversible: true
-
-BEGIN;
-
-ALTER TABLE social_post ADD COLUMN mood_tags_json TEXT NOT NULL DEFAULT '[]'
-    CHECK (json_valid(mood_tags_json));
-
-CREATE INDEX IF NOT EXISTS idx_post_mood
-    ON social_post(persona_id, posted_at DESC)
-    WHERE mood_labels IS NOT NULL;
-
-UPDATE schema_version
-SET version = 2, applied_at = datetime('now'), description = '为动态增加心情标签'
-WHERE version = 1;
-
-PRAGMA user_version = 2;
-
-COMMIT;
 ```
 
-**`destructive: true` 的迁移**（如删列、改类型）在应用前会：
+`destructive` 与 `reversible` **没有默认值**：忘填会让迁移在发现阶段就被拒绝，
+而不是被默认当成「安全」。一个字段如果默认值总是猜对，它就不该有默认值。
 
-1. 自动备份数据库到 `data/backups/alterego_before_v{N}_{timestamp}.db`
-2. 要求用户确认（非交互模式下需 `--yes` 参数）
+`destructive: true` 的迁移（删表、删列、重建表）在应用前必须能拿到退路：
+迁移器要求一个**已授权的备份目录**，没有就硬失败。注意这与配置项
+`storage.backup_before_destructive_migration = false` 的效果是同一件事：
+关掉它意味着「不给退路」，而不意味着「那就别备份了」——失败落在「迁移没跑成」
+而不是「数据没了」，前者重跑一次就好，后者不可逆。
+
+#### 幂等靠版本号，不靠 `IF NOT EXISTS`
+
+`CREATE TABLE IF NOT EXISTS` 看上去更稳，实际更危险：它把「同一个迁移被跑了两次」
+——一件真事故——变成一次静默的空操作，然后版本号照样涨上去。
+**一个不可能失败的检查比没有检查更糟**（`AGENTS.md` 第 4 条）。
+
+真正的幂等由两件事保证：
+
+1. **版本号**：`plan()` 只挑版本号大于当前 `user_version` 的文件；
+2. **原子性**：一个迁移里任何一条语句失败，整个事务回滚，版本号不动。
+
+`ALTER TABLE ... ADD COLUMN` 因此**不需要**「先查 `PRAGMA table_info` 再决定要不要执行」
+——它只在版本号没到的时候跑，而且只会跑一次。多一个预检就多一处「预检写错了
+于是真话被跳过」的时机。
 
 ### 8.4 版本兼容检查
 
-插件启动时声明其要求的 `schema_version`：
+**要求哪个版本不是一个写死的常量，而是从迁移目录算出来的**：
 
 ```python
-class SqliteStorage(Plugin, StorageBackend):
-    REQUIRED_SCHEMA_VERSION = 1
-    MIN_COMPATIBLE_VERSION = 1
-
-    def on_start(self) -> None:
-        current = self._read_user_version()
-        if current < self.MIN_COMPATIBLE_VERSION:
-            raise StorageError(
-                f"数据库 schema 版本 {current} 过低，本插件需要 >= {self.MIN_COMPATIBLE_VERSION}",
-                context={"hint": "运行 alterego db migrate"},
-            )
-        if current > self.REQUIRED_SCHEMA_VERSION:
-            raise StorageError(
-                f"数据库 schema 版本 {current} 高于本插件支持的 {self.REQUIRED_SCHEMA_VERSION}",
-                context={"hint": "请升级 alterego 到最新版本"},
-            )
+required = max(item.version for item in discover_migrations())   # 当前 = 4
 ```
 
-这样用户升级插件后忘记迁移、或降级 AlterEgo 版本时，会得到清晰提示而非数据损坏。
+理由：写死的常量会在「有人加了迁移但忘了改常量」时静默失效——新库建到 v4，
+检查却以为只需要 v3。推导出来的值不可能与迁移目录不一致。
+
+检查是**双向**的：
+
+| 情况 | 结果 |
+| --- | --- |
+| `version == 0` | **合法**。空库就是 v0，`db migrate` 会建出全部结构 |
+| `0 < version < MIN_COMPATIBLE_VERSION` | `StorageError`，`hint` 指向 `alterego db migrate` |
+| `version > required` | `StorageError`，`hint` 指向「升级 alterego」 |
+| 其余 | 通过 |
+
+报错必须带上**库文件路径**：用户手里往往同时有几个库（开发用的、测试用的、
+从别处拷来的），只说「版本不对」等于让他们自己猜是哪一个。
+
+> **为什么要拒绝「库比程序新」。** 一份 v5 的库用 v4 的程序打开，大部分
+> `SELECT` 会正常返回，但新增的列对代码不存在——于是「读到一半发现缺字段」
+> 变成「读到了一份看起来正常、实际不完整的数据」。这类错误会在很久以后以
+> 「数据怎么少了一块」的形式暴露，而那时已经无从追溯。**宁可启动失败。**
 
 ### 8.5 命令
 
@@ -1276,8 +1332,16 @@ alterego db migrate              # 应用所有待执行迁移
 alterego db migrate --dry-run    # 只显示将要执行的内容
 alterego db status               # 显示当前版本与待执行迁移
 alterego db backup               # 手动备份
-alterego db rollback --to 1      # 回滚到指定版本（需迁移可逆）
+alterego db restore <file>       # 从备份恢复（这是唯一的「回滚」方式）
 ```
+
+> **没有 `db rollback --to N`，这是有意的。** 反向迁移的正确性几乎从不会被测试
+> ——真正的回滚发生在生产事故里，而那是最不适合第一次运行某段代码的时机。
+> 迁移器的选择是**只往前**：版本号低于当前就直接拒绝，退路是一条 `VACUUM INTO`
+> 出来的完整备份，恢复它就是完整的回滚。
+>
+> 迁移文件头里的 `reversible` 因此目前只是**声明性元数据**：它记下「这个变更
+> 原则上可逆」，供 `db status` 展示与将来的实现参考，但它不是任何一条代码路径的开关。
 
 ---
 

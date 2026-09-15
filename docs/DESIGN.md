@@ -629,7 +629,7 @@ sequenceDiagram
 | --- | --- |
 | **SQLite**（WAL 模式） | 零运维、单文件、Python 内置驱动、支持 FTS5 全文检索 |
 | **JSON 列存复杂结构** | 人格、世界设定等长文本/嵌套结构直接存 JSON 字符串，用 `json.loads` 读 |
-| **SQL 迁移脚本** | `storage/sqlite/migrations/` 下按序编号，`schema_version` 表记录当前版本 |
+| **SQL 迁移脚本** | `storage/sqlite/migrations/` 下按序编号，`PRAGMA user_version` 记录当前版本，`schema_version` 表是审计记录 |
 
 > **为什么不用向量数据库**：v1 优先「零依赖」，FTS5 + 加权排序已能满足「记住聊过的事」这一需求。向量检索设计为插件，用户需要再装。
 
@@ -1185,9 +1185,10 @@ alter-ego/
 │   │   └── http_fetch.py
 │   ├── storage/
 │   │   └── sqlite/
-│   │       ├── backend.py
-│   │       ├── schema.sql
-│   │       ├── migrations/
+│   │       ├── connection.py        # 连接、PRAGMA、事务、完整性检查、备份
+│   │       ├── migrator.py          # 发现/校验/应用迁移，事务边界与版本记账归它
+│   │       ├── backend.py           # StorageBackend 契约实现 + 版本兼容检查
+│   │       ├── migrations/          # 极完整的 schema 都在这里（含 001_initial.sql）
 │   │       └── repo/
 │   │           ├── persona_repo.py
 │   │           ├── memory_repo.py

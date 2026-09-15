@@ -245,11 +245,19 @@ check_forbidden \
 # ═════════════════════════════════════════════════════════════
 printf '\n%s【第 4 组】分层不得越级%s\n' "$BOLD" "$RESET"
 
+# 注意 domain 不在禁止列表里。
+#
+# `01-architecture.md § 1.1` 的依赖矩阵明确写着 `storage → domain` 是允许的：
+# `03-data-model.md § 7` 的 Repository 要返回 `Persona` / `Memory` 等 domain 类型，
+# 而 Repository 的实现就在这里。禁止它会让 § 7 的契约无法实现。
+#
+# 「不含业务逻辑」由此检查剩下的部分 + 代码评审保证：
+# 存储层可以**拿 domain 的类型**，但不准**调 domain 的规则**去改写数据。
 check_forbidden \
     "storage/ 不含业务逻辑" \
-    "from alterego\.(sim|domain|channels|capabilities)" \
+    "from alterego\.(sim|channels|capabilities)" \
     "$STORAGE" \
-    "存储层只做数据搬运，不知道业务规则。"
+    "存储层只做数据搬运，不知道业务规则。可以依赖 domain 取类型形状（见 01-architecture.md § 1.1 依赖矩阵），但不得依赖 sim/channels/capabilities。"
 
 check_forbidden \
     "llm/ 不含业务逻辑" \

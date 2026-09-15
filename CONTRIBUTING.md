@@ -108,7 +108,8 @@ alter-ego/
 │   ├── kernel/          # 内核：配置、总线、注册表、插件、时钟、调度、错误
 │   ├── domain/          # 领域：纯函数业务逻辑（人设/情绪/记忆/关系/日程...）
 │   ├── sim/             # 推演：六阶段流水线、意图、预算、TickContext
-│   ├── storage/         # 存储：SQLite 实现、Repository、迁移
+│   ├── storage/         # 存储：SQLite 实现（connection/migrator/backend）、Repository、迁移
+│   │   └── sqlite/      #   └─ migrations/ 里的 .sql 是 schema 的唯一出处
 │   ├── llm/             # LLM：Provider、路由、重试、计量
 │   ├── channels/        # 渠道：web / file / console / dingtalk / wecom
 │   ├── capabilities/    # 能力：activity / post / chat / reach_out
@@ -117,7 +118,7 @@ alter-ego/
 │   ├── sources/         # 外部信息来源宿主（source.* 插件）
 │   ├── cli/             # 命令行
 │   ├── prompts/         # 提示词模板
-│   └── migrations/      # 数据库迁移脚本
+│   └── defaults.toml    # 随包默认配置（只放「内核不能写」的键）
 ├── plugins/             # 本地插件（不入库）
 ├── tests/               # 测试
 ├── docs/                # 设计文档（事实来源）

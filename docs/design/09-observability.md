@@ -112,19 +112,15 @@ def estimate_cost(model_cfg: ModelConfig, prompt_tokens: int, completion_tokens:
 
 ### 2.3 统一成本视图
 
-生图成本在 `media_usage`（见 [07-model-routing-and-media.md § 7](07-model-routing-and-media.md#7-成本计量)），
-预算聚合走视图：
+生图成本在 `media_usage`（见 [07-model-routing-and-media.md § 7](07-model-routing-and-media.md#7-成本计量)）。
+成本聚合走视图 `v_cost_daily`，**定义在 [`03-data-model.md § 3.3`](03-data-model.md)**：
 
-```sql
-CREATE VIEW IF NOT EXISTS v_cost_daily AS
-    SELECT substr(created_at, 1, 10) AS day, 'llm' AS kind,
-           SUM(cost_usd) AS cost_usd, SUM(total_tokens) AS tokens, COUNT(*) AS calls
-      FROM llm_usage WHERE success = 1 GROUP BY day
-    UNION ALL
-    SELECT substr(created_at, 1, 10) AS day, 'media' AS kind,
-           SUM(cost_usd) AS cost_usd, 0 AS tokens, COUNT(*) AS calls
-      FROM media_usage WHERE success = 1 GROUP BY day;
-```
+| 它的形状 | 为什么这样选 |
+| --- | --- |
+| 一次调用一行，不按天聚合 | 视图是**取数口**，不是成品报表。按天、按月、按用途、按 persona、按 provider——四种聚合方式里选一种写进视图，另外三种就得再开一个视图。原子行只有一种，无歧义 |
+| 视图内固定 `WHERE success = 1` | 失败的调用不产生 `cost_usd`，混进去只会让「今天花了多少」这个数字变得需要解释。要算失败率、重试次数、P95 延迟的页面直接查 `llm_usage`，不走这个视图——**一个视图不必同时是报表和原始数据源** |
+| 带 `persona_id` | 一个库里可以有多个 persona，而预算也是**按 persona 算**的 |
+| `cost_kind` 区分 `llm` / `media` | 「生图是不是成了主要开销」是一级问题（§ 2.4 最后一行） |
 
 ### 2.4 统计维度
 
@@ -383,76 +379,43 @@ sequenceDiagram
 
 ## 7. 数据表
 
-`log_entry` 是新表；其余为**已有表的补齐**（加列 + 加索引）。
+本分册需要**一张新表**（`log_entry`）与**三处补列**（`tick_log` / `activity_log` /
+`llm_usage` 各自的 `correlation_id`）。
 
-```sql
--- 24. log_entry · 结构化日志（仅 WARNING 以上）
-CREATE TABLE IF NOT EXISTS log_entry (
-    id              TEXT PRIMARY KEY,
-    level           TEXT NOT NULL,          -- WARNING | ERROR | CRITICAL
-    logger          TEXT NOT NULL,
-    message         TEXT NOT NULL,          -- 已过 SecretFilter
-    module          TEXT,
-    function        TEXT,
-    line            INTEGER,
-    plugin_id       TEXT,
-    tick_id         TEXT,
-    correlation_id  TEXT,
-    exc_type        TEXT,
-    exc_text        TEXT,                   -- 已过 SecretFilter
-    extra_json      TEXT CHECK (extra_json IS NULL OR json_valid(extra_json)),
-    occurred_at     TEXT NOT NULL
-);
+> **完整 DDL 不在本分册，在 [`03-data-model.md § 3.3`](03-data-model.md)。**
+> 物理 schema 只能有一个出处。本分册早期版本里复制过一份 DDL，结果它与 03 分册
+> 在列名（`occurred_at` vs `created_at`）、主键类型（`TEXT` vs `INTEGER`）、
+> 索引名（`idx_log_corr` vs `idx_log_correlation`）上全都对不上。
+> 复制一份 DDL 的代价不是多打几行字，而是从那一刻起存在两个「真相」——
+> 而它们必然分叉。
 
-CREATE INDEX IF NOT EXISTS idx_log_time     ON log_entry(occurred_at DESC);
-CREATE INDEX IF NOT EXISTS idx_log_level    ON log_entry(level, occurred_at DESC);
-CREATE INDEX IF NOT EXISTS idx_log_logger   ON log_entry(logger, occurred_at DESC);
-CREATE INDEX IF NOT EXISTS idx_log_corr     ON log_entry(correlation_id);
+下表回答的是另一个问题：**为什么这些列必须是它，而不是别的**。
 
--- 已有表补齐关联键（migrations/003_observability.sql）
-ALTER TABLE tick_log     ADD COLUMN correlation_id TEXT;
-ALTER TABLE activity_log ADD COLUMN correlation_id TEXT;
-ALTER TABLE llm_usage    ADD COLUMN correlation_id TEXT;
-CREATE INDEX IF NOT EXISTS idx_llm_usage_corr ON llm_usage(correlation_id);
+| 本分册要求的列 / 索引 | 为什么必须是它 |
+| --- | --- |
+| `log_entry.tick_id` | 没有它，日志页无法回答「这次报错属于哪次推演」，只能靠时间戳猜 |
+| `log_entry.correlation_id` | 链路视图 `v_trace` 的分组键（§ 4 的「完整链路」） |
+| `log_entry.exc_text` | 含堆栈。**不落库就无法事后排查**——这正是它与 `event_log` 的关键区别 |
+| `log_entry.extra_json` | 结构化字段，可被 `json_extract` 查询；也意味着它会过独立的正则脱敏（§ 6.2） |
+| `log_entry.id` 用 `INTEGER PRIMARY KEY AUTOINCREMENT` | 日志表会被保留策略删行（§ 9）。普通 `INTEGER PRIMARY KEY` 会**复用**被删掉的行号，于是「昨天那条链结」会指向今天的新日志。`AUTOINCREMENT` 的代价是多一张 `sqlite_sequence` 表，代价到此为止 |
+| `idx_log_correlation` | 按 correlation_id 一次性打开某次推演的全部日志 |
+| `idx_llm_usage_correlation` / `idx_tick_log_correlation` / `idx_activity_log_correlation` | `v_trace` 的各条支路按它们筛 |
 
--- 视图：一次推演的完整时间线（页面「完整链路」用它）
-CREATE VIEW IF NOT EXISTS v_trace AS
-    SELECT correlation_id, 'tick'    AS kind, tick_id AS ref_id, occurred_at, 0 AS ord FROM tick_log
-     WHERE correlation_id IS NOT NULL
-    UNION ALL
-    SELECT correlation_id, 'llm',   id, created_at, 1 FROM llm_usage   WHERE correlation_id IS NOT NULL
-    UNION ALL
-    SELECT correlation_id, 'media', id, created_at, 2 FROM media_usage WHERE correlation_id IS NOT NULL
-    UNION ALL
-    SELECT correlation_id, 'log',   id, occurred_at, 3 FROM log_entry  WHERE correlation_id IS NOT NULL;
-```
+**只落 WARNING 及以上**：全量日志在 `logs/` 下的文件里（§ 5）。DB 里这一份
+是给「页面能查、能按 tick 串联」用的，因此列比文件日志少，但关联键比它多。
 
-### 7.1 `media_usage` 表（属第 7 分册，此处列出以便一次迁移）
+### 7.1 `v_trace`：一个视图，不是汇总表
 
-```sql
--- 25. media_usage · 生图计量
-CREATE TABLE IF NOT EXISTS media_usage (
-    id            TEXT PRIMARY KEY,
-    persona_id    TEXT REFERENCES persona(id) ON DELETE SET NULL,
-    tick_id       TEXT,
-    correlation_id TEXT,
-    purpose       TEXT NOT NULL,            -- selfie | scenery | object | post_illustration
-    provider_id   TEXT NOT NULL,
-    model         TEXT NOT NULL,
-    count         INTEGER NOT NULL DEFAULT 1,
-    width         INTEGER NOT NULL DEFAULT 0,
-    height        INTEGER NOT NULL DEFAULT 0,
-    reference_count INTEGER NOT NULL DEFAULT 0,
-    latency_ms    INTEGER NOT NULL DEFAULT 0,
-    cost_usd      REAL NOT NULL DEFAULT 0,
-    retry_count   INTEGER NOT NULL DEFAULT 0,
-    success       INTEGER NOT NULL DEFAULT 1,
-    error         TEXT,
-    created_at    TEXT NOT NULL
-);
+链路视图的定义同样在 [`03-data-model.md § 3.3`](03-data-model.md)。这里只记两条设计决定：
 
-CREATE INDEX IF NOT EXISTS idx_media_usage_time ON media_usage(created_at DESC);
-```
+| 决定 | 理由 |
+| --- | --- |
+| 第一路取 `tick_log` 而不是 `event_log` | `event_log` 默认关闭（§ 7.2）。只有它是锚点时，时间线在默认配置下会一条 tick 记录都没有——而 tick 恰恰是整条链的起点 |
+| `event_log` 那一路的 `tick_id` 是 `NULL` | `event_log` 没有 `tick_id` 列，也不该有：它的 `correlation_id` 已经唯一标识一次推演，再存一列等于把同一个值写两遍 |
+
+**为什么用视图而不是汇总表**：汇总表要么有两个写入点（必然漂移，因为没人记得同时更新两处），
+要么定期重算（于是预算检查会读到过期数据，而预算检查的全部意义就是「现在花超了吗」）。
+视图每次读的都是真实数据，代价只是一次全表扫。
 
 ### 7.2 `event_log` 的定位调整
 

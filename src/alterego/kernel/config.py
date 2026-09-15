@@ -358,6 +358,13 @@ class StorageConfig:
     checkpoint_on_start: bool = True
     integrity_check_on_start: bool = False
     backup_before_destructive_migration: bool = True
+    """破坏性迁移（会删表、删列、重建表）之前是否自动备份，默认备份。
+
+    关掉它**不等于「那就别备份了」**，而是「不给退路就别改」：
+    存储层在没有备份目录时会直接拒绝执行破坏性迁移。
+    这样写是为了让关掉开关的后果落在「迁移没跑成」而不是「数据没了」——
+    前者重跑一次就好，后者不可逆。
+    """
 
     def __post_init__(self) -> None:
         _require_positive("busy_timeout_ms", self.busy_timeout_ms)
