@@ -15,6 +15,7 @@ from __future__ import annotations
 from alterego.domain import (
     birthday,
     calendar,
+    consolidation,
     conversation,
     emotion,
     knowledge,
@@ -27,6 +28,7 @@ from alterego.domain import (
 __all__ = [
     "birthday",
     "calendar",
+    "consolidation",
     "conversation",
     "emotion",
     "knowledge",
