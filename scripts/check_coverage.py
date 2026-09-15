@@ -77,7 +77,25 @@ def summarise(report: dict) -> dict[str, float]:
     return result
 
 
+def _force_utf8() -> None:
+    """把标准输出/错误的编码换成 UTF-8。
+
+    CI 的 Windows runner 默认用系统代码页（``charmap``），而本项目所有输出都是中文——
+    不换编码，第一行 ``print("覆盖率下限核对…")`` 就会抛 ``UnicodeEncodeError`` 并以
+    退出码 1 结束。那和「覆盖率不达标」是同一个信号，**读日志的人会以为测试挂了**。
+    本机没暴露这个问题，是因为本地脚本一律带着 ``PYTHONIOENCODING=utf-8`` 跑。
+
+    ``errors="replace"`` 是不想把「编码」这件事再变成一次硬失败：真遇到装不下的字符，
+    退化成问号也比整个脚本崩掉强。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str]) -> int:
+    _force_utf8()
     report_path = Path(argv[1]) if len(argv) > 1 else DEFAULT_REPORT
     if not report_path.is_file():
         print(f"✗ 找不到覆盖率报告 {report_path}")

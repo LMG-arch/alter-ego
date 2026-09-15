@@ -570,6 +570,11 @@
   `scripts/check_coverage.py`（复用同一次 `--cov-report=json` 的产物按包核对），
   接进 CI 的测试作业。coverage 自带的 `--cov-fail-under` 只能表达一个全局下限，
   而这里要的是四个不同的数
+- **新脚本第一次上 CI 就崩了**（`scripts/check_coverage.py`）。Windows runner 的
+  `stdout` 用系统代码页（`charmap`），而它第一行就 `print` 中文——`UnicodeEncodeError`，
+  退出码 1，和「覆盖率不达标」是同一个信号。**本机看不到，因为本地脚本一律带着
+  `PYTHONIOENCODING=utf-8` 跑**。现在脚本自己把标准流重设成 UTF-8
+  （`errors="replace"`：装不下的字符退化成问号，也好过整个脚本崩掉）
 - **CI 里没有 mypy**（`.github/workflows/ci.yml`）。`AGENTS.md` § 4 把它列为必跑门禁，
   `pyproject.toml` 把它配成 `strict = true`，`dev` 依赖里也装了它——但没有一步在跑它。
   与上一条同一类缺陷：**文档说了、机制没有**。现已补上
