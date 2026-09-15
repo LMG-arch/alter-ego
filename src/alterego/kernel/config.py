@@ -32,8 +32,9 @@ from pathlib import Path
 from typing import Any, Literal, cast, get_args
 
 from alterego.kernel.clock import resolve_timezone
-from alterego.kernel.config_values import build_section
+from alterego.kernel.config_values import build_section, type_hints
 from alterego.kernel.errors import ConfigError
+from alterego.kernel.logging import get_logger
 
 
 __all__ = [
@@ -57,6 +58,8 @@ __all__ = [
 ]
 
 ENV_PREFIX = "ALTEREGO_"
+
+_log = get_logger("kernel.config")
 
 #: 按顺序查找的默认配置文件位置。
 DEFAULT_CONFIG_PATHS: tuple[Path, ...] = (
@@ -480,8 +483,8 @@ class Config:
     web: WebConfig = field(default_factory=WebConfig)
     #: 实际读到的配置文件；全部使用内置默认值时为 ``None``。
     source: Path | None = None
-    #: 配置文件里存在但内核不认识的键。只告警，不失败——
-    #: 插件可能需要它们（P4 可插拔优于可配置）。
+    #: 配置文件里存在但内核不认识的键，用点分路径表示（``"llm.routing.decisionn"``）。
+    #: 只告警，不失败——插件可能需要它们（P4 可插拔优于可配置）。
     unknown_keys: tuple[str, ...] = ()
 
     # ── 加载 ────────────────────────────────────────────────
@@ -537,6 +540,12 @@ class Config:
         merged = _resolve_env_references(merged, environ)
 
         known, unknown = _split_known(merged, cls)
+        if unknown:
+            _log.warning(
+                "配置里有内核不认识的键，已忽略: %s（%s）",
+                ", ".join(unknown),
+                source if source is not None else "内置默认值",
+            )
         config = build_section(cls, known)
         return _replace(config, source=source, unknown_keys=tuple(unknown))
 
@@ -758,14 +767,30 @@ def _resolve_env_references(value: Any, environ: Mapping[str, str]) -> Any:
 
 
 def _split_known(merged: Mapping[str, Any], cls: type[Any]) -> tuple[dict[str, Any], list[str]]:
-    """分出内核认识的键与多余的键。多余的只告警——插件可能要用。"""
+    """分出内核认识的键与多余的键，**递归到嵌套配置段**。多余的只告警——插件可能要用。
+
+    只看顶层是不够的：``[llm.routing]`` 里把 ``decision`` 敲成 ``decisionn``，键落在已知的
+    ``llm`` 段内，于是既不进 ``unknown_keys``，也不会被 :func:`build_section` 认领（后者只遍历
+    dataclass 自己的字段名）——**静默消失**。设计文档把这种失效列为不可接受，见
+    ``docs/design/07-model-routing-and-media.md`` § 3.1.1。
+
+    ``Mapping[str, Any]`` 类型的字段是**开放的**（``llm.providers`` / ``channels.options`` /
+    ``plugins.config`` 里的键由插件自己解释），内核无从判断，因此不往里递归。注解取不到时
+    同样不递归——猜错比不猜更糟。
+    """
+    declared = _field_names(cls)
+    hints = type_hints(cls)
     known: dict[str, Any] = {}
     unknown: list[str] = []
     for key, value in merged.items():
-        if key not in _field_names(cls):
+        if key not in declared:
             unknown.append(key)
             continue
         known[key] = value
+        annotation = hints.get(key)
+        if isinstance(annotation, type) and is_dataclass(annotation) and isinstance(value, Mapping):
+            _, nested = _split_known(value, annotation)
+            unknown.extend(f"{key}.{path}" for path in nested)
     return known, unknown
 
 

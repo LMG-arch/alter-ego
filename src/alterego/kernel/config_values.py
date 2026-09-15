@@ -6,6 +6,9 @@
 
 ``Config.load`` 把已合并的字典交给 :func:`build_section`，
 从这里往下就只剩「类型对不对」这一件事。
+
+:func:`type_hints` 也被 ``config.py`` 用来判断「一个段能不能往里递归」，
+所以它是对外公开的——两处都要解析注解字符串，没必要各缓存一份。
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ from typing import Any, Literal, get_args, get_origin, get_type_hints
 from alterego.kernel.errors import ConfigError
 
 
-__all__ = ["build_section"]
+__all__ = ["build_section", "type_hints"]
 
 
 def build_section(cls: type[Any], data: Mapping[str, Any]) -> Any:
@@ -29,7 +32,7 @@ def build_section(cls: type[Any], data: Mapping[str, Any]) -> Any:
     「宽松」指的是 ``"3"`` → ``3`` 这种 TOML/环境变量带来的字符串，
     而不是「错的东西也接受」——转换不了仍然报错。
     """
-    hints = _type_hints(cls)
+    hints = type_hints(cls)
     kwargs: dict[str, Any] = {}
     for info in fields(cls):
         if info.name not in data:
@@ -44,7 +47,7 @@ def build_section(cls: type[Any], data: Mapping[str, Any]) -> Any:
 _TYPE_HINTS: dict[type[Any], dict[str, Any]] = {}
 
 
-def _type_hints(cls: type[Any]) -> dict[str, Any]:
+def type_hints(cls: type[Any]) -> dict[str, Any]:
     """取解析后的字段类型（按类缓存）。
 
     **必须走 ``get_type_hints``**：本模块用了 ``from __future__ import annotations``，

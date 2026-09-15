@@ -130,23 +130,34 @@ npc = "cheap"
 
 purpose 是**代码里**的概念（每次 LLM 调用都必须声明它），routing 是**配置里**的映射。新增用途要改代码，这是刻意的——否则统计页会出现无法解释的用途名。
 
-| purpose | 触发者 | 建议档位 | 说明 |
-| --- | --- | --- | --- |
-| `decision` | 意图阶段 | strong | 10 个候选里选 1 个，质量最影响拟人感 |
-| `expression` | 表达阶段 | strong | 生成真正说出口的话 |
-| `reflection` | 反思阶段 | cheap | 概括状态、归纳记忆 |
-| `emotion` | 反思阶段 | cheap | 情绪更新（结构化输出） |
-| `memory` | 记忆巩固 | cheap | 归纳 episodic → semantic |
-| `vault` | 知识库整理 | cheap | 把收集箱里的笔记归位、起名、互链（见下） |
-| `npc` | NPC 推演 | cheap | 80% 走规则，剩下 20% 才调用 |
-| `persona` | 人设生成 | strong | 一次性，质量重要 |
-| **`image_prompt`** | 生图前 | strong | 把「想拍什么」翻译成生图提示词的四个槽位（见 § 5.3） |
-| **`research_query`** | 检索前 | cheap | 把兴趣 + 情绪变成搜索词 |
-| **`research_summarize`** | 检索后 | cheap | 把网页正文压成一段可入记忆的摘要 |
+**代码里的权威集合只有一个：`LLMRoutingConfig` 的字段（去掉 `strong` / `cheap` 两个档位键）。**
+`llm/gateway.py` 的 `_KNOWN_PURPOSES` 就是从那个 dataclass **推导**出来的，不另抄一份清单——抄的那份一定会在加字段那天忘记同步。因此下表只是**设计意图**，比代码多；多出来的行写进配置会被内核点名（见 § 3.1），不会静默生效。
 
-> **最后三个是本次新增**。它们的存在说明一件事：**生图与联网不是一个独立系统，
-> 而是推演循环的延伸**——它们各自都需要一次（或两次）LLM 调用，因此必须走同一套
-> 路由、同一套预算、同一套统计。任何「绕过 routing 直接调 LLM」的实现都是 bug。
+| purpose | 触发者 | 建议档位 | 状态 | 说明 |
+| --- | --- | --- | --- | --- |
+| `decision` | 意图阶段 | strong | 🔌 仅配置键 | 10 个候选里选 1 个，质量最影响拟人感 |
+| `expression` | 表达阶段 | strong | 🔌 仅配置键 | 生成真正说出口的话 |
+| `reflection` | 反思阶段 | cheap | 🔌 仅配置键 | 概括状态、归纳记忆 |
+| `emotion` | 反思阶段 | cheap | ⏳ 未实现 | 情绪更新（结构化输出）。**当前不走 LLM**：`domain/emotion.py::update_emotion` 是纯函数（规则驱动，可复现），`prompts/emotion_update.md` 已备好但尚未接线 |
+| `memory` | 记忆巩固 | cheap | ✅ 已接线 | 归纳 episodic → semantic（`sim/consolidation.py`） |
+| `vault` | 知识库整理 | cheap | ✅ 已接线 | 把收集箱里的笔记归位、起名、互链（`sim/vault.py`，见下） |
+| `npc` | NPC 推演 | cheap | 🔌 仅配置键 | 80% 走规则，剩下 20% 才调用 |
+| `persona` | 人设生成 | strong | 🔌 仅配置键 | 一次性，质量重要 |
+| **`image_prompt`** | 生图前 | strong | ⏳ 未实现 | 把「想拍什么」翻译成生图提示词的四个槽位（见 § 5.3） |
+| **`research_query`** | 检索前 | cheap | ⏳ 未实现 | 把兴趣 + 情绪变成搜索词 |
+| **`research_summarize`** | 检索后 | cheap | ⏳ 未实现 | 把网页正文压成一段可入记忆的摘要 |
+
+**三种状态的含义**（`tests/test_kernel_config.py` 会把前两种和配置类对账）：
+
+- ✅ **已接线** —— 配置键存在，而且真有代码路径拿它调 `LLMGateway.complete()`。
+- 🔌 **仅配置键** —— 键在 `LLMRoutingConfig` 里（所以 `resolve()` 认得、统计页不会出现无法解释的用途名），
+  但还没有调用方。推演循环落地后才会有。
+- ⏳ **未实现** —— 连配置键都还没有。此时写进 `[llm.routing]` 会被 § 3.1 的未知键检测点名。
+
+> 上表里带粗体的三个（`image_prompt` / `research_query` / `research_summarize`）是「生图与联网」
+> 那批设计新增的。它们的存在说明一件事：**生图与联网不是一个独立系统，而是推演循环的延伸**
+> ——它们各自都需要一次（或两次）LLM 调用，因此必须走同一套路由、同一套预算、同一套统计。
+> 任何「绕过 routing 直接调 LLM」的实现都是 bug。
 
 > `vault` 用途**已实现**（`alterego vault organize`，见
 > [`plans/2026-09-16-obsidian-vault.md`](../plans/2026-09-16-obsidian-vault.md)）。
@@ -184,6 +195,32 @@ flowchart TD
 > **为什么不直接报错退出**：配置非法才该退出码 2。这里是「能读懂但语义变了」，
 > 用户的意图可以被无歧义地推断出来——这种情况下把用户挡在门外才是坏体验。
 > 但**必须说出来**，静默转换是另一种伤害。
+
+#### 3.1.1 不认识的键会被点名（已实现）
+
+上面的迁移是给「值变了」用的。还有一类更隐蔽的情况：**键本身不存在**——
+`[llm.routing]` 里把 `decision` 敲成 `decisionn`，或者照着 § 2.4 里标 ⏳ 的行
+写了 `emotion = "cheap"`。这两种以前都**完全无声**：键落在已知的 `llm` 段里，
+既不进 `Config.unknown_keys`，也不会被 `build_section` 认领（后者只遍历 dataclass
+自己的字段名），就这么消失了。用户改完配置、重启、行为照旧，还没有任何提示。
+
+现在 `kernel/config.py::_split_known` **递归到嵌套配置段**，未知键以点分路径
+记进 `Config.unknown_keys` 并发一条 `WARNING`：
+
+```text
+配置里有内核不认识的键，已忽略: llm.routing.decisionn（/path/alterego.toml）
+```
+
+两条边界是刻意的：
+
+- **`Mapping[str, Any]` 类型的字段不递归**。`llm.providers` / `channels.options` /
+  `plugins.config` 里的键由插件自己解释（P4），内核无从判断——把插件键全报成
+  未知，比不报更糟。
+- **只告警，不失败**。插件可能需要内核不认识的键，所以退出码仍是 0。
+  但 `unknown_keys` 不再是个只写不读的字段了。
+
+`templates/alterego.toml` 是权威参考，它一旦出现未知键就说明模板写错了或
+`config.py` 漏了字段——`test_authoritative_template_covers_every_key` 守住这条。
 
 ### 3.2 配置快照与黄金测试
 

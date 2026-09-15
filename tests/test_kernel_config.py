@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import FrozenInstanceError
 from datetime import time
 from pathlib import Path
@@ -204,6 +205,100 @@ def test_unknown_top_level_key_only_warns() -> None:
     """插件可能需要内核不认识的键（P4），所以只记录不失败。"""
     config = Config.load(overrides={"telemetry": {"enabled": True}})
     assert config.unknown_keys == ("telemetry",)
+
+
+def test_a_typo_inside_a_nested_section_is_reported(tmp_path: Path) -> None:
+    """嵌套段里的拼写错误必须被抓到，用点分路径报出来。
+
+    这里原先只看**顶层键**。于是 ``[llm.routing]`` 里的
+    ``decision = "strong"`` 被敲成 ``decisionn = "strong"`` 会完全无声：
+    键落在已知的 ``llm`` 段里，既不进 ``unknown_keys``，也不会被
+    ``build_section`` 认领（后者只遍历 dataclass 自己的字段名），
+    就这么消失了。用户改完配置、重启、行为照旧、还没有任何提示——
+    正是 ``07-model-routing-and-media.md`` § 3.1 列为不可接受的「静默失效」。
+
+    修复后 ``unknown_keys`` 递归到嵌套段。断言的第二行是重点：
+    路由值仍然是**默认的** ``"strong"``，也就是说那句 typo 确实一个字都没生效。
+    """
+    path = _write(tmp_path, '[llm.routing]\ndecisionn = "strong"\n')
+    config = Config.load(path=path, env={})
+    assert config.unknown_keys == ("llm.routing.decisionn",)
+    assert config.llm.routing.decision == LLMRoutingConfig().decision
+
+
+def test_every_nested_section_reports_its_own_stray_keys(tmp_path: Path) -> None:
+    """递归得走到底：两层的段和只剩一层的段都要报，路径要能直接指出改哪一行。
+
+    能被递归进去的只有**注解是 dataclass 的字段**，目前是这三个：
+    ``llm.routing`` / ``llm.budget`` / ``routing.filters``。
+    直接写在 ``[llm]`` 下面的未知键走的是另一条路（被 :func:`_collapse_extras`
+    折进 ``llm.providers``，当成插件键），因此不该出现在这里。
+    """
+    path = _write(
+        tmp_path,
+        """
+[llm.routing]
+persona = "strong"
+personas = "strong"
+
+[llm.budget]
+daily_usd_limit = 2.0
+daily_usd_limits = 2.0
+
+[routing.filters]
+suppress_quiet_hours = true
+suppress_quiet_hour = true
+""",
+    )
+    config = Config.load(path=path, env={})
+    assert config.unknown_keys == (
+        "llm.routing.personas",
+        "llm.budget.daily_usd_limits",
+        "routing.filters.suppress_quiet_hour",
+    )
+    assert config.llm.routing.persona == "strong"
+    assert config.routing.filters.suppress_quiet_hours is True
+
+
+def test_unknown_keys_are_logged_and_never_raised(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """字段文档说「只告警，不失败」——那就得真的有告警。
+
+    ``unknown_keys`` 曾经是个只写不读的字段：除了测试没人看它，
+    于是「只告警」实际上是「不告警」。这条测试把承诺钉住。
+    """
+    path = _write(tmp_path, "[telemetry]\nenabled = true\n")
+    with caplog.at_level(logging.WARNING, logger="alterego.kernel.config"):
+        config = Config.load(path=path, env={})
+    assert config.unknown_keys == ("telemetry",)
+    assert any("telemetry" in record.getMessage() for record in caplog.records)
+    assert any(record.levelno == logging.WARNING for record in caplog.records)
+
+
+def test_plugin_owned_keys_are_not_reported_as_unknown(tmp_path: Path) -> None:
+    """开放的容器段不参与递归——里面的键归插件解释，内核无从判断。
+
+    ``llm.providers`` / ``channels.options`` / ``plugins.config`` 都是
+    ``Mapping[str, Any]``。如果递归不看注解类型，插件写的每一个键都会
+    变成一条假告警，那比不告警更糟。
+    """
+    path = _write(
+        tmp_path,
+        """
+[llm.providers.mine]
+api_key = "k"
+weird_plugin_only_key = 1
+
+[channels.file]
+path = "data/outbox"
+
+[plugins.config."my.plugin"]
+anything = [1, 2, 3]
+""",
+    )
+    config = Config.load(path=path, env={})
+    assert config.unknown_keys == ()
 
 
 def test_options_for_unknown_channel_is_empty() -> None:
@@ -425,6 +520,10 @@ def test_authoritative_template_covers_every_key() -> None:
 
     它一旦出现内核不认识的键，要么是模板写错了，要么是 ``config.py``
     漏了新字段——两种都必须当场发现。
+
+    ⚠️ 这条断言在 ``unknown_keys`` 只会看顶层键的时候是**瞎的**：
+    模板里 ``[llm.routing]`` 少了个字段、或者多写了一个不存在的用途，
+    都测不出来。现在检测递归了，这句话才名副其实。
     """
     config = Config.load(path=TEMPLATE, env={})
     assert config.unknown_keys == ()
