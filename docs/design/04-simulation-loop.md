@@ -196,6 +196,10 @@ class Percepts:
     schedule_block: ScheduleBlock | None
     next_block_in_minutes: int | None
 
+    day_type: DayKind                       # workday | weekend | holiday | makeup_workday
+    holiday: HolidayContext | None          # 今天处于哪个节日的哪个阶段、多强
+    upcoming_holidays: tuple[Holiday, ...]  # 之后 14 天内的节日，按远近排序
+
     unread_messages: list[Message]          # 用户未读消息
     recent_user_messages: list[Message]     # 最近 2 小时用户消息
     pending_post_interactions: list[PostInteraction]
@@ -204,8 +208,20 @@ class Percepts:
     minutes_since_last_post: int | None
     minutes_since_last_activity: int | None
 
-    external: dict[str, Any]        # 插件注入的外部感知（天气 API、日历等）
+    external: dict[str, Any]        # 插件注入的外部感知（天气 API、第三方日历等）
 ```
+
+**节日为什么是三个一等字段，而不是 `external["holiday"]`**：
+
+`external` 是**插件**往裡塞东西的口子，而节日是内置的、随包的知识，没有插件负责它。
+更要紧的是语义：`day_type` 决定作息模板选哪套日程（调休上班的周六不是周末），
+`holiday.intensity` 决定准备活动能排进多少件事，`is_preparing` 决定要不要开「准备过节」这个意图。
+这三件事都是**内核自己要用**的，而不是某个插件想告知的信息。
+
+`HolidayContext.phase` 与 `is_weekend` 会同时成立：国庆前的周六既是周末、也在节前。
+两者一起交给意图系统，才算「这个周末在为节日做准备」。
+
+定义、强度曲线与支配规则见 [12-calendar-and-conversation.md](12-calendar-and-conversation.md) § 4 与 § 6。
 
 **内置感知逻辑**（纯代码，不调 LLM）：
 
@@ -373,6 +389,17 @@ def build_candidates(ctx: TickContext) -> list[Intent]:
             hours = ctx.percepts.minutes_since_last_post / 60
             weight *= min(1.0 + hours / 12, 3.0)
 
+        # ── 节日上下文：不新增意图类型，只抬权 ──
+        holiday = ctx.percepts.holiday
+        if holiday is not None and holiday.is_preparing:
+            # 只影响「今天做的事」，不改性格、不改语气。
+            # 强度直接当倍率用，所以日程是**渐渐**偏向节日的，不会某天跳到全套。
+            if it.name in ("socialize", "entertain"):
+                weight *= 1.0 + holiday.intensity        # 最多 2.0×
+        if ctx.percepts.day_type == "holiday" and it.name == "work":
+            # 放假那天不排工作——靠日型挡，不靠提示词里写「今天放假别上班」
+            weight = 0.0
+
         # ── 能力可用性过滤 ──
         if it.requires_capability and not ctx.has_capability(it.requires_capability):
             continue
@@ -381,6 +408,19 @@ def build_candidates(ctx: TickContext) -> list[Intent]:
 
     return sorted(cands, key=lambda c: -c.weight)[:5]
 ```
+
+**为什么节日不新开一个 `prepare_holiday` 意图**：
+
+「准备过节」不是一个**独立的行为**，而是「今天做的事偏向那边一点」——
+抢票、买年货、走亲戚各自落在已有的 `socialize` / `entertain` 里，
+多一个意图类型只会让 LLM 在「该选 `prepare_holiday` 还是 `socialize`」上做无意义的二选一。
+所以节日只做两件事：**抬已有意图的权重**，以及**把 `work` 在放假日压到 0**。
+前者让日程渐渐转向，后者是硬约束（P3：机制约束优于提示词祈祷——
+「今天放假别上班」写在提示词里是不可靠的）。
+
+权重里的倍率直接就是 `intensity`，所以强度差多少，日程就差多少：
+不会出现 0.34 那天毫无变化、0.35 那天突然全套准备动作的突变。
+定义与曲线见 [12-calendar-and-conversation.md](12-calendar-and-conversation.md) § 4 与 § 9。
 
 **LLM 决策 Prompt**：
 

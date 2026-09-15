@@ -441,14 +441,20 @@ src/alterego/domain/
 ├── persona.py        # 待实现
 ├── emotion.py        # ✅ 已实现
 ├── memory.py         # ✅ 已实现
-├── schedule.py       # ✅ 已实现
+├── schedule.py       # ✅ 已实现（日程生成待做）
+├── calendar.py       # ✅ 已实现 → 12-calendar-and-conversation.md
 ├── relationship.py   # 待实现
 ├── world.py          # 待实现
 ├── post.py           # 待实现
-├── conversation.py   # 待实现
+├── conversation.py   # ✅ 已实现（对话节奏部分）→ 12-calendar-and-conversation.md
 ├── media.py          # 待实现（ADR-0008）
 └── untrusted.py      # 待实现（ADR-0009）
 ```
+
+> **一个包外的邻居**：`src/alterego/holidays/` 不是第四层也不是插件，
+> 它是「`domain/calendar.py` 的数据文件 + 它的读取器」。领域层不许做 IO（红线 2），
+> 所以读盘这件事必须放在领域层外面，而放在内核里又会让内核知道节日是什么。
+> 与 `storage/sqlite/migrations/` 的处理方式一致：数据和它的读取器住在一起。
 
 下面的草图描述**目标接口**；已实现部分以 `src/alterego/domain/` 下的代码为准，
 本节的签名与公式与之保持一致。

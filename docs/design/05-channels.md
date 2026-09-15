@@ -1000,6 +1000,12 @@ alterego
 │   ├── forget <id>
 │   └── consolidate         手动触发记忆巩固
 │
+├── calendar
+│   ├── list [--year YYYY]  一年的节日一览
+│   ├── today [--date] [--days N]
+│   │                       今天是什么日子 + 之后 N 天有什么
+│   └── check [--year YYYY] 数据可信度：哪些日期还没核对
+│
 ├── feed
 │   ├── list [--limit]
 │   ├── show <id>
@@ -1068,6 +1074,21 @@ LLM 消耗   今日 $1.12 / $2.00
   · channel.web / file / console 支持双向
   · channel.dingtalk_webhook 仅出站，用户回复请到 Web 界面
 ```
+
+**`alterego calendar today --date 2026-09-26`**（节日上下文，见 [12](12-calendar-and-conversation.md)）：
+
+```
+2026-09-26  周六  周末
+──────────────────────────────────────────────────────────
+节后 中秋节（1 天前）  强度 █████░░░░░ 0.50
+  这段时间大概会：月饼还剩一堆
+
+未来 14 天
+  10-01  周四  国庆节  5 天后 · 放假 3 天（10-01 ~ 10-03）
+```
+
+`--date` 与 `--year` 缺省时按**内核时区**算「今天」，不是进程本地时区——
+差一天就是差一个节日。三命令的退出码：`0` 正常 / `2` 数据缺失或年份越界。
 
 **`alterego memory search "爬山"`**（显示分数分解）：
 

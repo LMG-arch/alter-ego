@@ -263,15 +263,16 @@ v1 采用**单进程多线程**模型：
 | 模块 | 职责 |
 | --- | --- |
 | `persona.py` | 人格数据类、人格卡加载与校验、人格渲染为提示词片段 |
-| `emotion.py` | 情绪二维模型、情绪更新规则（衰减、事件冲击、情绪惯性） |
-| `memory.py` | 记忆条目、重要度评估、遗忘曲线、检索排序算法 |
+| `emotion.py` | 情绪二维模型、情绪更新规则（衰减、事件冲击、情绪惯性）| ✅ 已实现 |
+| `memory.py` | 记忆条目、重要度评估、遗忘曲线、检索排序算法 | ✅ 已实现 |
 | `relationship.py` | 关系状态、好感度演变规则、关系亲密度分层 |
-| `schedule.py` | 作息模板、日程生成、当前时段判定、冲突处理 |
+| `schedule.py` | 作息模板、当前时段判定、冲突处理 | ✅ 已实现（**日程生成**待做，见 [12](design/12-calendar-and-conversation.md) § 9）|
+| `calendar.py` | 节日日历：日型、节前/节后强度曲线、今天归哪个节日 | ✅ 已实现，见 [12](design/12-calendar-and-conversation.md) |
 | `world.py` | 世界设定、NPC 档案、社交网络拓扑 |
 | `post.py` | 动态内容模型 |
-| `conversation.py` | 会话与消息模型 |
+| `conversation.py` | 会话与消息模型、回复时机、主动话题、复读检测 | ✅ 已实现（对话节奏部分），见 [12](design/12-calendar-and-conversation.md) § 10 |
 
-领域层是**纯函数式**的：给定输入状态与事件，输出新状态。所有随机性来自传入的 `Random` 实例。这让领域逻辑可以被单元测试完全覆盖，无需数据库或 LLM。
+领域层是**纯函数式**的：给定输入状态与事件，输出新状态。所有随机性来自传入的 `Random` 实例（`decide_reply` / `should_open_topic` 收到的 `roll` 就是这个约定的体现）。这让领域逻辑可以被单元测试完全覆盖，无需数据库或 LLM。
 
 ### 5.3 Simulation · 推演层
 
@@ -396,7 +397,7 @@ last = ctx.state.get("last_post_at")
 | 表达 | `tone`, `verbosity`, `emoji_habit`, `catchphrases`, `typing_quirks` | 决定「说话像不像人」 |
 | 偏好 | `likes`, `dislikes`, `habits`, `fears`, `desires` | 驱动意图选择 |
 | 背景 | `backstory`, `current_situation`, `goals` | 长文本，注入提示词 |
-| 作息 | `schedule_template` | 见 `schedule.py` |
+| 作息 | `schedule_template` | 见 `schedule.py` 与 [12](design/12-calendar-and-conversation.md) § 9 |
 
 **人格生成**：支持三种方式
 1. 手工编写 `persona/*.yaml`
@@ -481,6 +482,9 @@ weekend:
 - `interruptible`：该时段是否允许被「主动联系用户」打断——**睡觉和工作时段默认不可被打断**，这从机制上避免了凌晨三点发消息
 - 实际每日日程由模板 + 随机扰动 + 天气/情绪修正生成，存入 `schedule_block` 表
 
+**节假日的日型**：模板的目标形态还包括 `pre_holiday` / `holiday` / `post_holiday` 三套日程，按节日强度**加权混合**而不是整体替换（整体替换会让强度从 0.34 跳到 0.35 那天日程突变）。为什么必须是「混合」、强度怎么算、两个节日窗口重叠时听谁的，见 [12-calendar-and-conversation.md](design/12-calendar-and-conversation.md) § 4 与 § 9。
+> ⚠️ 这三套日型与日程生成器**尚未实现**，本批只完成了「今天是什么日型、像不像节日」这一层。
+
 ### 7.6 世界（World）
 
 | 内容 | 说明 |
@@ -489,7 +493,9 @@ weekend:
 | `npc[]` | NPC 档案：姓名、身份、与主角关系、性格、说话风格 |
 | `relations` | NPC 之间的关系（NPC 之间也是朋友/同事） |
 | `locations` | 常去地点（公司、家、常去的咖啡馆、健身房） |
-| `events` | 世界级事件（季节、节日、社会热点） |
+| `events` | 世界级事件（季节、社会热点） |
+
+**节日不在 `events` 里**。它是随包数据（`holidays/<年份>.toml`）+ 纯函数（`domain/calendar.py`），因为它有一件 `events` 没有的性质：需要**提前几天就知道**。理由与数据格式见 [12-calendar-and-conversation.md](design/12-calendar-and-conversation.md) § 2。
 
 **NPC 也是「人」**：每个 NPC 有简化的人格卡与情绪状态，由 LLM 以更低频率（默认 30 分钟虚拟粒度）驱动。NPC 之间会互相发消息，这些对话会进入主角的记忆（主角「听说」了某事）。
 
@@ -1141,13 +1147,17 @@ alter-ego/
 │   │   ├── schedule.py              # ✅ 已实现：ScheduleBlock / current_block / is_interruptible
 │   │   ├── emotion.py               # ✅ 已实现：二维情绪、四条更新规则、标签推导
 │   │   ├── memory.py                # ✅ 已实现：强度衰减、检索重排、遗忘与激活、巩固
+│   │   ├── calendar.py              # ✅ 已实现：日型、节前/节后强度曲线、今天归哪个节日
+│   │   ├── conversation.py          # ✅ 已实现：回复时机、主动话题、复读检测（对话节奏部分）
 │   │   ├── media.py                 # build_portrait_prompt()：一致性骨架的唯一入口
 │   │   ├── untrusted.py             # INJECTION_PATTERNS 与外部内容包裹
 │   │   ├── persona.py
 │   │   ├── relationship.py
 │   │   ├── world.py
-│   │   ├── post.py
-│   │   └── conversation.py
+│   │   └── post.py
+│   ├── holidays/                    # 随包的节日数据 + 唯一的读盘入口
+│   │   ├── __init__.py              # ✅ 已实现：load_year / load_calendar / available_years
+│   │   └── 2026.toml                # ✅ 已实现：10 个节日，confirmed = false
 │   ├── sim/                         # 推演引擎
 │   │   ├── engine.py
 │   │   ├── context.py
@@ -1395,6 +1405,7 @@ PR 模板中包含勾选清单，未勾选不予合并。
 | [09-observability.md](design/09-observability.md) | Token/成本统计、日志体系、`correlation_id` 排查闭环、两个页面结构 | 核心开发者、运维 |
 | [10-settings-center.md](design/10-settings-center.md) | 配置元数据模型、**用测试强制标注**、写入与热生效、设置页结构 | 核心开发者、前端 |
 | [11-optimization-roadmap.md](design/11-optimization-roadmap.md) | 记忆系统选型、推演系统加深方向、其他系统的优化取舍与推荐排序 | 所有读者 |
+| [12-calendar-and-conversation.md](design/12-calendar-and-conversation.md) | 节日数据格式、**强度曲线**、今天归哪个节日、日型与调休、对话节奏四条机制、复读检测 | 核心开发者、Prompt 工程师 |
 
 ---
 
@@ -1406,3 +1417,4 @@ PR 模板中包含勾选清单，未勾选不予合并。
 | 2026-09-15 | v0.1.1 | § 13 目录树补上 `kernel/manifest.py` / `kernel/context.py`，展开 `interfaces/`（对齐实现） | LMG-arch |
 | 2026-09-15 | v0.2.0 | 新增四类能力设计：§ 6.1 六类→**八类插件**（新增 `image` / `source`）；§ 9.2 修正表数（16→**26**，补入 6 张新表 + 2 个视图）；§ 10.2 页面 8→**13**、SSE 事件补 4 类；§ 15 非目标中「图像生成」移出；§ 17 新增分册 07–11；新增 ADR-0008/0009/0010 | LMG-arch |
 | 2026-09-15 | v0.2.1 | § 13 目录树标注 `domain/` 三个已实现模块；§ 3 领域层草图对齐实现：`strength_at` 公式以 [04](design/04-simulation-loop.md) § 7.2 为准（按 kind 分半衰期）、`ScheduleBlock` 字段名以 DDL 为准、`update_emotion` 增补 `block` 参数、`Emotion.label` 词表改为开放 | LMG-arch |
+| 2026-09-15 | v0.2.2 | 新增分册 [12](design/12-calendar-and-conversation.md)（节日日历与对话节奏）；§ 5.2 领域层表补入 `calendar.py` 并标注实现状态；§ 7.5 作息与 § 7.6 世界接入节日上下文；节日**不**进 `world.events`（提前几天就知道是它特有的性质） | LMG-arch |

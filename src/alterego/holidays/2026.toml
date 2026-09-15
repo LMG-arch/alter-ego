@@ -1,0 +1,188 @@
+# 2026 年节日日历
+#
+# ────────────────────────────────────────────────────────────
+# 这份数据有三个**性质完全不同**的来源，不要把它们混为一谈：
+#
+#   1. 放假**天数** —— 法条。《全国年节及纪念日放假办法》（2024-11 修订）
+#      元旦 1 天、春节 4 天（除夕起）、清明 1 天、劳动节 2 天、
+#      端午 1 天、中秋 1 天、国庆 3 天，共 13 天。
+#   2. 节日**日期** —— 天文事实。春节/元宵/端午/中秋是农历，清明是节气。
+#      标准库没有农历，为了七个日期引一个农历库不划算（P5），所以查表。
+#   3. **调休**补班 —— 行政决定。国务院办公厅每年一发的
+#      《关于 YYYY 年部分节假日安排的通知》。**这不是天文事实，任何算法都推不出来。**
+#
+# 所以：`makeup_days` 在公告发布前一律留空（留空 = 不补班），
+# 并给每个放假节日写上 note。核对该年公告后把 `confirmed` 改成 true。
+#
+# 逐条可信度用 `verified` 表示：
+#   true  —— 公历固定日期 + 法条明确，不会变（元旦 / 劳动节 / 国庆）
+#   false —— 农历或节气推算，**请按权威日历核对**（春节 / 清明 / 端午 / 中秋 / 元宵）
+# 不放假的那几个（情人节 / 圣诞）verified = true：不放假是确定的。
+#
+# 修改本文件后跑 `python -m pytest tests/test_holiday_data.py -q` 校验结构。
+# ────────────────────────────────────────────────────────────
+
+confirmed = false
+
+# 全年放假安排的核对状态说明，会显示在 `alterego holiday list` 上
+note = "调休与连休区间待按国务院办公厅公告核对；农历/节气日期待按权威日历核对"
+
+# ── 法定放假的节日 ──────────────────────────────────────────
+
+[[holiday]]
+id = "new_year"
+name = "元旦"
+kind = "statutory"
+day = 2026-01-01
+days_off = [2026-01-01]
+makeup_days = []
+lead_days = 2
+aftermath_days = 1
+verified = true
+note = "公历固定 2026-01-01；连休与调休待公告"
+prep_activities = ["翻一下去年的记录", "想想今年想干点什么"]
+during_activities = ["睡到自然醒", "出门走走", "点个想吃很久的外卖"]
+aftermath_activities = ["回到日常"]
+
+[[holiday]]
+id = "spring_festival"
+name = "春节"
+kind = "statutory"
+day = 2026-02-17
+days_off = [2026-02-16, 2026-02-17, 2026-02-18, 2026-02-19]
+makeup_days = []
+lead_days = 10
+aftermath_days = 4
+note = "除夕 2026-02-16；农历正月初一 2026-02-17（待核对）；调休待公告"
+# 春节的前置期最长：抢票是硬约束，晚了就没了
+prep_activities = [
+    "盯着抢回家的票",
+    "把手上这点活儿赶完",
+    "给家里打电话问要买什么",
+    "列年货清单",
+    "买年货",
+    "把屋子收拾一遍",
+    "收行李",
+    "跟同事说一声接下来几天不在",
+]
+during_activities = ["回老家", "陪家里人", "走亲戚", "被问工资和对象", "睡到自然醒", "看春晚"]
+aftermath_activities = ["返程", "在车上睡了一路", "把行李从箱子里掏出来", "不太想上班", "缓过来"]
+
+[[holiday]]
+id = "qingming"
+name = "清明节"
+kind = "statutory"
+day = 2026-04-05
+days_off = [2026-04-05]
+makeup_days = []
+lead_days = 4
+aftermath_days = 1
+note = "节气，2026-04-05（待核对）"
+prep_activities = ["看回家的车次", "跟家里确认哪天去"]
+during_activities = ["扫墓", "陪家里人吃顿饭"]
+aftermath_activities = ["回到日常"]
+
+[[holiday]]
+id = "labour_day"
+name = "劳动节"
+kind = "statutory"
+day = 2026-05-01
+days_off = [2026-05-01, 2026-05-02]
+makeup_days = []
+lead_days = 5
+aftermath_days = 1
+verified = true
+note = "公历固定；连休与调休待公告"
+prep_activities = ["想想要不要出去", "看看人多不多", "订票或订房"]
+during_activities = ["出去玩", "在路上", "人挤人", "拍照"]
+aftermath_activities = ["累了", "把照片翻出来看"]
+
+[[holiday]]
+id = "dragon_boat"
+name = "端午节"
+kind = "statutory"
+day = 2026-06-19
+days_off = [2026-06-19]
+makeup_days = []
+lead_days = 4
+aftermath_days = 1
+note = "农历五月初五，2026-06-19（待核对）"
+prep_activities = ["买粽子", "想想要不要回家"]
+during_activities = ["吃粽子", "看龙舟视频"]
+aftermath_activities = ["柜子里还剩两个粽子"]
+
+[[holiday]]
+id = "mid_autumn"
+name = "中秋节"
+kind = "statutory"
+day = 2026-09-25
+days_off = [2026-09-25]
+makeup_days = []
+lead_days = 6
+aftermath_days = 1
+note = "农历八月十五，2026-09-25（待核对）"
+prep_activities = ["挑月饼", "给家里寄一盒", "看回家的票", "跟朋友约"]
+during_activities = ["吃月饼", "赏月", "跟家里视频", "团圆饭"]
+aftermath_activities = ["月饼还剩一堆"]
+
+[[holiday]]
+id = "national_day"
+name = "国庆节"
+kind = "statutory"
+day = 2026-10-01
+days_off = [2026-10-01, 2026-10-02, 2026-10-03]
+makeup_days = []
+lead_days = 7
+aftermath_days = 3
+verified = true
+note = "公历固定；连休与调休待公告"
+prep_activities = ["决定到底出不出去玩", "刷攻略", "订票", "收拾行李", "看一眼工作交接"]
+during_activities = ["出去玩", "在路上", "排队", "拍了很多照片"]
+aftermath_activities = ["返程", "累", "照片还没整理", "想到明天要上班就烦"]
+
+# ── 传统节日（不放假，但会过）────────────────────────────────
+
+[[holiday]]
+id = "lantern_festival"
+name = "元宵节"
+kind = "traditional"
+day = 2026-03-03
+days_off = []
+makeup_days = []
+lead_days = 2
+aftermath_days = 0
+verified = false
+note = "农历正月十五，2026-03-03（待核对）"
+prep_activities = ["买汤圆"]
+during_activities = ["煮汤圆", "猜灯谜"]
+aftermath_activities = []
+
+[[holiday]]
+id = "valentines"
+name = "情人节"
+kind = "western"
+day = 2026-02-14
+days_off = []
+makeup_days = []
+lead_days = 5
+aftermath_days = 0
+verified = true
+note = "公历固定，不放假"
+prep_activities = ["想礼物", "挑礼物", "订位子"]
+during_activities = ["吃顿饭", "送礼物"]
+aftermath_activities = []
+
+[[holiday]]
+id = "christmas"
+name = "圣诞节"
+kind = "western"
+day = 2026-12-25
+days_off = []
+makeup_days = []
+lead_days = 4
+aftermath_days = 0
+verified = true
+note = "公历固定，不放假"
+prep_activities = ["想想要不要表示一下"]
+during_activities = ["和朋友聚", "交换礼物"]
+aftermath_activities = []

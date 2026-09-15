@@ -940,6 +940,16 @@ inner_voice       = '刚看到那个独立游戏的视频，好想跟他说一�
 | `post_interaction.kind` | `like`, `comment` |
 | `persona_version.change_type` | `init`, `manual_edit`, `llm_refine`, `evolution` |
 
+**节日不在这张表里，也不建表。** 日型（`workday` / `weekend` / `holiday` / `makeup_workday`）
+与节日阶段（`none` / `anticipating` / `during` / `aftermath`）都是 `domain/calendar.py` 的
+运行期枚举，**不落库**：它们是「给定日期 + 随包数据」的纯函数结果，落库只会多一份可能与
+`holidays/*.toml` 不一致的副本。世界级事件仍然走 `world.events_json`（它装的是季节、社会热点
+这类没有提前量的东西）；节日的区别与理由见 [12-calendar-and-conversation.md](12-calendar-and-conversation.md) § 2。
+
+同理，`schedule_block.category` **本批没有增加 `festival`**：日程生成器还没写，
+现在加进去会同时改 domain 的 Literal、`001_initial.sql` 的 CHECK 与上表三处，
+而那时还没有任何代码会写入这个值。取舍与触发条件见 [12](12-calendar-and-conversation.md) § 15.1。
+
 ---
 
 ## 5. 索引策略

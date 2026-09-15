@@ -63,13 +63,20 @@ flowchart LR
 
 > **当前进度（2026-09-15）**：阶段 A–C 已完成。阶段 D 的**存储层已落地**——
 > `storage/sqlite/` 下的 `connection.py` / `migrator.py` / `backend.py` 与四个迁移文件。
-> 领域层完成**第一条纵向切片**：`domain/schedule.py`、`domain/emotion.py`、`domain/memory.py`
-> （共 898 个测试，`domain/` 覆盖率 100%）。
+> 领域层完成两条纵向切片：
+>
+> 1. **作息/情绪/记忆**——`domain/schedule.py`、`domain/emotion.py`、`domain/memory.py`（提交 `b5371ba`）。
+> 2. **节日日历与对话节奏**——`domain/calendar.py`、`domain/conversation.py`、随包数据 `holidays/2026.toml`，
+>    外加 `alterego calendar {list,today,check}` 三个命令（共 1081 个测试，全局覆盖率 96.62%，
+>    `domain/` 99.16%）。
+>
 > **领域层其余模块与 12 个 Repository 未开始**。阶段 E–M 均未开始。
 >
-> 先做这一条切片的理由见 [`docs/plans/2026-09-15-domain-emotion-memory.md`](../plans/2026-09-15-domain-emotion-memory.md) § 1：
+> 先做这两条切片的理由见 [`docs/plans/2026-09-15-domain-emotion-memory.md`](../plans/2026-09-15-domain-emotion-memory.md) § 1：
 > 只有情绪与记忆在文档里有**可执行的量化验收标准**（`strength_at` 验证表、`update_emotion` 四条规则），
 > 其余实体只有字段清单，等 Repository 到位再铺开成本更低。
+> 节日那条多了一个额外理由：它有需求里**点名的一句话**（「不要突然过渡到了节日」），
+> 而这句话可以写成一个测试（见 [12](12-calendar-and-conversation.md) § 6.4）。
 
 > **为什么 J/K 排在 L/M 前面**：设置中心与可观测性是**基础设施**。
 > 如果先做生图再补设置页，那生图的十几个新配置项会先以「无标注」的形式存在一段时间，
