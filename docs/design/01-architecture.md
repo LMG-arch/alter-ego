@@ -37,12 +37,25 @@
 | **cli** | ✅ | ✅ | ✅ | ❌ | ✅（接口） | ❌ | ✅ | ✅ | ❌ |
 | **plugins** | ✅ | ✅ | ✅（接口） | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
 
+**两层可以水平挂载的新模块**（v0.2.0+）：
+
+| 模块 | 依赖 | 被谁调用 | 说明 |
+| --- | --- | --- | --- |
+| `interfaces/image.py` | 仅 `common` | `sim`、`image.*` 插件 | `ImageProvider` 契约 |
+| `interfaces/source.py` | 仅 `common` | `sim`、`source.*` 插件 | `SearchProvider` / `FeedReader` / `PageFetcher` 契约 |
+| `domain/media.py` | 仅 `kernel` | `sim`、`capability.selfie` | **纯函数**：`build_portrait_prompt()` |
+| `domain/untrusted.py` | 仅 `kernel` | `sim`、`source.*` 插件 | **纯函数**：注入模式检测与内容包裹 |
+| `kernel/settings.py` | 仅 `kernel` | `web`、`cli`、`tests` | `Setting` / `Choice` 元数据真源 |
+
 **关键约束**：
 
 - `kernel` 不依赖任何其他层 → 可独立测试、可独立发布
 - `domain` 只依赖 `kernel`（用其 `errors`、`logging`）→ 纯逻辑，无 IO
 - `sim` 通过**接口**调用 `llm` 与 `storage`，不直接 import 具体实现
 - `plugins` 可以依赖任意层的**公开接口**，但禁止 import 其他插件的内部模块
+- **`domain/media.py` 不得下沉到插件**：一旦它能被插件替换，
+  第二个生图插件就可以自己拼提示词绕过一致性骨架（ADR-0008）
+- **`domain/untrusted.py` 同理**：外部内容的包裹格式不能由插件自定义
 
 ### 1.2 自动化红线检查
 
@@ -50,7 +63,7 @@ CI 中执行以下检查，违反即构建失败：
 
 ```bash
 # 红线 1：内核不得出现具体插件名
-! grep -rEn "sqlite|openai|wecom|dingtalk|fastapi" src/alterego/kernel/
+! grep -rEn "sqlite|openai|wecom|dingtalk|fastapi|tavily|comfyui" src/alterego/kernel/
 
 # 红线 2：领域层不得有 IO
 ! grep -rEn "open\(|sqlite3|requests|httpx|aiohttp" src/alterego/domain/
@@ -60,9 +73,40 @@ CI 中执行以下检查，违反即构建失败：
 
 # 红线 4：推演层不得直接 import 具体 LLM 实现
 ! grep -rEn "from alterego\.llm\.client" src/alterego/sim/
+
+# 红线 5：LLM 调用必须经过 ctx.llm()（否则无法计量、无法路由、无法受限）
+! grep -rEn "httpx\.(Async)?Client\(.*base_url" src/alterego/sim/ src/alterego/capabilities/
+
+# 红线 6：不得自行构造 logging handler（否则脱敏与轮转会失效）
+! grep -rEn "logging\.(FileHandler|StreamHandler|RotatingFileHandler)\(" src/alterego/ plugins/
 ```
 
-红线检查脚本置于 `scripts/check_architecture.sh`，`make lint` 与 CI 均调用。
+上面是示意，实际实现是 `scripts/check_architecture.sh` 里的 **7 组 22 项**检查。对应关系：
+
+| 脚本分组 | 覆盖的红线 | 项数 |
+| --- | --- | --- |
+| 第 1 组 内核无知 | 红线 1 | 4 |
+| 第 2 组 领域层纯净 | 红线 2 | 4 |
+| 第 3 组 推演层抽象 | 红线 3 / 4 + 可复现性 | 5 |
+| 第 4 组 分层不越级 | —— | 2 |
+| 第 5 组 通用卫生 | **红线 6** + 文件行数上限 | 4 |
+| 第 6 组 插件自包含 | —— | 1 |
+| 第 7 组 LLM 调用必经 `ctx.llm()` | **红线 5** | 2 |
+
+**红线 6 的唯一例外是 `kernel/logging.py`** ——它就是那个负责构造 handler 的地方，
+其余任何文件自建 handler 都会被挡下。这不是形式主义：自建 handler 的代码看上去
+完全正常，但密钥会在泄露的那一天直接写进日志。
+
+`make lint` 与 CI 均调用该脚本。
+
+红线的设计原则是：**每一条都对应一个「如果违反了，问题会在很久以后才暴露」的场景。**
+
+| 红线 | 违反后多久才显形 |
+| --- | --- |
+| 红线 3（推演层抽象） | 第二天——黄金测试开始随机失败 |
+| 红线 5（LLM 调用不经 `ctx.llm()`） | 三个月后——你在收到账单那天才会发现账对不上 |
+| 红线 6（自建 logging handler） | 泄露的那天——脱敏过滤器被绕过，而你毫无察觉 |
+
 
 ---
 
@@ -880,6 +924,21 @@ RETRY_POLICY = {
 | 向量检索插件不可用 | 退回 FTS5 |
 | 某渠道不可用 | 记录失败，其余渠道继续；Web 始终作为兜底（本地） |
 | 存储不可用 | 无法降级，直接退出（数据安全优先） |
+| 搜索 provider 不可用 | `research` 退化为只读 RSS 订阅（已经订阅的源仍可用） |
+| 搜索与 RSS 都不可用 | `research` 本 tick 降级为 `reflect_internal`，**不中断生活**；记录 `degraded = 1` |
+| 生图 provider 不可用 | 跳过拍照意图，相册不增长；**不发失败消息、不阻断 tick** |
+| 生图 provider 不支持参考图 | **拒绝生成人物图**（只允许风景照）；原因见 [ADR-0008](../adr/0008-anchor-character-consistency-in-a-canonical-portrait.md) |
+| 日志文件不可写 | 只写数据库 + 控制台，发 `log.file_failed` 警告事件；**不影响推演** |
+
+**降级表的两条通用规则**：
+
+1. **越靠近「表达自己」的组件，降级越宽容**（说不出话可以不说）；
+   **越靠近「记住自己」的组件，降级越严厉**（存储挂了直接退出）——
+   因为一次表达失误的代价是「今天有点无聊」，一次记忆丢失的代价是「它不再是它」。
+2. **每一次降级都必须留下痕迹**：不只是打一行日志，而是写进
+   `tick_log.degraded` / `source_query.degraded` 并在**UI 上显示徽章**。
+   一个静默生效的降级等于一个未被发现的 bug——
+   用户只会看到「它变笨了」，然后去改一堆不相关的设置。
 
 ---
 

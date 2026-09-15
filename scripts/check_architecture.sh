@@ -85,6 +85,32 @@ check_required() {
     fi
 }
 
+# check_forbidden_excluding <名称> <正则> <路径> <排除的路径片段> <说明>
+#
+# 用于「除了实现该机制的那个文件，其他任何地方都不准这么做」的规则。
+check_forbidden_excluding() {
+    local name="$1" pattern="$2" path="$3" exclude="$4" hint="$5"
+    CHECKS=$((CHECKS + 1))
+
+    [[ -d "$path" ]] || { printf '  %s⊘%s %s  %s(目录不存在，跳过)%s\n' \
+        "$YELLOW" "$RESET" "$name" "$YELLOW" "$RESET"; return; }
+
+    local hits
+    hits=$(grep -rEn --include='*.py' "$pattern" "$path" 2>/dev/null \
+           | grep -v "$exclude" || true)
+
+    if [[ -n "$hits" ]]; then
+        printf '  %s✗%s %s\n' "$RED" "$RESET" "$name"
+        while IFS= read -r line; do
+            printf '      %s%s%s\n' "$YELLOW" "$line" "$RESET"
+        done <<< "$hits"
+        printf '      %s修复建议: %s%s\n' "$CYAN" "$hint" "$RESET"
+        FAILED=$((FAILED + 1))
+    else
+        printf '  %s✓%s %s\n' "$GREEN" "$RESET" "$name"
+    fi
+}
+
 # check_file_size <路径> <上限行数>
 check_file_size() {
     local limit="$1"
@@ -242,11 +268,17 @@ check_forbidden \
     "$SRC" \
     "使用 logging（在插件中用 ctx.logger）。print 只允许出现在 CLI 输出与 channels/console。"
 
-check_required \
-    "所有公开模块都有 __init__.py" \
-    "" \
+# 红线 5（v0.2.0 新增）：不得自行构造 logging handler。
+#
+# 理由：密钥脱敏（SecretFilter）与文件轮转都挂在 **root logger** 上。
+# 自建 handler 的代码看上去完全正常，但密钥会在那一天直接写进日志。
+# 例外只有 kernel/logging.py —— 它就是那个唯一被允许构造 handler 的地方。
+check_forbidden_excluding \
+    "不自行构造 logging handler（脱敏会失效）" \
+    "logging\.(FileHandler|StreamHandler|RotatingFileHandler|TimedRotatingFileHandler|basicConfig\()" \
     "$SRC" \
-    ""
+    "kernel/logging.py" \
+    "用 getLogger(__name__) / ctx.logger；脱敏、轮转、格式都由 kernel/logging.py 统一负责。"
 
 check_file_size 900
 
@@ -296,6 +328,29 @@ else
     printf '  %s⊘%s 插件之间不得直接 import  %s(plugins/ 不存在，跳过)%s\n' \
         "$YELLOW" "$RESET" "$YELLOW" "$RESET"
 fi
+
+# ═════════════════════════════════════════════════════════════
+# 第 7 组 · LLM 调用必经 ctx.llm()（红线 7，v0.2.0 新增）
+#
+# 直接用 httpx / openai SDK 调端点看上去能跑，但会同时破坏三件事：
+#   1. 计量   —— 这一次调用不会进 llm_usage，成本统计漏报
+#   2. 路由   —— 绕过了 [llm.routing] 的分层，用错档位的模型
+#   3. 闸门   —— 绕过了 [llm.budget]，预算上限形同虚设
+# 三个后果都要等到**收到账单**那天才显形。
+# ═════════════════════════════════════════════════════════════
+printf '\n%s【第 7 组】LLM 调用必经 ctx.llm()%s\n' "$BOLD" "$RESET"
+
+check_forbidden \
+    "sim/ 不直连 LLM 端点" \
+    "httpx\.(Async)?Client\(.*base_url|openai\.(Async)?OpenAI|anthropic\.(Async)?Anthropic" \
+    "$SIM" \
+    "一律走 ctx.llm()。否则无法计量、无法路由、无法受限（见 docs/design/09-observability.md）。"
+
+check_forbidden \
+    "capabilities/ 不直连 LLM 端点" \
+    "httpx\.(Async)?Client\(.*base_url|openai\.(Async)?OpenAI|anthropic\.(Async)?Anthropic" \
+    "$SRC/capabilities" \
+    "一律走 ctx.llm()。供应商适配只允许存在于 llm/ 层。"
 
 # ═════════════════════════════════════════════════════════════
 # 结果

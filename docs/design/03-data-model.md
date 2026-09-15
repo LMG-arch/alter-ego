@@ -82,6 +82,14 @@ erDiagram
     plugin_state }o--|| plugin_meta : "属于"
     persona ||--o{ event_log : "事件流"
 
+    persona ||--o{ media_asset : "图片资产"
+    persona ||--o{ media_usage : "生图消耗"
+    media_asset ||--o| social_post : "被发布为"
+    persona ||--o{ source_query : "检索"
+    source_query ||--o{ source_item : "抓到"
+    source_item ||--o| memory : "沉淀为"
+    plugin_meta ||--o{ source_feed : "RSS 订阅"
+
     persona {
         text id PK
         text name
@@ -116,10 +124,16 @@ erDiagram
 
 ## 3. 完整 DDL
 
+> **表共 26 张**（21–26 为 v0.2.0/v0.3.0 新增，见 `migrations/002_media.sql`、`003_sources.sql`、`004_observability.sql`），
+> 另有 2 个视图（`v_cost_daily` / `v_trace`）。
+> `log_entry` 与 `schema_version` 不挂在 persona 上（前者是全局运行日志，后者是迁移元数据）。
+> **每张可观测表都必须有 `correlation_id` 列**，同一次推演内共享同一个值——
+> 这是「从一条错误跳回那次推演」的实现基础，见 [09-observability.md § 1.2](09-observability.md#12-核心洞察一切都要能串起来)。
+
 ```sql
 -- ============================================================
 -- AlterEgo 数据库 Schema
--- schema_version: 1
+-- schema_version: 1（迁移 002/003 后为 3）
 -- 约定：所有时间字段为 ISO 8601 带时区字符串
 -- ============================================================
 
@@ -592,6 +606,248 @@ CREATE TABLE IF NOT EXISTS budget_usage (
 INSERT OR IGNORE INTO schema_version (version, applied_at, description)
 VALUES (1, '2026-09-15T00:00:00+08:00', '初始 schema');
 ```
+
+### 3.1 v0.2.0 新增：图片资产与生图计量
+
+```sql
+-- 迁移文件：migrations/002_media.sql
+
+-- ────────────────────────────────────────────────────────
+-- 21. media_asset · 图片资产
+-- role='canonical' 的行是**角色形象一致性的唯一真源**（ADR-0008）
+-- ────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS media_asset (
+    id                  TEXT PRIMARY KEY,
+    persona_id          TEXT NOT NULL REFERENCES persona(id) ON DELETE CASCADE,
+    -- canonical = 定妆照（全库唯一且仅一张）
+    -- selfie    = 角色自拍（多为人物图，受一致性约束）
+    -- scenery   = 风景/物品/抽象图（无人物，不要求参考图）
+    -- user_upload = 用户手动放入相册的图
+    role                TEXT NOT NULL CHECK (role IN ('canonical','selfie','scenery','user_upload')),
+    file_path           TEXT NOT NULL,          -- 相对 data/media/ 的路径
+    mime_type           TEXT NOT NULL DEFAULT 'image/png',
+    width               INTEGER NOT NULL DEFAULT 0,
+    height              INTEGER NOT NULL DEFAULT 0,
+    bytes               INTEGER NOT NULL DEFAULT 0,
+    -- 生成溯源：没有这几列，定妆照就无法复现，一致性链条当场断掉
+    provider_id         TEXT,
+    model               TEXT,
+    prompt              TEXT,                   -- 实际发出的提示词（含骨架与四槽位展开后的完整文本）
+    negative_prompt     TEXT,
+    seed                INTEGER,
+    reference_asset_id  TEXT REFERENCES media_asset(id) ON DELETE SET NULL,
+    appearance_brief    TEXT,                   -- 仅 canonical：人工可编辑的外貌描述
+    -- 四槽位原值，供重新生成同一构图时复用
+    outfit              TEXT,
+    scene               TEXT,
+    mood                TEXT,
+    lighting            TEXT,
+    -- 可见性：未发布的图也必须可见（ADR-0008 的诚实要求）
+    visibility          TEXT NOT NULL DEFAULT 'private'
+                        CHECK (visibility IN ('private','posted','discarded')),
+    cost_usd            REAL NOT NULL DEFAULT 0,
+    tick_id             TEXT,
+    correlation_id      TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL
+);
+
+-- 定妆照全库唯一（部分唯一索引——只约束 role='canonical' 的行）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_media_canonical
+    ON media_asset(persona_id) WHERE role = 'canonical';
+CREATE INDEX IF NOT EXISTS idx_media_time ON media_asset(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_media_role ON media_asset(persona_id, role, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_media_visibility ON media_asset(visibility, created_at DESC);
+
+-- ────────────────────────────────────────────────────────
+-- 22. media_usage · 生图消耗明细
+-- 为什么不塞进 llm_usage：那张表的语义是 **token 计量**，
+-- 生图既无 prompt_tokens 也无 completion_tokens，混进去会让两边的聚合都变脏
+-- ────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS media_usage (
+    id                  TEXT PRIMARY KEY,
+    persona_id          TEXT REFERENCES persona(id) ON DELETE SET NULL,
+    asset_id            TEXT REFERENCES media_asset(id) ON DELETE SET NULL,
+    tick_id             TEXT,
+    purpose             TEXT NOT NULL,          -- selfie|scenery|canonical|regenerate
+    provider_id         TEXT NOT NULL,
+    model               TEXT NOT NULL,
+    image_count         INTEGER NOT NULL DEFAULT 1,
+    width               INTEGER NOT NULL DEFAULT 0,
+    height              INTEGER NOT NULL DEFAULT 0,
+    used_reference      INTEGER NOT NULL DEFAULT 0,
+    latency_ms          INTEGER NOT NULL DEFAULT 0,
+    cost_usd            REAL NOT NULL DEFAULT 0,
+    retry_count         INTEGER NOT NULL DEFAULT 0,
+    success             INTEGER NOT NULL DEFAULT 1,
+    error               TEXT,
+    correlation_id      TEXT,
+    created_at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_media_usage_time ON media_usage(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_media_usage_purpose ON media_usage(purpose, created_at DESC);
+```
+
+### 3.2 v0.3.0 新增：外部信息来源
+
+```sql
+-- 迁移文件：migrations/003_sources.sql
+
+-- ────────────────────────────────────────────────────────
+-- 23. source_item · 检索到的外部条目
+-- 不存网页正文：版权、体积、检索质量（见 ADR-0009）
+-- ────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS source_item (
+    id                  TEXT PRIMARY KEY,
+    query_id            TEXT REFERENCES source_query(id) ON DELETE CASCADE,
+    persona_id          TEXT REFERENCES persona(id) ON DELETE SET NULL,
+    url                 TEXT NOT NULL,
+    url_hash            TEXT NOT NULL,          -- normalize 后取 SHA-256 前 16 字节，用于去重
+    title               TEXT NOT NULL DEFAULT '',
+    summary             TEXT NOT NULL DEFAULT '',
+    lang                TEXT,
+    published_at        TEXT,
+    fetched_at          TEXT NOT NULL,
+    source_kind         TEXT NOT NULL DEFAULT 'search'   -- search|feed|direct
+                        CHECK (source_kind IN ('search','feed','direct')),
+    feed_id             TEXT REFERENCES source_feed(id) ON DELETE SET NULL,
+    content_chars       INTEGER NOT NULL DEFAULT 0,
+    dropped             INTEGER NOT NULL DEFAULT 0,
+    dropped_reason      TEXT,                   -- injection|too_long|duplicate|blocked
+    memory_id           TEXT REFERENCES memory(id) ON DELETE SET NULL,
+    interest_delta      REAL NOT NULL DEFAULT 0,
+    correlation_id      TEXT,
+    created_at          TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_source_item_hash ON source_item(url_hash);
+CREATE INDEX IF NOT EXISTS idx_source_item_time ON source_item(fetched_at DESC);
+CREATE INDEX IF NOT EXISTS idx_source_item_dropped ON source_item(dropped, fetched_at DESC);
+
+-- ────────────────────────────────────────────────────────
+-- 24. source_feed · RSS 订阅源
+-- ────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS source_feed (
+    id                  TEXT PRIMARY KEY,
+    persona_id          TEXT REFERENCES persona(id) ON DELETE CASCADE,
+    url                 TEXT NOT NULL,
+    title               TEXT NOT NULL DEFAULT '',
+    category            TEXT,
+    etag                TEXT,                   -- 304 时不消耗流量也不消耗 LLM
+    last_modified       TEXT,
+    last_checked_at     TEXT,
+    last_success_at     TEXT,
+    failure_count       INTEGER NOT NULL DEFAULT 0,
+    enabled             INTEGER NOT NULL DEFAULT 1,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_source_feed_url ON source_feed(persona_id, url);
+
+-- ────────────────────────────────────────────────────────
+-- 25. source_query · 一次检索
+-- 存 emotion_label 是为了能按情绪回顾「它最近在关心什么」
+-- ────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS source_query (
+    id                  TEXT PRIMARY KEY,
+    persona_id          TEXT REFERENCES persona(id) ON DELETE SET NULL,
+    tick_id             TEXT,
+    query_text          TEXT NOT NULL,
+    query_kind          TEXT NOT NULL DEFAULT 'search'
+                        CHECK (query_kind IN ('search','feed')),
+    interest_key        TEXT,                   -- 命中的兴趣项 key
+    emotion_label       TEXT,                   -- 当时的情绪标签
+    result_count        INTEGER NOT NULL DEFAULT 0,
+    kept_count          INTEGER NOT NULL DEFAULT 0,
+    dropped_count       INTEGER NOT NULL DEFAULT 0,
+    degraded            INTEGER NOT NULL DEFAULT 0,   -- 是否发生了降级
+    degrade_reason      TEXT,
+    cost_usd            REAL NOT NULL DEFAULT 0,
+    correlation_id      TEXT,
+    created_at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_source_query_time ON source_query(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_source_query_interest ON source_query(interest_key, created_at DESC);
+```
+
+### 3.3 v0.3.0 新增：结构化日志
+
+```sql
+-- 迁移文件：migrations/004_observability.sql
+
+-- ────────────────────────────────────────────────────────
+-- 26. log_entry · 结构化运行日志
+-- 只落 WARNING 及以上（全量日志在 logs/ 下的文件里）
+-- ────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS log_entry (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    level               TEXT NOT NULL,          -- WARNING|ERROR|CRITICAL
+    logger              TEXT NOT NULL DEFAULT '',
+    message             TEXT NOT NULL,
+    module              TEXT,
+    function            TEXT,
+    line                INTEGER,
+    plugin_id           TEXT,
+    tick_id             TEXT,
+    correlation_id      TEXT,
+    exc_type            TEXT,
+    exc_text            TEXT,                   -- 含堆栈；**不落库就无法排查**（这是与 event_log 的关键区别）
+    extra_json          TEXT CHECK(extra_json IS NULL OR json_valid(extra_json)),
+    created_at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_log_time ON log_entry(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_log_level_time ON log_entry(level, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_log_correlation ON log_entry(correlation_id);
+
+-- 给已有可观测表补 correlation_id（幂等：SQLite 无 ADD COLUMN IF NOT EXISTS，
+-- 迁移脚本先查 PRAGMA table_info 再决定是否执行）
+ALTER TABLE tick_log     ADD COLUMN correlation_id TEXT;
+ALTER TABLE activity_log ADD COLUMN correlation_id TEXT;
+ALTER TABLE llm_usage    ADD COLUMN correlation_id TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_tick_log_correlation ON tick_log(correlation_id);
+
+-- ────────────────────────────────────────────────────────
+-- 视图（不是表）：成本合并与链路追踪
+-- 为什么用视图而不是汇总表：汇总表要么有两个写入点（必然漂移），
+-- 要么定期重算（预算检查会读到过期数据）
+-- ────────────────────────────────────────────────────────
+CREATE VIEW IF NOT EXISTS v_cost_daily AS
+    SELECT persona_id, substr(created_at, 1, 10) AS day,
+           purpose, 'llm'   AS cost_kind, cost_usd, 1 AS call_count
+      FROM llm_usage WHERE success = 1
+    UNION ALL
+    SELECT persona_id, substr(created_at, 1, 10) AS day,
+           purpose, 'media' AS cost_kind, cost_usd, 1 AS call_count
+      FROM media_usage WHERE success = 1;
+
+CREATE VIEW IF NOT EXISTS v_trace AS
+    SELECT correlation_id, 'tick'   AS step, '推演' AS label, occurred_at AS at,
+           tick_id, NULL AS detail, payload_json
+      FROM event_log WHERE correlation_id IS NOT NULL
+    UNION ALL
+    SELECT correlation_id, 'llm', '模型调用', created_at, tick_id,
+           model || ' · ' || purpose || ' · ' || total_tokens || ' tok', NULL
+      FROM llm_usage WHERE correlation_id IS NOT NULL
+    UNION ALL
+    SELECT correlation_id, 'media', '生图', created_at, tick_id,
+           model || ' · ' || purpose, NULL
+      FROM media_usage WHERE correlation_id IS NOT NULL
+    UNION ALL
+    SELECT correlation_id, 'source', '检索', created_at, tick_id,
+           query_text || ' · 保留 ' || kept_count, NULL
+      FROM source_query WHERE correlation_id IS NOT NULL
+    UNION ALL
+    SELECT correlation_id, 'log', level, created_at, tick_id,
+           message || COALESCE(' · ' || exc_text, ''), NULL
+      FROM log_entry WHERE correlation_id IS NOT NULL;
+
+INSERT OR IGNORE INTO schema_version (version, applied_at, description)
+VALUES (4, '2026-09-15T00:00:00+08:00', '多媒体与可观测性');
+```
+
+> **`event_log` 与 `log_entry` 为什么不合并**：`event_log` 是**可回放**的结构化事件流
+> （它的 payload 能被重新投回总线），而 `log_entry` 含第三方库的输出与堆栈，**不可回放**。
+> 两者受众也不同。`event_log` 保持默认关闭。
 
 ---
 
@@ -1095,19 +1351,39 @@ alterego import backup.json --replace    # 清空后导入
 | `activity_log` | 105,120 | ~500 B | ~53 MB |
 | `event_log` | 关闭则不占 | — | 0 |
 | `llm_usage` | 146,000 | ~200 B | ~29 MB |
+| `media_usage` | ~1,200 | ~200 B | ~0.3 MB |
+| `log_entry` | ~11,000 | ~1 KB | ~11 MB |
+| `source_item` | ~3,000 | ~700 B | ~2 MB |
+| `source_query` | ~500 | ~300 B | ~0.2 MB |
 | `memory` | 7,300 | ~600 B | ~4.4 MB |
 | `message` | 5,000 | ~400 B | ~2 MB |
 | `social_post` | 1,460 | ~600 B | ~0.9 MB |
 | 其余小表 | — | — | ~5 MB |
-| **合计** | | | **~325 MB/年** |
+| **合计** | | | **~339 MB/年** |
+
+**图片文件不计入本表**（存在文件系统而非数据库）：1024×1024 PNG 约 1.2 MB / WebP 约 180 KB，
+每天 3–8 张 → **~180–550 MB/年**。若只保留 WebP，约 200 MB/年。
 
 **优化建议**：
 
-1. `tick_log` 占 65%。若不需要完整决策溯源，可设 `[retention] tick_log_detail = "summary"`，只保留 intent + 耗时，体积降至 1/20
-2. 定期 `VACUUM` 回收空间（`alterego db vacuum`）
-3. 归档策略：`alterego db archive --before 2026-06-01` 把老数据移到独立文件
+1. `tick_log` 占 62%（约 210 MB / 339 MB）。若不需要完整决策溯源，可设 `[retention] tick_log_detail = "summary"`，只保留 intent + 耗时，体积降至 1/20
+2. 图片是**唯一无上限增长**的部分。`[retention] media_keep_days` 与 `media_private_keep_days` 应默认开启
+3. 定期 `VACUUM` 回收空间（`alterego db vacuum`）
+4. 归档策略：`alterego db archive --before 2026-06-01` 把老数据移到独立文件
 
 **关键约束**：SQLite 在单库 < 10 GB 时性能优良。上述规模即使运行 10 年也在安全范围。
+
+---
+
+## 11. 数据一致性硬要求
+
+| 要求 | 理由 | 强制方式 |
+| --- | --- | --- |
+| 所有可观测表必须有 `correlation_id` | 没有它就无法把一次推演的全部痕迹串起来 | 迁移脚本 + 新增表时的 checklist |
+| 同一次推演内 `correlation_id` 必须相同 | 否则「链路追踪」是假的 | `Event.correlation_id` 已存在，各表写入时统一取用 |
+| `media_asset` 中 `role='canonical'` 每个 persona 恰有一行 | 定妆照是形象一致性的单点真源（ADR-0008） | 部分唯一索引 `idx_media_canonical` |
+| `source_item.url_hash` 全局唯一 | 防止同一文章反复进记忆、重复消耗 LLM | UNIQUE 索引 + 写入前 `normalize_url()` |
+| `llm_usage` / `media_usage` 只记计量，不记业务语义 | 语义混入计量表会让两边聚合都变脏 | 评审约定；统计一律走 `v_cost_daily` |
 
 ---
 
@@ -1116,3 +1392,4 @@ alterego import backup.json --replace    # 清空后导入
 | 日期 | 版本 | 变更 | 作者 |
 | --- | --- | --- | --- |
 | 2026-09-15 | v0.1.0 | 初版，schema_version = 1 | LMG-arch |
+| 2026-09-15 | v0.2.0 | 新增表 21–26（`media_asset` / `media_usage` / `source_item` / `source_feed` / `source_query` / `log_entry`）；新增视图 `v_cost_daily` / `v_trace`；`tick_log`/`activity_log`/`llm_usage` 补 `correlation_id`；新增 § 11 数据一致性硬要求；容量估算 325→339 MB/年 | LMG-arch |

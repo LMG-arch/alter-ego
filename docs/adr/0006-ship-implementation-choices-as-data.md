@@ -43,7 +43,7 @@ class StorageConfig:
 bash scripts/check_architecture.sh --verbose
 ```
 
-结果是 **3 / 20 项违规**，全部来自这两个文件。
+结果是 **3 / 22 项违规**，全部来自这两个文件。
 
 更微妙的是 `kernel/__init__.py` 里那段说明红线的 docstring 自己也被 grep 命中了：
 

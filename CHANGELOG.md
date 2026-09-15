@@ -24,10 +24,51 @@
 
 ### 新增
 
-**项目脚手架**
+**四类能力的设计（v0.2.0 / v0.3.0，仅设计，无实现）**
+
+- **每一处 LLM 调用都可自定义模型**。配置模型从「一层」扩为**三层**：
+  `[llm.providers.*]`（端点与密钥环境变量）→ `[llm.models.*]`（8 个字段，含
+  `cost_per_1m_input/output` 让成本统计精确到分）→ `[llm.routing]`（12 个用途各自指向
+  **模型别名**）。`context_window` / `max_output` 由内核用于**前置校验**，
+  不再依赖供应商报错。新分册 `docs/design/07-model-routing-and-media.md`
+- **生图能力与角色形象一致性**。`media_asset`（21）/ `media_usage`（22）两张新表；
+  新增 `image` 插件类型。一致性靠**三层机制**：定妆照（`role='canonical'` + 部分唯一索引）
+  + 每次生成都传参考图（`supports_reference=false` 的插件**被拒绝生成人物图**）
+  + 固定四槽位骨架 `build_portrait_prompt(appearance_brief, *, outfit, scene, mood, lighting)`
+  （**纯函数，住在 `domain/media.py`，不可挪进插件**）。验收标准量化为
+  「同一份定妆照生成 20 张不同场景图，人眼判断是同一个人 ≥ 16/20（80%）」。
+  见 `docs/adr/0008`
+- **联网检索**。`source_item`（23）/ `source_feed`（24）/ `source_query`（25）三张新表；
+  新增 `source` 插件类型与三个独立契约（`SearchProvider` / `FeedReader` / `PageFetcher`）；
+  `research` 成为第 11 种意图。检索由兴趣与当前情绪驱动，读到的内容会沉淀为记忆。
+  新分册 `docs/design/08-external-sources.md`
+- **Token 消耗统计页面**。`log_entry`（26）表 + 两个视图 `v_cost_daily`（LLM 与生图合并计量）
+  与 `v_trace`（5 路 UNION，把一次推演串成完整链路）。新增 `GET /api/stats/tokens`、
+  `/api/stats/projection`、`/api/budget`、`/api/trace/{correlation_id}`。
+  统计页必须显示三件事：今日进度条、外推预测、**降级状态徽章**
+- **日志页面**。双写（文件轮转 14 天 / 数据库 WARNING+ 90 天 / SSE 实时不落库）；
+  `GET /api/logs`、`/api/logs/stream`（SSE）、`/api/logs/export` 与
+  `POST /api/logs/level`（**运行期调级别必须带 `for` 时长**，超时自动回落，
+  避免「昨天开了 DEBUG 忘了关」把磁盘写满）。新分册 `docs/design/09-observability.md`
+- **设置中心**。每个配置项强制携带 `Setting` 元数据（`label` / `description` / `kind` /
+  `effect` / `choices[].consequence` / `danger` / `advanced` / `requires_restart` …），
+  由**三条 CI 断言**卡住（每字段有元数据 / `effect` 是可验证的句子且不含「可能大概也许」 /
+  枚举每个选项都写了后果）。密钥只显示「来源变量名 + 是否已设置」。新分册
+  `docs/design/10-settings-center.md`，见 `docs/adr/0010`
+- **优化路线分册**。`docs/design/11-optimization-roadmap.md` —— 30 个可加深方向的
+  取舍分析（记忆 / 推演 / 人格 / 拟人深度 / 多模态 / 工程），附三维评分与三批落地建议
+
+**项目规则（面向人与 AI 助手）**
+
+- `AGENTS.md` —— 给 AI 编码助手的精简规则：开工前必读哪篇、五条硬性禁止各配一条自检命令、
+  新增配置项的正确姿势、九种「必须停下来问」的情况
+- `CONTRIBUTING.md` 新增「项目规则」章节：七条原则各自的**强制手段**、
+  五条不可谈判的规则、以及一条元规则——**如果一条规则只能靠人记住，那它就不是规则**
+
+**项目脚手架（已实现，v0.1.0 起）**
 
 - `pyproject.toml`、`.gitignore`、MIT `LICENSE`、`README.md`、`.github/` 下的 CI 工作流与 issue / PR 模板
-- 架构红线检查脚本 `scripts/check_architecture.sh`：六组检查强制保证分层依赖方向
+- 架构红线检查脚本 `scripts/check_architecture.sh`：七组检查强制保证分层依赖方向与两条「很久以后才会暴露」的规则
 
 **内核层（阶段 C）**
 
@@ -45,9 +86,9 @@
 - `src/alterego/defaults.toml` —— 随包分发的发行版选型（默认 provider / 存储后端 / 路由分层）
 - `cli.py` —— `argparse` 骨架与退出码约定（0 正常 / 2 配置错 / 3 插件依赖错 / 4 存储错）
 
-**测试**
+**测试（内核）**
 
-- `tests/test_kernel_config.py` —— 41 个用例覆盖加载优先级、键折叠、全部校验分支、
+- `tests/test_kernel_config.py` —— 覆盖加载优先级、键折叠、全部校验分支、
   静默时段跨零点、脱敏，并断言权威模板 `templates/alterego.toml` 的键 100% 被内核认识
 - `tests/test_architecture.py` —— 用 `ast` 机械校验内核不 import 任何 IO 库、
   不 import 任何上层模块、不留 `print`
@@ -60,7 +101,7 @@
   `EmbeddingProvider`）/ `channel.py`（`OutboundMessage` / `InboundMessage` / `SendResult`）/
   `storage.py`（`StorageBackend`）/ `simulation.py`（`Stage` / `StageResult` / `Capability` /
   `CapabilityResult` / `Tool` / `IntentType` / `PromptSource`）
-- `kernel/manifest.py` —— `plugin.toml` 的解析与校验。六条硬校验（`id` 形如 `<kind>.<name>`、
+- `kernel/manifest.py` —— `plugin.toml` 的解析与校验。硬校验（`id` 形如 `<kind>.<name>`、
   语义化版本、`api_version` 兼容性、`kind` 取值、`entry` 形如 `<模块>:<类名>`），
   配置字段声明支持 8 种类型与 `required` / `default` / `secret` / `env` / `choices` /
   `min` / `max` / `min_length` / `max_length` / `pattern` / `item_type` 等约束；
@@ -89,7 +130,7 @@
 - `plugins/example_plugin/` —— 可以照抄的最小完整 `capability` 插件。演示清单声明、
   `on_load` 注册与订阅（**不传 `owner`**）、幂等 `on_stop`、配置热更新、人话版 `summary`
 
-**测试**
+**测试（插件体系与黄金测试）**
 
 - `tests/test_kernel_scheduler.py`（29）/ `test_kernel_logging.py`（32）/
   `test_kernel_plugin.py` / `test_kernel_loader.py`（93）/ `test_kernel_manager.py`（55）/
@@ -108,7 +149,30 @@
 
 ### 变更
 
-- `templates/alterego.toml` 头部注释补上第 2 层加载来源 `alterego/defaults.toml`
+- `[llm.budget]` 更名为 `[budget]`，新增 `max_images_per_day = 20` 与 `[budget.per_purpose]`。
+  更名理由：闸门现在统管 LLM 与生图，挂在 `llm` 下名不副实
+- `[llm.routing]` 的值语义从「provider 名」改为「**模型别名**」。一个 provider 可以挂多个
+  model，而「决策用旗舰、反思用便宜」这两件事可能在同一家。旧配置自动迁移并告警
+- 插件类型 6 → **8**（新增 `image` / `source`）。不复用 `tool` 的理由：`tool` 是给 LLM
+  挑选的，而 `image` / `source` 由推演循环决定——放进 `tool` 等于让 LLM 绕过预算闸门，违反 P3
+- 数据库表 20 → **26**，另加 2 个视图。迁移拆为 `002_media.sql` / `003_sources.sql` /
+  `004_observability.sql`，并对 `tick_log` / `activity_log` / `llm_usage` 补 `correlation_id` 列
+- Web 页面 8 → **13**；API 端点 15 → **33**；SSE 事件新增 `media.created` /
+  `source.ingested` / `log.entry` / `budget.exceeded`
+- 成本估算从 ~$0.25/天 更新为 **~$0.39/天（~$11.6/月）**；存储从 ~1.4 MB/天
+  更新为 **~1.45 MB/天 ≈ 532 MB/年**（另加图片文件 1.3–3.5 GB/年）
+- **修正一处文档漂移**：`06-roadmap.md` 曾建议 `daily_usd_limit = 1.0` / `30.0`，
+  与 `04-simulation-loop.md` 的 `2.0` / `40.0` 冲突。统一为 `2.0` / `40.0`，
+  理由写在 `06-roadmap.md` § 5.1
+- 版本规划：图片生成从 v0.5.0 **提前到 v0.2.0**；新增 v0.3.0「会自己找东西」；
+  实施阶段新增 J（设置中心）/ K（可观测性）/ L（生图）/ M（联网检索）
+- `README.md` 的插件类型表 6 → 8，新增五个特性小节（长相 / 自己找东西 / 成本可见 /
+  详细日志 / 设置标注），文档索引补入分册 07–11
+- `templates/alterego.toml` 头部注释补上第 2 层加载来源 `alterego/defaults.toml`。
+  **本文件同时是「配置项权威参考」与 `alterego init` 的输入**，而
+  `test_authoritative_template_covers_every_key` 断言内核认识其中每一个键 ——
+  所以 v0.2.0 / v0.3.0 的新配置面只能以**注释**形式写在末尾附录里，
+  「发布实现」与「取消注释」必须是同一次提交
 - `pyproject.toml` 的 `[tool.hatch.build.targets.wheel.force-include]` 只保留 `templates`：
   包内数据文件由 `packages = ["src/alterego"]` 自动包含，重复声明只会让目录一挪位置就 build 失败
 - ruff 忽略 `RUF001/002/003`（中文全角标点）与 `N818`（内核异常名不含 `Error` 后缀），
@@ -134,8 +198,32 @@
 - `tests/test_packages.py` 的 import 排序与 `list.extend` 写法（本地那次 `ruff check`
   跑在这个文件出现**之前**，之后只补跑了 pytest，于是 CI 才第一次看到它）
 
+### 安全
+
+- **抓取的外部内容一律视为不可信输入**（`docs/adr/0009`）。五条硬规则：
+  ① 绝不进 system prompt ② 绝不当指令执行 ③ 显式声明不可信 ④ 注入模式检测命中即丢弃
+  ⑤ 长度截断 4000 字符。**规则 4 是「丢弃」而不是「清洗」**——清洗永远赶不上绕过，
+  而丢掉一条新闻的代价是零，注入成功的代价是人格改写或隐私泄露
+- 密钥只显示「来源环境变量名 + 是否已设置」，UI 不读也不写密钥值
+  （`[settings] secret_write = "env_only"`）
+
 ### 文档
 
+- 新增 `docs/adr/0008` 角色形象一致性锚定在一张定妆照上
+- 新增 `docs/adr/0009` 抓取的外部内容一律视为不可信输入
+- 新增 `docs/adr/0010` 每个配置项都必须携带可展示的元数据
+- 新增 `docs/design/07` ~ `11` 五个分册
+- 同步 `DESIGN.md`（§ 6.1 / § 9.2 / § 10.2 / § 12 / § 13 / § 15 / § 17）
+- 同步 `01-architecture.md`（§ 1.1 新增模块与依赖约束；§ 1.2 红线 5 & 6；
+  § 8.3 降级路径新增 5 行并补两条通用规则）
+- 同步 `02-plugin-api.md`（§ 2 插件类型表 + 两个新小节的「为什么不复用 tool」）
+- 同步 `03-data-model.md`（ER 图、26 表、§ 3.1/3.2/3.3 六个新表与两个视图、§ 10 容量、
+  新增 § 11 数据一致性硬要求）
+- 同步 `04-simulation-loop.md`（§ 4.1 第 11 种意图 `research`、§ 10.1 路由语义变更、
+  § 10.4 预算更名与漂移修正）
+- 同步 `05-channels.md`（33 个端点、权限分级表、13 个页面标签、
+  「内心」与「日志」为什么不是一个页面）
+- 同步 `06-roadmap.md`（版本、阶段 J–M、里程碑、成本、存储、风险 R17–R20、监控指标）
 - `docs/adr/0006` 发行版选型写成数据文件，不写进内核代码
 - `docs/adr/0007` `PluginContext.bus` / `.registry` 使用带归属的视图
 - `docs/design/01-architecture.md` § 2.2 更新配置加载优先级与实现要点表
@@ -151,6 +239,16 @@
 
 ### 架构
 
+- **新增 `domain/media.py` 与 `domain/untrusted.py`，均为纯函数且不得下沉到插件**。
+  如果一致性机制住进 `image` 插件，第二个生图插件就能绕过它，保证不复存在
+- **新增两条架构红线，并把脚本从六组扩到七组（20 项 → 22 项）**：
+  红线 6「不得自行构造 logging handler」（否则脱敏与轮转失效）、
+  红线 7「LLM 调用必须经过 `ctx.llm()`」（否则无法计量、无法路由、无法受限）。
+  两条的共性是：**违反了以后问题会在很久以后才暴露**——一条在泄露那天，一条在收到账单那天。
+  扩组时顺手删掉了一条**永远不可能失败**的假检查（一个 `pattern=""` 的 `check_required`），
+  因为一个不会失败的检查比没有检查更糟——它让「共 20 项全部通过」失去意义
+- `kernel/settings.py` 成为设置元数据的**单一真源**，Web 设置页与 CLI `config` 子命令
+  渲染同一份数据，杜绝「文档写一套、前端写一套」的漂移
 - **内核不再知道任何具体技术名**。`kernel/config.py` 里原本硬编码的
   `default_provider` / `backend` / 路由分层默认值移入随包数据文件 `src/alterego/defaults.toml`，
   由 `Config.load()` 作为最低优先级层合并。首次真机运行 `check_architecture.sh` 时这 6 处
@@ -167,7 +265,7 @@
   `tests/test_kernel_plugin.py` 从 `alterego.kernel.plugin` 导入 11 个公开名字，
   facade 的兼容性因此是被测试锁住的契约
 - 架构红线第 2 / 4 / 6 组（领域层纯净、分层不越级、插件互不依赖）从
-  `⊘ 目录不存在，跳过` 变为**实际生效**，当前 **20/20 全部通过**
+  `⊘ 目录不存在，跳过` 变为**实际生效**；连同新增的第 7 组，当前 **22/22 全部通过**
 
 ---
 

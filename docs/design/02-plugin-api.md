@@ -72,9 +72,51 @@
 | `channel` | 实现 `Channel` 协议并注册 | `plugin.py` | `channel.file`、`channel.web`、`channel.wecom_webhook`、`channel.dingtalk_webhook` |
 | `capability` | 实现 `Capability` 协议并注册 | `plugin.py` | `capability.activity`、`capability.post`、`capability.chat` |
 | `stage` | 实现 `Stage` 协议并注册到 pipeline | `plugin.py` | `stage.sense/reflect/intention/act/express/persist` |
-| `tool` | 实现 `Tool` 协议并注册 | `plugin.py` | `tool.time_query`、`tool.web_search`（可选） |
+| `tool` | 实现 `Tool` 协议并注册 | `plugin.py` | `tool.time_query` |
+| `image` | 实现 `ImageProvider` 协议并注册 | `plugin.py` | `image.openai_compatible`、`image.local_sd` |
+| `source` | 实现 `SearchProvider` / `FeedReader` / `PageFetcher` 并注册 | `plugin.py` | `source.tavily`、`source.rss`、`source.http_fetch` |
 
 一个插件**只能声明一个 kind**。若需要提供多种能力，拆成多个插件（内聚性更好，也便于单独启停）。
+
+### 2.1 为什么 `image` 与 `source` 不复用 `tool`
+
+`tool` 的语义是「**LLM 可以主动调用的事情**」——它会被写进 function calling 列表，
+由模型决定什么时候用。而生图与检索与此不同：它们是**推演循环自己决定要做的事**
+（角色想拍张照、想去读点东西），决策权在 `intention` 阶段，不在 LLM 的工具选择环节。
+
+如果把它们做成 `tool`，就会产生一个严重的副作用：
+
+> **LLM 将有能力直接调用生图与联网，绕过打扰预算与成本闸门。**
+
+这是 P3（机制约束优于提示词祈祷）明确反对的。所以它们各自成为独立的 kind，
+只由推演层调用，绝不出现在任何 function calling 列表里。
+
+### 2.2 `image` 的额外约束（引用 ADR-0008）
+
+`image` 插件的清单必须显式声明是否支持参考图：
+
+```toml
+[plugin]
+id = "image.openai_compatible"
+kind = "image"
+capabilities = ["reference"]        # 声明支持参考图；不声明 = 不支持
+```
+
+**不支持参考图的 `image` 插件会被拒绝生成人物图**（只允许风景/物品）。
+这是角色形象一致性的硬要求，见 [07-model-routing-and-media.md § 5](07-model-routing-and-media.md#5-角色一致性机制而非提示词)。
+
+### 2.3 `source` 的三个独立契约
+
+`source` 是三选一的：一个插件至少实现一个，也可以只实现一个。
+
+| 契约 | 用途 | 对应插件 |
+| --- | --- | --- |
+| `SearchProvider` | 关键词搜索 | `source.tavily` |
+| `FeedReader` | 订阅固定源（带 `etag`，304 不消耗流量） | `source.rss` |
+| `PageFetcher` | 抓取单个 URL 正文 | `source.http_fetch` |
+
+搜不到就退化 RSS，全都不可用就降级为 `reflect_internal`——**绝不中断生活**。
+详见 [08-external-sources.md § 3](08-external-sources.md#3-接口契约)。
 
 ---
 

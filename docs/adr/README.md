@@ -124,6 +124,9 @@ src/           →  实际实现
 | [0005](0005-downgrade-instead-of-discard-suppressed-intents.md) | 打扰预算耗尽时降级而非丢弃意图 | 已接受 | 2026-09-15 |
 | [0006](0006-ship-implementation-choices-as-data.md) | 发行版选型写成数据文件，不写进内核代码 | 已接受 | 2026-09-15 |
 | [0007](0007-auto-owning-plugin-context-views.md) | `PluginContext.bus` / `.registry` 使用带归属的视图 | 已接受 | 2026-09-15 |
+| [0008](0008-anchor-character-consistency-in-a-canonical-portrait.md) | 角色形象一致性锚定在一张定妆照上 | 已接受 | 2026-09-15 |
+| [0009](0009-fetched-content-is-untrusted.md) | 抓取的外部内容一律视为不可信输入 | 已接受 | 2026-09-15 |
+| [0010](0010-every-setting-carries-display-metadata.md) | 每个配置项都必须携带可展示的元数据 | 已接受 | 2026-09-15 |
 
 > 新增 ADR 后请在此表补充一行。**忘记更新索引是最常见的疏漏。**
 

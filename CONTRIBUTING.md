@@ -6,6 +6,7 @@
 
 ## 目录
 
+- [项目规则](#项目规则)
 - [开发环境](#开发环境)
 - [项目结构](#项目结构)
 - [开发流程](#开发流程)
@@ -16,6 +17,49 @@
 - [架构红线](#架构红线)
 - [PR 检查清单](#pr-检查清单)
 - [新增依赖](#新增依赖)
+
+---
+
+## 项目规则
+
+本节是全文的索引。**下面每一条规则都有对应的强制手段**——
+没有强制手段的规则在本项目里不算规则。
+
+### 七条设计原则（判断一切设计问题的依据）
+
+| 编号 | 原则 | 一句话 | 强制手段 |
+| --- | --- | --- | --- |
+| P1 | 内核无知 | 内核不知道任何具体技术 | 红线组 1（`kernel/` 禁 sqlite/openai/httpx） |
+| P2 | 显式优于隐式 | 配置显式声明，依赖显式注入 | mypy strict + 禁止单例 import |
+| P3 | 机制约束优于提示词祈祷 | 硬约束用代码，不靠「请不要」 | 打扰预算 5 项校验为纯函数并有测试 |
+| P4 | 可插拔优于可配置 | 扩展靠写插件，不是加 if-else | 八类插件契约 + 红线组 6 |
+| P5 | 标准库优先 | 能不用依赖就不用依赖 | 仅两个必需依赖；新增需说明理由 |
+| P6 | 可复现 | 固定种子，同一 tick 重放一致 | `ctx.rng` + 红线组 3 + golden test |
+| P7 | 文档与代码同生共死 | 行为变更必须同步文档 | 文档纪律三条规则 + PR 检查清单 |
+
+### 五条不可谈判的规则
+
+| # | 规则 | 违反的后果 | 谁拦你 |
+| --- | --- | --- | --- |
+| 1 | **不用 `datetime.now()`**（用 `ctx.clock` / `ctx.now()`） | 测试不可复现 | 红线组 3 |
+| 2 | **不用全局 `random`**（用 `ctx.rng`） | 行为不可重现 | 红线组 3 |
+| 3 | **LLM 调用必经 `ctx.llm()`** | 成本漏报、预算失效 | 红线组 7 |
+| 4 | **不自行构造 logging handler** | 密钥脱敏失效 | 红线组 5 |
+| 5 | **新增配置项必须写 `description` + `effect`** | 用户看到无说明的开关 | `test_settings_metadata.py` |
+
+### 一条元规则
+
+> **如果一条规则只能靠人记住，那它就不是规则。**
+
+因此每当新增一条规则，同时要回答：**它会怎么被强制？** 三个选择：
+
+1. `scripts/check_architecture.sh` 里加一条 grep/AST 检查
+2. `tests/` 里加一个可执行的断言
+3. 写进 `.github/PULL_REQUEST_TEMPLATE.md` 检查清单
+
+**选择 3 是最弱的**，只适用于无法自动化的主观判断。
+
+> 面向 AI 编码助手的精简版规则见仓库根目录的 [`AGENTS.md`](AGENTS.md)。
 
 ---
 
@@ -69,6 +113,8 @@ alter-ego/
 │   ├── channels/        # 渠道：web / file / console / dingtalk / wecom
 │   ├── capabilities/    # 能力：activity / post / chat / reach_out
 │   ├── npc/             # NPC 社会网络
+│   ├── image/           # 生图供应商宿主（image.* 插件）
+│   ├── sources/         # 外部信息来源宿主（source.* 插件）
 │   ├── cli/             # 命令行
 │   ├── prompts/         # 提示词模板
 │   └── migrations/      # 数据库迁移脚本
@@ -277,6 +323,46 @@ feat(plugin)!: 插件清单必填 api_version
 | `sim/` | 85% |
 | 全局 | 85% |
 
+### 强制测试：设置元数据（CI 阻断）
+
+**每个配置项都必须能向用户说清楚「是什么」与「改了会怎样」。** 三条断言在 `tests/test_settings_metadata.py`：
+
+```python
+def test_every_config_field_has_metadata() -> None:
+    """每个配置字段必须有展示元数据。缺一个就挂。"""
+    missing = []
+    for cls in CONFIG_DATACLASSES:
+        for f in dataclasses.fields(cls):
+            if not get_setting_metadata(cls, f.name):
+                missing.append(f"{cls.__name__}.{f.name}")
+    assert not missing, f"以下配置项缺少展示元数据（用户会在设置页里看到一个没有说明的开关）：{missing}"
+
+
+def test_every_effect_is_a_sentence() -> None:
+    """`effect` 必须是一句用户能据此做决定的话，不能是「可能」开头的模糊表述。"""
+    for s in all_settings():
+        assert len(s.effect) >= 8, f"{s.key} 的 effect 太短，等于没说"
+        assert not any(w in s.effect for w in ("可能", "大概", "也许")), \
+            f"{s.key} 的 effect 是模糊表述，用户无法据此做决定"
+
+
+def test_every_enum_choice_explains_its_consequence() -> None:
+    """枚举的每个选项都要写清楚选它会发生什么。"""
+    for s in all_settings():
+        if s.kind is SettingKind.ENUM:
+            assert s.choices, f"{s.key} 是枚举但没有选项说明"
+            for c in s.choices:
+                assert c.consequence, f"{s.key} 的选项 {c.value} 没有说明后果"
+```
+
+**为什么用测试而不是约定**：
+
+> 没有测试的约定不是约定，是愿望。
+
+新增配置项的成本因此上升了——**这是故意的**。
+写不出「改了会怎样」说明这个配置项本身就没想清楚，那就不应该存在。
+详见 [ADR-0010](docs/adr/0010-every-setting-carries-display-metadata.md)。
+
 ### 测试组织
 
 ```
@@ -341,6 +427,9 @@ async def test_reach_out_respects_budget():
    - 改了打扰预算算法 → 更新 `docs/design/04-simulation-loop.md`
    - 加了数据库字段 → 更新 `docs/design/03-data-model.md`
    - 改了插件清单格式 → 更新 `docs/design/02-plugin-api.md`
+   - 加了配置项 → 更新 `docs/design/10-settings-center.md` 与 `templates/alterego.toml`
+   - 加了可观测字段 → 更新 `docs/design/09-observability.md`
+   - 加了生图/检索能力 → 更新 `docs/design/07-` / `08-`
 
 2. **实现与文档冲突时，以文档为准。**
    - 如果你认为文档写错了，先改文档（或写 ADR），再改代码。
@@ -374,18 +463,33 @@ git diff --name-only main...HEAD | grep '^docs/'  # 有文档变更？
 
 ## 架构红线
 
-CI 会跑 [`scripts/check_architecture.sh`](scripts/check_architecture.sh)，六组检查：
+CI 会跑 [`scripts/check_architecture.sh`](scripts/check_architecture.sh)，**七组共 22 项**检查：
 
 | 组 | 内容 |
 | --- | --- |
-| 1 | 内核无知 —— `kernel/` 不引用 sqlite / openai / wecom / fastapi / httpx |
+| 1 | 内核无知 —— `kernel/` 不引用 sqlite / openai / wecom / fastapi / httpx / tavily / comfyui |
 | 2 | 领域层纯净 —— `domain/` 无 IO、无数据库、无网络、无环境变量 |
 | 3 | 推演层抽象 —— `sim/` 不 import 具体实现，不用全局 `random`，不用 `datetime.now()` |
 | 4 | 分层不越级 —— `storage/` 与 `llm/` 不含业务逻辑 |
-| 5 | 代码卫生 —— 无 `print`、目录有 `__init__.py`、单文件 ≤ 900 行 |
+| 5 | 代码卫生 —— 无 `print`、目录有 `__init__.py`、单文件 ≤ 900 行、**不得自行构造 logging handler** |
 | 6 | 插件自包含 —— 插件之间不互相 import |
+| **7** | **LLM 调用必经 `ctx.llm()`** —— 不得在 `sim/`、`capabilities/` 里直接 `httpx.Client(base_url=...)`；否则无法计量、无法路由、无法受限 |
 
 **这些不是"建议"，是硬性约束。** 想突破就写 ADR。
+
+### 红线为什么长这样
+
+每一条红线都对应一个「**如果违反了，问题会在很久以后才暴露**」的场景：
+
+| 红线 | 违反以后会发生什么 | 多久后发现 |
+| --- | --- | --- |
+| 内核无知 | 换掉 SQLite 时发现内核里埋了 `sqlite3` | 数月 |
+| 领域层纯净 | 纯函数测试要开数据库，覆盖率掉下去 | 数周 |
+| 推演层抽象 | golden test 开始随机失败（用了全局 `random`） | 第二天 |
+| 不经 `ctx.llm()` | **成本统计漏报**，预算闸门失效 | 收到账单的那天 |
+| 自建 logging handler | **密钥脱敏失效**（`SecretFilter` 挂在 root logger 上） | 泄露的那天 |
+
+**最后两条是 v0.2.0 新增的**，因为 Token 统计页与日志页把这两件事从「建议」变成了「必须」。
 
 本地运行：
 
@@ -419,10 +523,13 @@ def test_kernel_has_no_io_imports():
 - [ ] 新功能有测试；bug 修复有复现测试
 - [ ] 覆盖率未下降
 - [ ] **相关设计文档已同步更新**
+- [ ] **新增配置项已补 `description` 与 `effect`**（`tests/test_settings_metadata.py` 会拦）
+- [ ] **新增可观测记录已带 `correlation_id`**
 - [ ] `CHANGELOG.md` 的 `[Unreleased]` 已更新
 - [ ] 提交信息符合 Conventional Commits
 - [ ] 未新增依赖，或已说明理由
 - [ ] 未触碰架构红线，或已附 ADR
+- [ ] **未把 LLM 调用写到 `ctx.llm()` 之外**
 
 ---
 

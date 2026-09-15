@@ -69,6 +69,19 @@ pending_topic_ttl_hours = 12        # 被拦下的话题在多久内可以"重�
 
 # ───────────────────────────────────────────────────────────────────────────
 #  [llm]  模型调用
+#
+#  ⚠️ v0.2.0 会把这里从一层扩为三层（现在只实现了第一层）：
+#
+#    [llm.providers.*]  一个「端点」= 一个 base_url + 一把密钥
+#    [llm.models.*]     一个「模型」= 某端点 + 某个 model 名 + 价格
+#    [llm.routing]      一个「用途」→ 用哪个模型
+#
+#  为什么要分三层：一家供应商可以挂多个模型（贵/便宜、推理/快答），
+#  而「决策用旗舰、反思用便宜」这两件事完全可能在同一家。
+#  分三层后 routing 的**值**从 provider 名变成模型别名，旧配置自动迁移并告警。
+#
+#  完整说明：docs/design/07-model-routing-and-media.md
+#            docs/DESIGN.md § 12.1
 # ───────────────────────────────────────────────────────────────────────────
 [llm]
 default_provider = "openai_compatible"
@@ -86,8 +99,13 @@ reflection = "cheap"                # 情绪反思：几乎不需要聪明
 npc = "cheap"                       # NPC 对话：量大，要求低
 persona = "strong"                  # 人设生成：低频但一次性决定全局
 memory = "cheap"                    # 记忆摘要与巩固
+                                    # v0.2.0 / v0.3.0 将新增四个用途：
+                                    #   image_prompt / research_query /
+                                    #   research_summarize / reaction
 
 # 成本上限与超限行为
+# ⚠️ v0.2.0 会更名为 [budget] 并新增 max_images_per_day —— 因为闸门将统管
+#    LLM 与生图两件事，挂在 llm 下面名不副实。旧名会自动迁移。
 [llm.budget]
 daily_usd_limit = 2.0               # 每日成本上限（美元）
 monthly_usd_limit = 40.0            # 每月成本上限
@@ -111,6 +129,7 @@ evolution_enabled = false           # 是否允许人设随经历缓慢演化
 evolution_interval_days = 30        # 开启时，多久评估一次
 evolution_max_field_delta = 0.15    # 单个数值字段的变化上限，超过则拒绝
 generation_model = "persona"        # 用哪档模型生成人设（指向 llm.routing 的键）
+                                    # v0.2.0 后会改为指向 [llm.models] 的模型别名
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  [channels]  渠道开关
@@ -198,6 +217,12 @@ memory_keep_forever = true          # 记忆永远不删（遗忘是标记，不
 event_log_enabled = false           # 事件日志默认关闭（只用于调试）
 auto_vacuum = true                  # 定期 VACUUM 回收空间
 
+# v0.2.0 / v0.3.0 将新增四个键（现在还不存在，内核不认识，所以不做进来）：
+#   log_keep_days = 30                # 数据库日志保留天数
+#   media_keep_days = 365             # 公开图片保留天数
+#   media_private_keep_days = 90      # 私密图片保留天数
+#   source_item_keep_days = 90        # 抓回来的内容保留天数
+
 # ───────────────────────────────────────────────────────────────────────────
 #  [plugins]  插件
 # ───────────────────────────────────────────────────────────────────────────
@@ -208,6 +233,13 @@ enabled = [
   "capability.activity",
   "capability.post",
   "capability.chat",
+  # v0.2.0 新增：
+  # "capability.selfie",
+  # "image.openai_compatible",
+  # v0.3.0 新增：
+  # "capability.research",
+  # "source.tavily",
+  # "source.rss",
 ]
 
 # 本地插件的搜索路径，按顺序查找，先找到的优先
@@ -248,4 +280,32 @@ page_size = 50                      # 列表页每页条数
 #
 #  在下面这样引用（启动时解析，未设置则报错并提示变量名）：
 #    api_key = "${ALTEREGO_LLM_API_KEY}"
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  附录 · v0.2.0 / v0.3.0 将要新增的配置面
+#
+#  为什么这里只写注释、不写区块：
+#    本文件是「所有配置项的权威参考」，同时也是 alterego init 的**输入**。
+#    如果现在就把 [media] / [sources] / [settings] 写成真区块，
+#    生成出来的配置文件会包含内核还不认识的键（与内核测试相矛盾）。
+#    所以：**发布实现与取消注释必须是同一次提交**。
+#
+#  完整写法（与本节同步维护）：docs/DESIGN.md § 12.1
+#    形象与生图      docs/design/07-model-routing-and-media.md
+#    外部信息源      docs/design/08-external-sources.md
+#    可观测性        docs/design/09-observability.md
+#    设置中心        docs/design/10-settings-center.md
+#
+#  将要新增的区块：
+#    [llm.providers.*]   端点：base_url + api_key（${环境变量}）
+#    [llm.models.*]      模型：provider / model / context_window / max_output /
+#                        supports_tools / supports_json /
+#                        cost_per_1m_input / cost_per_1m_output
+#    [budget]            由 [llm.budget] 更名，新增 max_images_per_day 与 [budget.per_purpose]
+#    [media] / [media.selfie] / [media.providers.*]
+#    [sources] / [sources.search] / [sources.fetch]
+#    [log] / [observability] / [stats] / [settings]
+#    [retention]         新增 log_keep_days / media_keep_days /
+#                        media_private_keep_days / source_item_keep_days
 # ═══════════════════════════════════════════════════════════════════════════

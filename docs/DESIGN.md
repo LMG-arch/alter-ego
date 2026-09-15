@@ -300,16 +300,25 @@ v1 采用**单进程多线程**模型：
 
 ## 6. 插件体系
 
-### 6.1 六类插件
+### 6.1 八类插件
 
 | kind | 说明 | 内置实现 | 扩展点 |
 | --- | --- | --- | --- |
 | `llm` | 大模型供应商适配 | `llm.openai_compatible` | `provide_llm()` |
 | `storage` | 持久化后端 | `storage.sqlite` | `provide_storage()` |
 | `channel` | 消息进出通道 | `channel.file`, `channel.web`, `channel.wecom_webhook`, `channel.dingtalk_webhook` | `provide_channel()` |
-| `capability` | 具体行为执行能力 | `capability.activity`, `capability.post`, `capability.chat` | `provide_tool()` |
+| `capability` | 具体行为执行能力 | `capability.activity`, `capability.post`, `capability.chat`, `capability.selfie`, `capability.research` | `provide_tool()` |
 | `stage` | 推演流水线阶段 | `stage.sense/reflect/intention/act/express/persist` | 注册到 `pipeline` 扩展点 |
-| `tool` | LLM 可调用的工具 | `tool.time_query`, `tool.web_search`（可选） | `provide_tool()` |
+| `tool` | LLM 可调用的工具 | `tool.time_query` | `provide_tool()` |
+| `image` | 生图供应商适配（v0.2.0） | `image.openai_compatible`, `image.local_sd` | `provide_image()` |
+| `source` | 外部信息来源适配（v0.3.0） | `source.tavily`, `source.rss`, `source.http_fetch` | `provide_source()` |
+
+`image` 与 `source` 的契约见 [07-model-routing-and-media.md](design/07-model-routing-and-media.md#4-生图接口契约)
+与 [08-external-sources.md](design/08-external-sources.md#3-接口契约)。
+
+**为什么单独设两类而不复用 `tool`**：`tool` 是「LLM 可以主动调用的事情」，会出现在 function calling 列表里；
+而生图与检索是**推演循环自己决定要做的事**（角色想拍张照、想去读点东西），不经过 LLM 的工具选择环节。
+把它塞进 `tool` 会让 LLM 有能力不经过预算门直接生图与联网，破坏 P3。
 
 ### 6.2 插件清单
 
@@ -624,7 +633,7 @@ sequenceDiagram
 
 > **为什么不用向量数据库**：v1 优先「零依赖」，FTS5 + 加权排序已能满足「记住聊过的事」这一需求。向量检索设计为插件，用户需要再装。
 
-### 9.2 表结构概览（16 张表）
+### 9.2 表结构概览（26 张表）
 
 ```mermaid
 erDiagram
@@ -643,7 +652,15 @@ erDiagram
     npc ||--o{ relationship : "有关系"
     persona ||--o{ tick_log : "推演记录"
     persona ||--o{ llm_usage : "消耗"
+    persona ||--o{ media_asset : "形象照"
+    persona ||--o{ media_usage : "生图消耗"
+    media_asset ||--o| social_post : "被发布为"
+    persona ||--o{ source_query : "检索记录"
+    source_query ||--o{ source_item : "抓到条目"
+    source_item ||--o| memory : "沉淀为"
+    source_feed }o--|| plugin : "RSS 订阅"
     plugin_state }o--|| plugin : "状态"
+    plugin_meta }o--|| plugin : "元数据"
 ```
 
 | 表名 | 说明 |
@@ -665,10 +682,28 @@ erDiagram
 | `tick_log` | 推演日志（含决策依据，用于可解释性） |
 | `llm_usage` | LLM 调用计量 |
 | `plugin_state` | 插件 KV 状态 |
-| `event_log` | 事件流（用于 Web 回放与调试） |
+| `plugin_meta` | 插件元数据与失败计数 |
+| `event_log` | 事件流（默认关闭；用于回放与调试） |
+| `budget_usage` | 打扰预算日用量 |
+| `media_asset` | 生成/上传的图片资产（含**定妆照**） |
+| `media_usage` | 生图消耗计量 |
+| `source_item` | 检索到的外部条目（只存 URL/标题/摘要） |
+| `source_feed` | RSS 订阅源状态（含 `etag`） |
+| `source_query` | 一次检索的查询与结果统计 |
+| `log_entry` | 结构化运行日志（WARNING 及以上落库） |
 | `schema_version` | 迁移版本 |
 
+**视图**（不是表，用于统计与排查）：
+
+| 视图 | 用途 |
+| --- | --- |
+| `v_cost_daily` | LLM + 生图的日成本合并视图 |
+| `v_trace` | 按 `correlation_id` 串联一次推演的全部痕迹 |
+
 完整 DDL 见 [03-data-model.md](design/03-data-model.md)。
+
+> **每张可观测表都必须带 `correlation_id`**，同一次推演内共享同一个值。
+> 这是日志页「从一条错误跳回那次推演」的实现基础，见 [09-observability.md § 1.2](design/09-observability.md#12-核心洞察一切都要能串起来)。
 
 ---
 
@@ -728,18 +763,28 @@ alterego stats                                   # 用量与成本统计
 
 FastAPI + 原生 HTML/CSS/JS（无前端框架，符合「简单」原则），通过 **SSE** 实时推流。
 
-| 页面 | 内容 |
-| --- | --- |
-| **总览** | 头像、当前状态（在做什么/心情如何）、虚拟时钟、今日统计 |
-| **朋友圈** | 动态流，支持以用户身份点赞评论；NPC 也会互动 |
-| **聊天** | 与 Agent 的对话界面（v1 的**主要入站通道**） |
-| **时间线** | 某一天从起床到睡觉的完整活动时间线（可视化） |
-| **关系网** | 关系图（Agent 在中心，连线粗细表示亲密度） |
-| **内心** | 内心独白流 + 被预算拦截的 `reach_out` 意图（很有人味） |
-| **记忆** | 记忆浏览器，支持检索；显示重要度与强度衰减 |
-| **后台** | Tick 日志、LLM 调用记录、成本统计、插件管理 |
+| 页面 | 内容 | 分册 |
+| --- | --- | --- |
+| **总览** | 头像、当前状态（在做什么/心情如何）、虚拟时钟、今日统计 | — |
+| **朋友圈** | 动态流，支持以用户身份点赞评论；NPC 也会互动 | — |
+| **聊天** | 与 Agent 的对话界面（v1 的**主要入站通道**） | — |
+| **时间线** | 某一天从起床到睡觉的完整活动时间线（可视化） | — |
+| **关系网** | 关系图（Agent 在中心，连线粗细表示亲密度） | — |
+| **内心** | 内心独白流 + 被预算拦截的 `reach_out` 意图（很有人味） | — |
+| **记忆** | 记忆浏览器，支持检索；显示重要度与强度衰减 | — |
+| **相册** | 角色生成的图片；**定妆照置顶**；可手动发布（唯一可绕过预算的入口） | [07](design/07-model-routing-and-media.md#6-相册发布与打扰预算) |
+| **统计** | Token 与成本：进度条、外推预测、**降级状态徽章**、趋势、按用途分布 | [09](design/09-observability.md#6-统计页面) |
+| **日志** | 实时 tail + 历史查询 + 错误优先 + 完整链路跳转 + 运行期调级别 | [09](design/09-observability.md#5-日志页面) |
+| **信息源** | 最近读了什么、丢弃了什么、兴趣权重变化 | [08](design/08-external-sources.md#6-内容进入生活的三条路径) |
+| **设置** | 11 个分组的全部配置，**每一项都带说明与「改了会怎样」** | [10](design/10-settings-center.md#7-页面结构) |
+| **后台** | Tick 日志、插件管理、数据库维护 | — |
 
-SSE 事件类型：`tick.started`、`tick.completed`、`activity.started`、`post.created`、`message.created`、`emotion.changed`、`plugin.failed`。
+> 「内心」与「日志」不是同一个页面，虽然都像流水账：**受众不同**。
+> 「内心」是给用户看的（它在想什么），「日志」是给排障的人看的（哪里坏了）。合并会让两边都难用。
+
+SSE 事件类型：`tick.started`、`tick.completed`、`activity.started`、`post.created`、
+`message.created`、`emotion.changed`、`plugin.failed`、`media.created`、`source.ingested`、
+`log.entry`、`budget.exceeded`。
 
 ### 10.3 守护进程
 
@@ -841,28 +886,124 @@ min_interval_minutes = 90
 consecutive_no_reply_limit = 3
 
 [llm]
-default_provider = "openai_compatible"
+# 三层配置：provider（找谁说话）→ model（用哪套参数）→ routing（什么场合用它）
+# 为什么要分三层：一个 provider 可以挂多个 model（贵/便宜），
+# 而 routing 引用的是 model 而不是 provider。详见 07-model-routing-and-media.md
+
+[llm.providers.deepseek]
+base_url = "https://api.deepseek.com/v1"
+api_key_env = "DEEPSEEK_API_KEY"
+
+[llm.providers.local]
+base_url = "http://127.0.0.1:11434/v1"
+api_key_env = ""                     # 本地不需要密钥
+
+[llm.models.deepseek_chat]
+provider = "deepseek"
+model = "deepseek-chat"
+temperature = 0.8
+max_tokens = 1024
+cost_per_1m_input = 0.27             # 价格是数据不是代码（ADR-0006）
+cost_per_1m_output = 1.10
+
+[llm.models.deepseek_reasoner]
+provider = "deepseek"
+model = "deepseek-reasoner"
+temperature = 0.6
+max_tokens = 2048
+supports_json = true
+cost_per_1m_input = 0.55
+cost_per_1m_output = 2.19
 
 [llm.routing]
-strong = "openai_compatible"
-cheap  = "openai_compatible"
-decision = "strong"                 # 意图决策用哪档
-expression = "strong"               # 表达生成用哪档
-reflection = "cheap"                # 情绪/记忆反思
-npc = "cheap"                       # NPC 对话
-persona = "strong"                  # 人格生成
+# 值现在是 **model 别名**，不再直接是 provider 名（旧配置会自动迁移并告警）
+strong     = "deepseek_reasoner"
+cheap      = "deepseek_chat"
+decision   = "strong"                # 意图决策用哪个模型
+expression = "strong"                # 表达生成用哪个模型
+reflection = "cheap"                 # 情绪/记忆反思
+emotion    = "cheap"                 # 情绪评估
+memory     = "cheap"                 # 记忆巩固
+npc        = "cheap"                 # NPC 对话
+persona    = "strong"                # 人格生成
+image_prompt     = "cheap"           # 生图提示词构造（v0.2.0）
+research_query   = "cheap"           # 检索词生成（v0.3.0）
+research_summarize = "cheap"         # 抓回内容的消化（v0.3.0）
 
-[llm.budget]
+[media]                              # v0.2.0
+enabled = true
+max_images_per_day = 20
+default_size = "1024x1024"
+canonical_portrait_prompt_seed = "from_persona"
+
+[media.selfie]
+scenarios = ["morning", "commute", "work", "meal", "evening", "weekend_outdoor"]
+allow_regenerate_canonical = false   # 定妆照是单点真源，默认不重生成
+require_reference_support = true     # 不支持参考图的供应商不允许生成人物图
+
+[media.providers.openai_compatible]
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+model = "gpt-image-1"
+supports_reference = true
+cost_per_image_usd = 0.04
+
+[sources]                            # v0.3.0
+enabled = true
+research_tick_interval_hours = 18
+max_items_ingested_per_day = 20      # 成本闸门
+on_injection = "drop"                # drop | pass（pass 仅供调试，需二次确认）
+
+[sources.search]
+provider = "tavily"
+api_key_env = "TAVILY_API_KEY"
+max_results = 5
+
+[sources.fetch]
+user_agent = "AlterEgo/0.1 (+https://github.com/LMG-arch/alter-ego)"
+respect_robots = true                # 不提供关闭开关
+domain_delay_sec = 2.0
+max_content_chars = 4000
+
+[log]
+level = "INFO"
+file_enabled = true
+file_keep_days = 14                  # 全量日志按天轮转
+console = true
+
+[observability]
+db_min_level = "WARNING"             # 只有 WARNING 及以上落库
+keep_days = 90
+stats_refresh_sec = 30
+
+[stats]
+show_projection = true               # 显示「按当前速率预计今日消耗」
+cost_display_currency = "USD"
+
+[budget]                             # 原名 [llm.budget]，现在闸门统管 LLM + 生图
+persona_id = "default"
 daily_usd_limit = 2.0
 monthly_usd_limit = 40.0
 max_calls_per_day = 800
 max_tokens_per_day = 2000000
-on_exceed = "degrade"               # degrade | stop | warn
+max_images_per_day = 20
+on_exceed = "degrade"                # degrade | stop | warn
+
+[budget.per_purpose]
+# 单个用途的日成本上限，防止某一类调用吃光全部预算
+evaluation = 0.20
+persona_gen = 1.00
+media = 1.00
+research = 0.20
 
 [retention]
 tick_log_keep_days = 90
-tick_log_detail = "full"            # full | summary（summary 可把年增长降到 1/20）
+tick_log_detail = "full"             # full | summary（summary 可把年增长降到 1/20）
 activity_log_keep_days = 365
+log_keep_days = 30
+media_keep_days = 365
+media_private_keep_days = 90
+source_item_keep_days = 90
 auto_vacuum = true
 
 [plugins]
@@ -875,6 +1016,11 @@ enabled = [
   "capability.activity",
   "capability.post",
   "capability.chat",
+  # "capability.selfie",              # v0.2.0
+  # "image.openai_compatible",        # v0.2.0
+  # "capability.research",            # v0.3.0
+  # "source.tavily",                  # v0.3.0
+  # "source.rss",                     # v0.3.0
 ]
 search_paths = ["plugins", "~/.alterego/plugins"]
 
@@ -882,7 +1028,17 @@ search_paths = ["plugins", "~/.alterego/plugins"]
 enabled = true
 host = "127.0.0.1"
 port = 8765
+
+[settings]
+allow_write = true                   # 允许在 UI 里改配置
+secret_write = "env_only"            # 密钥永远不可写（只能改环境变量）
+show_advanced = true                 # 默认展开「高级」分组
+atomic_write = true                  # 写临时文件→fsync→os.replace
 ```
+
+> **每一个键都有对应的展示元数据**（标签、说明、**「改了会怎样」**、是否需重启、是否危险）。
+> 元数据与配置同文件、同一次提交，因此物理上无法漂移。
+> 具体机制与强制手段见 [10-settings-center.md § 4](design/10-settings-center.md#4-用测试强制标注)。
 
 ### 12.2 密钥管理
 
@@ -899,15 +1055,28 @@ WECOM_WEBHOOK=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx
 
 插件配置 schema 中用 `env = "VAR_NAME"` 声明映射，`secret = true` 的字段在 CLI/Web 中永远脱敏显示。
 
+**在设置页里，密钥永远是只读的**，只展示「来源变量名 + 是否已设置」：
+
+```
+DEEPSEEK_API_KEY        [环境变量]  已设置 ✓
+TAVILY_API_KEY          [环境变量]  未设置 —
+```
+
+理由有三：`alterego.toml` 是要提交到 git 的；浏览器提交密钥会进请求体与日志；
+容器部署本来就用环境变量。详见 [10-settings-center.md § 5.2](design/10-settings-center.md#52-为什么密钥不写进配置文件)。
+
 ### 12.3 运行依赖
 
 | 层 | 依赖 | 说明 |
 | --- | --- | --- |
-| 核心 | `pydantic>=2`, `httpx` | 必需 |
+| 核心 | `pydantic>=2.6,<3`, `httpx>=0.27,<1` | 必需，**仅此两个** |
 | TOML | `tomllib`（Python 3.11+ 内置） | 无需 tomli |
+| 中文分词 | `jieba` | `pip install alterego[zh]`，未安装时 FTS5 退化为字符分词 |
 | Web | `fastapi`, `uvicorn` | `pip install alterego[web]` |
-| 开发 | `pytest`, `pytest-asyncio`, `ruff` | `pip install alterego[dev]` |
-| 可选 | `jieba`（中文分词）、`pyyaml`、向量库 | 按需 |
+| 钉钉加签 | `pycryptodome` | `pip install alterego[wecom]` |
+| 图像转码 | `Pillow` | 可选；未安装则存原始格式（PNG/WebP 均可） |
+| 开发 | `pytest`, `pytest-asyncio`, `pytest-cov`, `ruff`, `mypy` | `pip install alterego[dev]` |
+| 全部 | — | `pip install alterego[all]` |
 
 **Python 版本要求：>= 3.11**（需要 `tomllib`、`asyncio.TaskGroup`、更好的类型语法）
 
@@ -925,17 +1094,22 @@ alter-ego/
 │   │   ├── 03-data-model.md
 │   │   ├── 04-simulation-loop.md
 │   │   ├── 05-channels.md
-│   │   └── 06-roadmap.md
+│   │   ├── 06-roadmap.md
+│   │   ├── 07-model-routing-and-media.md   # 三层模型配置 + 生图 + 形象一致性
+│   │   ├── 08-external-sources.md          # 联网检索 + 不可信输入
+│   │   ├── 09-observability.md             # Token 统计 + 日志体系
+│   │   ├── 10-settings-center.md           # 配置元数据 + 设置页
+│   │   └── 11-optimization-roadmap.md      # 可加深方向的取舍分析
 │   ├── adr/                         # 架构决策记录
 │   │   ├── README.md                # 索引：新增 ADR 必须在这里补一行
 │   │   ├── 0000-template.md
-│   │   └── 0001…0006                # ADR 机制 / 语言 / 存储 / 渠道方向 / 降级 / 选型即数据
+│   │   └── 0001…0010                # 机制/语言/存储/渠道/降级/选型即数据/归属视图/定妆照/不可信输入/元数据强制
 │   └── guide/                       # 用户手册
 │       ├── getting-started.md
 │       └── plugin-development.md
 │
 ├── scripts/
-│   └── check_architecture.sh        # 六组红线检查，CI 第一道关
+│   └── check_architecture.sh        # 七组 22 项红线检查，CI 第一道关
 │
 ├── src/alterego/
 │   ├── __init__.py                  # 只有 __version__，不 import 任何子模块
@@ -943,6 +1117,7 @@ alter-ego/
 │   ├── cli.py
 │   ├── kernel/                      # 内核：零业务逻辑
 │   │   ├── config.py
+│   │   ├── settings.py              # Setting / Choice 元数据与渲染所需的单一真源
 │   │   ├── bus.py
 │   │   ├── registry.py
 │   │   ├── clock.py
@@ -957,10 +1132,14 @@ alter-ego/
 │   ├── interfaces/                  # 跨层 Protocol 与纯数据契约（各层共同 import）
 │   │   ├── common.py                # HealthStatus 等共用小类型
 │   │   ├── llm.py
+│   │   ├── image.py                 # ImageProvider / ImageRequest / GeneratedImage
+│   │   ├── source.py                # SearchProvider / FeedReader / PageFetcher
 │   │   ├── channel.py
 │   │   ├── storage.py
 │   │   └── simulation.py
 │   ├── domain/                      # 领域模型：纯函数，无 IO
+│   │   ├── media.py                 # build_portrait_prompt()：一致性骨架的唯一入口
+│   │   ├── untrusted.py             # INJECTION_PATTERNS 与外部内容包裹
 │   │   ├── persona.py
 │   │   ├── emotion.py
 │   │   ├── memory.py
@@ -987,6 +1166,7 @@ alter-ego/
 │   │       ├── rest.py
 │   │       ├── socialize.py
 │   │       ├── post_moment.py
+│   │       ├── research.py          # 第 11 种意图：自己上网找感兴趣的信息
 │   │       └── reach_out.py
 │   ├── npc/                         # NPC 模拟（与主体推演分开，避免抢注意力）
 │   ├── capabilities/                # 内置 capability 插件宿主
@@ -996,6 +1176,13 @@ alter-ego/
 │   │   ├── prompt.py
 │   │   ├── schema.py                # 结构化输出定义
 │   │   └── meter.py                 # token 计量
+│   ├── image/                       # 内置 image 插件宿主
+│   │   ├── openai_compatible.py     # 云端：支持 reference
+│   │   └── local_sd.py              # 本地 ComfyUI / SD WebUI HTTP API
+│   ├── sources/                     # 内置 source 插件宿主
+│   │   ├── tavily.py
+│   │   ├── rss.py
+│   │   └── http_fetch.py
 │   ├── storage/
 │   │   └── sqlite/
 │   │       ├── backend.py
@@ -1004,6 +1191,9 @@ alter-ego/
 │   │       └── repo/
 │   │           ├── persona_repo.py
 │   │           ├── memory_repo.py
+│   │           ├── media_repo.py
+│   │           ├── source_repo.py
+│   │           ├── log_repo.py
 │   │           └── ...
 │   ├── channels/                    # 出站渠道 + v1 唯一的入站渠道（ADR-0004）
 │   │   ├── file.py                  # 离线兜底：写进 data/outbox/
@@ -1023,6 +1213,9 @@ alter-ego/
 │   │   ├── memory_consolidate.md
 │   │   ├── post_compose.md
 │   │   ├── chat_reply.md
+│   │   ├── image_prompt.md          # 把四槽位展开成生图提示词
+│   │   ├── research_query.md        # 按兴趣 + 情绪生成检索词
+│   │   ├── research_summarize.md    # 消化抓回内容（严格 JSON 输出）
 │   │   ├── reach_out.md
 │   │   └── persona_generate.md
 │   └── daemon.py                    # 进程生命周期：启动、信号、优雅关闭
@@ -1054,6 +1247,7 @@ alter-ego/
 │   ├── conftest.py                  # 共享 fixture：冻结时钟、EventBus、ServiceRegistry
 │   ├── test_kernel_*.py             # 内核单元测试
 │   ├── test_architecture.py         # 用 ast 机械校验分层红线
+│   ├── test_settings_metadata.py    # 强制每个配置项都有标注与「改了会怎样」
 │   ├── golden/                      # 固定随机种子的黄金用例（P6 可复现）
 │   └── fixtures/                    # 共享测试数据
 │
@@ -1157,7 +1351,7 @@ PR 模板中包含勾选清单，未勾选不予合并。
 | 非目标 | 理由 |
 | --- | --- |
 | 多用户 / 多人格并行 | v1 单用户单主角；多实例可通过多个 data 目录实现 |
-| 语音、视频、图像**生成**能力 | v1 纯文本；图像生成作为 v2 的 `capability.image_gen` 插件 |
+| 语音、视频能力 | v1/v0.2.0 只做文本与**图像生成**；语音与视频理解推迟到 v0.5.0 探索 |
 | 与真实人类社交平台账号打通（自动发朋友圈到微信） | 涉及风控与账号安全，不做 |
 | 分布式 / 微服务 | 单进程足够，分布式是过度设计 |
 | 自研 LLM 微调 | 用现成 API 即可 |
@@ -1195,6 +1389,11 @@ PR 模板中包含勾选清单，未勾选不予合并。
 | [04-simulation-loop.md](design/04-simulation-loop.md) | 六阶段详解、意图系统、情绪模型、记忆模型、打扰预算、成本控制 | 核心开发者、Prompt 工程师 |
 | [05-channels.md](design/05-channels.md) | 渠道抽象、各渠道实现细节、加签算法、双向约束、限流重试 | 集成开发者 |
 | [06-roadmap.md](design/06-roadmap.md) | 版本规划、里程碑、验收标准、风险对策、成本估算 | 所有读者 |
+| [07-model-routing-and-media.md](design/07-model-routing-and-media.md) | 三层模型配置（provider/model/routing）、生图契约、**角色一致性机制**、相册与成本 | 核心开发者、Prompt 工程师 |
+| [08-external-sources.md](design/08-external-sources.md) | 联网检索、**不可信输入红线**、兴趣驱动选题、去重与礼貌抓取、降级矩阵 | 核心开发者、集成开发者 |
+| [09-observability.md](design/09-observability.md) | Token/成本统计、日志体系、`correlation_id` 排查闭环、两个页面结构 | 核心开发者、运维 |
+| [10-settings-center.md](design/10-settings-center.md) | 配置元数据模型、**用测试强制标注**、写入与热生效、设置页结构 | 核心开发者、前端 |
+| [11-optimization-roadmap.md](design/11-optimization-roadmap.md) | 记忆系统选型、推演系统加深方向、其他系统的优化取舍与推荐排序 | 所有读者 |
 
 ---
 
@@ -1204,3 +1403,4 @@ PR 模板中包含勾选清单，未勾选不予合并。
 | --- | --- | --- | --- |
 | 2026-09-15 | v0.1.0 | 初版设计文档 | LMG-arch |
 | 2026-09-15 | v0.1.1 | § 13 目录树补上 `kernel/manifest.py` / `kernel/context.py`，展开 `interfaces/`（对齐实现） | LMG-arch |
+| 2026-09-15 | v0.2.0 | 新增四类能力设计：§ 6.1 六类→**八类插件**（新增 `image` / `source`）；§ 9.2 修正表数（16→**26**，补入 6 张新表 + 2 个视图）；§ 10.2 页面 8→**13**、SSE 事件补 4 类；§ 15 非目标中「图像生成」移出；§ 17 新增分册 07–11；新增 ADR-0008/0009/0010 | LMG-arch |

@@ -753,8 +753,22 @@ async def memory_decay_job(ctx) -> None:
 | `reply` | social | 动态（有未读时 1.0） | ✅ | `message` | `content` |
 | `post_moment` | outbound | 0.05 | ✅ | `post` | `content`, `location` |
 | `reach_out` | outbound | 0.06 | ✅ | `message` | `motivation`, `content` |
+| `research` | internal | 0.07 | ❌ | `media`（v0.3.0 起） | `interest_key`, `query` |
 
 权重总和不必为 1——权重只用于采样的相对概率。
+
+**关于 `research`（第 11 种意图，v0.3.0）**：它是**唯一一种会主动改变自己认知状态的意图**——
+其他意图都在输出（做事、说话、发呆），只有它会带回新信息。
+但它“会打扰用户”吗？**不会，它本身是 `internal`。**
+
+不过它可能**间接**打扰：读到一条有意思的东西后，可能触发下一个 tick 的 `reach_out`（「刚看到一个东西想跟你说」），
+而那一次要受打扰预算管辖。这个链条是故意的：
+
+> **想分享的冲动必须是真实产生的，而不是为了“展示自己在上网”而编排的。**
+
+`research` 的三级降级（搜索 → RSS → 降为本 tick 的 `reflect_internal`）见
+[08-external-sources.md § 2.3](08-external-sources.md#23-失败必须降级绝不中断生活)——
+它遵循与 [ADR-0005](../adr/0005-downgrade-instead-of-discard-suppressed-intents.md) 完全一致的原则。
 
 ### 4.2 `reach_out` 的动机系统
 
@@ -1515,7 +1529,16 @@ reflection = "cheap"      # 反思 → 便宜模型
 npc        = "cheap"      # NPC 推演 → 便宜模型
 memory     = "cheap"      # 记忆归纳 → 便宜模型
 emotion    = "cheap"      # 情绪推断 → 便宜模型
+# v0.2.0/v0.3.0 新增
+image_prompt       = "cheap"   # 生图提示词构造
+research_query     = "cheap"   # 检索词生成
+research_summarize = "cheap"   # 抓回内容的消化
 ```
+
+> **值的语义在 v0.2.0 变了**：以前这里填的是 **provider 名**（如 `openai_compatible`），
+> 现在填的是 **model 别名**（如 `deepseek_reasoner`）。因为一个 provider 可以挂多个 model，
+> 而「决策用旗舰模型、反思用便宜模型」这两件事可能在**同一家**。
+> 旧配置会自动迁移并发出告警，见 [07-model-routing-and-media.md § 3](07-model-routing-and-media.md#3-配置迁移与兼容)。
 
 **预期分布**（`realtime` 模式，1 天）：
 
@@ -1594,26 +1617,39 @@ class LLMSession:
 ### 10.4 预算与降级
 
 ```toml
-[llm.budget]
+[budget]                   # v0.2.0 由 [llm.budget] 更名：闸门现在统管 LLM 与生图
 daily_usd_limit = 2.0
 monthly_usd_limit = 40.0
+max_calls_per_day = 800
+max_tokens_per_day = 2000000
+max_images_per_day = 20    # 新增：生图有独立闸门（图比 token 贵得多）
 on_exceed = "degrade"      # degrade | stop | warn
 ```
+
+> **配置漂移修正**：本文档与 [DESIGN.md § 12.1](../DESIGN.md#121-配置文件)、`templates/alterego.toml`
+> 统一使用 `daily_usd_limit = 2.0` / `monthly_usd_limit = 40.0`。
+> [06-roadmap.md § 5.1](06-roadmap.md) 曾写 `1.0` / `30.0`，那是一个未采纳的更保守的提议，已改回。
 
 超限时的降级路径：
 
 | 消耗比例 | 行为 |
 | --- | --- |
 | < 80% | 正常 |
-| 80% – 100% | 所有 `strong` 调用降级为 `cheap` |
-| > 100% | 停用所有 LLM 依赖阶段（决策切到规则模式），仅保留情绪数学与模板表达，发 `budget.exhausted` 事件 |
+| 80% – 100% | 所有 `strong` 调用降级为 `cheap`；生图降为不发人物图（风景照不受影响） |
+| > 100% | 停用所有 LLM 依赖阶段（决策切到规则模式），停用生图与检索，仅保留情绪数学与模板表达，发 `budget.exhausted` 事件 |
 
 **降级后的行为**（纯规则）：
 - 意图选择：加权随机（`default_weight`）
 - 表达：从模板库选（每个意图预置 10-20 条模板）
 - 情绪：数学规则
+- 检索：本 tick 意图降为 `reflect_internal`
+- 生图：跳过；相册页面仍可用（用户可手动发布已有图片）
 
 这保证**预算耗尽时 Agent 仍在生活**，只是变笨了，而不是停止运行。
+
+**当前降级状态必须显示在界面上**：统计页顶部有一个徒章（正常 / strong→cheap 已生效 / 规则模式）。
+本系统默认降级，而**默认值发生的降级是静默的**——用户看到回答变差了会以为是自己配错了。
+一个徒章就能消除这个误会，见 [09-observability.md § 2](09-observability.md#2-token-与成本统计)。
 
 ### 10.5 成本分析命令
 
