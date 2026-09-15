@@ -419,17 +419,39 @@ class Scheduler:
 # 情绪更新：纯函数
 def update_emotion(
     current: Emotion,
-    events: list[EmotionEvent],
-    baseline: EmotionBaseline,
+    events: list[EmotionalEvent],
+    baseline: Emotion,
     sensitivity: float,
     elapsed: timedelta,
+    block: ScheduleBlock | None = None,
 ) -> tuple[Emotion, str]:
     """返回 (新情绪, 变化原因说明)"""
 ```
 
+`block` 是「这段时间内所处的日程块」：疲劳恢复必须知道它才成立，
+而领域层不拿全局状态，所以只能由调用方查好传进来。见 [04-simulation-loop.md § 6.4](04-simulation-loop.md#64-情绪更新的完整函数)。
+
 **为什么返回「变化原因」**：写入 `emotion_log.reason`，让 Web 页面与 `alterego why` 能展示「它为什么心情不好」。
 
 ### 3.2 各模块职责
+
+```
+src/alterego/domain/
+├── __init__.py
+├── persona.py        # 待实现
+├── emotion.py        # ✅ 已实现
+├── memory.py         # ✅ 已实现
+├── schedule.py       # ✅ 已实现
+├── relationship.py   # 待实现
+├── world.py          # 待实现
+├── post.py           # 待实现
+├── conversation.py   # 待实现
+├── media.py          # 待实现（ADR-0008）
+└── untrusted.py      # 待实现（ADR-0009）
+```
+
+下面的草图描述**目标接口**；已实现部分以 `src/alterego/domain/` 下的代码为准，
+本节的签名与公式与之保持一致。
 
 #### `persona.py`
 
@@ -479,59 +501,92 @@ class Persona:
 二维模型 + 离散标签，含自然回归、事件冲击、惯性、疲劳：
 
 ```python
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Emotion:
     valence: float          # -1 ~ 1
     arousal: float          # 0 ~ 1
-    label: str              # 开心/平静/烦躁/低落/兴奋/焦虑/疲惫/感动/委屈/恼火
     fatigue: float          # 0 ~ 1 累积疲劳
+    label: str              # 离散标签，词表开放（见下）
     updated_at: datetime
 
-def decay_toward(current: Emotion, baseline: EmotionBaseline,
-                 elapsed: timedelta, half_life_hours: float = 4.0) -> Emotion:
-    """指数回归到基线"""
+@dataclass(frozen=True, slots=True)
+class EmotionalEvent:
+    description: str        # 必填，会写进 emotion_log.reason
+    valence_delta: float = 0.0
+    arousal_delta: float = 0.0
+    fatigue_delta: float = 0.0
 
-def apply_event(current: Emotion, event: EmotionEvent, sensitivity: float) -> Emotion:
-    """事件冲击 + 惯性放大/削弱"""
+def decay_toward(current: float, baseline: float,
+                 elapsed: timedelta, half_life_hours: float) -> float:
+    """指数回归到基线：减半的是与基线的距离，不是数值本身"""
 
-LABEL_RULES: list[tuple[float, float, str]] = [
-    # (valence_min, arousal_min, label) 用于无 LLM 时的降级标签推断
-]
+def apply_event(current: Emotion, event: EmotionalEvent) -> Emotion:
+    """不带惯性的干净加减"""
 
-def infer_label(valence: float, arousal: float) -> str:
-    """按象限推断粗粒度标签（LLM 不可用时的降级路径）"""
+def apply_with_inertia(current: Emotion, valence_delta: float,
+                       sensitivity: float) -> float:
+    """同向事件放大（最高 1.4×），反向事件削弱（最低 0.6×）"""
+
+def update_fatigue(current: float, elapsed: timedelta,
+                   block: ScheduleBlock | None) -> float:
+    """清醒每小时 +0.05；睡眠每小时 -0.8"""
+
+def infer_label(valence: float, arousal: float) -> EmotionLabel:
+    """按象限推断粗粒度标签（LLM 不可用时的降级路径）
+
+    只会产出 EMOTION_LABELS 里的 8 个：
+    疲惫 / 兴奋 / 愉快 / 焦虑 / 低落 / 警觉 / 平静 / 一般
+    """
 ```
+
+**标签词表是开放的**：降级路径（`infer_label`）只产上面 8 个；
+LLM 路径可以给出更细的词（「感动」「委屈」「恼火」）。
+因此 `Emotion.label` 不做闭集校验，只有非空约束。
 
 **降级策略**：LLM 不可用时，情绪更新退化为纯数学规则 + `infer_label()`，保证 Agent 仍能运转（只是不够细腻）。
 
 #### `memory.py`
 
 ```python
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Memory:
-    id: str
+    persona_id: str
     kind: Literal["episodic", "semantic", "emotional"]
     content: str
     summary: str                    # 一句话摘要，用于提示词注入
     importance: float               # 0 ~ 1，写入时评定
-    strength: float                 # 当前强度，随时间衰减
+    strength: float                 # 当前强度快照（供 stats 用，无需 now）
     valence: float                  # 情绪色彩 -1 ~ 1
     entities: tuple[str, ...]       # 涉及的人物/地点，用于关系触发
     tags: tuple[str, ...]
+    source: Literal["tick", "conversation", "consolidation", "manual", "npc"]
     occurred_at: datetime
     last_recalled_at: datetime | None
     recall_count: int
+    forgotten: bool
+    # 完整字段表见 03-data-model.md § 4.3
 
-def strength_at(memory: Memory, now: datetime, decay_rate: float = 0.05) -> float:
-    """strength = importance * exp(-decay_rate * days) * (1 + log1p(recall_count))"""
+def strength_at(memory: Memory, now: datetime) -> float:
+    """importance × e^(-λ_kind · days) × (1 + 0.35 × recall_count)
+
+    λ 由**记忆类型**决定，不是一个全局常数——
+    权威公式、参数表与验证示例见 04-simulation-loop.md § 7.2。
+    """
 
 def rank_memories(
-    candidates: list[Memory],
+    candidates: Sequence[MemoryCandidate],
     now: datetime,
+    *,
     query_valence: float | None = None,
-    weights: RetrievalWeights = RetrievalWeights(),
-) -> list[tuple[Memory, float]]:
-    """综合排序：相关性(由检索层提供) × 重要度 × 新近度 × 情绪一致度"""
+    weights: RetrievalWeights = DEFAULT_RETRIEVAL_WEIGHTS,
+    limit: int | None = DEFAULT_TOP_K,
+    min_strength: float = FADE_THRESHOLD,
+) -> list[MemorySearchHit]:
+    """综合排序：相关性 × 重要度 × 新近度 × 情绪一致度
+
+    返回带分数分解的 MemorySearchHit，而不只是 (memory, score)。
+    权重与分数分解见 03-data-model.md § 6.2。
+    """
 ```
 
 **检索流程**（`sim/stages/reflect.py` 调用）：
@@ -575,16 +630,23 @@ def tone_hint(rel: Relationship) -> str:
 #### `schedule.py`
 
 ```python
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ScheduleBlock:
-    start: datetime
-    end: datetime
+    id: str
+    persona_id: str
+    day: date                       # 归属日（跨夜块属于起始那天）
+    start_at: datetime
+    end_at: datetime
     activity: str                   # "工作"、"午餐"、"通勤"
     category: Literal["sleep", "work", "meal", "commute",
                       "leisure", "social", "chore", "other"]
     interruptible: bool
     location: str | None
     source: Literal["template", "llm", "manual"]
+    actual_start_at: datetime | None
+    actual_end_at: datetime | None
+    deviation_note: str | None
+    created_at: datetime | None
 
 def generate_day(
     template: ScheduleTemplate, day: date, rng: random.Random,
@@ -592,11 +654,14 @@ def generate_day(
 ) -> list[ScheduleBlock]:
     """从模板生成一天的日程：应用 flexible 抖动 + 情绪修正（低落时可能跳过健身）"""
 
-def current_block(blocks: list[ScheduleBlock], now: datetime) -> ScheduleBlock | None: ...
+def current_block(blocks: Sequence[ScheduleBlock], now: datetime) -> ScheduleBlock | None:
+    """当前所处的块；重叠时取开始时间最晚的那个。区间为左闭右开"""
 
-def is_interruptible(blocks: list[ScheduleBlock], now: datetime) -> bool:
-    """判断当前是否允许被主动联系打断（打扰预算的关键输入）"""
+def is_interruptible(blocks: Sequence[ScheduleBlock], now: datetime) -> bool:
+    """判断当前是否允许被主动联系打断（打扰预算的关键输入）；不在任何块内时视为可打断"""
 ```
+
+> 字段名以 DDL 为准（`001_initial.sql` 表 13）——物理列名是唯一能往返的真源。
 
 #### `world.py` / `post.py` / `conversation.py`
 

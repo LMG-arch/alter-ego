@@ -1082,6 +1082,17 @@ def infer_label(valence: float, arousal: float) -> str:
     return "一般"
 ```
 
+**已知取舍（实现于 `domain/emotion.py::infer_label`）**：
+
+疲惫特例排在第一位，条件 `arousal < 0.25 and valence < 0.1` 会把**整个低唤醒区间**收进来，于是：
+
+- 「低落」只在 `arousal ∈ [0.25, 0.6)` 且 `valence <= -0.3` 时出现；
+- 「平静」的可行区间被压到 `arousal ∈ [0.25, 0.3]` 且 `valence ∈ [0.1, 0.3)`。
+
+这是可以接受的：低唤醒 + 非正向就是「蔫了」，比「平静」更贴切。
+真正要区分「累」和「丧」需要 `infer_label` 也拿到 `fatigue`——
+但那样它就不再是 $(valence, arousal)$ 的纯函数了，留到有实际误判时再改。
+
 ### 6.3 四条更新规则
 
 **规则 1 · 自然回归**：情绪向基线回落，半衰期 4 小时。
@@ -1091,7 +1102,8 @@ def decay_toward(current: float, baseline: float, elapsed: timedelta,
                  half_life_hours: float) -> float:
     """指数回归：每过 half_life_hours，与基线的距离减半"""
     hours = elapsed.total_seconds() / 3600
-    factor = 0.5 ** (hours / half_life_hours)
+    # 显式标注：typeshed 里 float.__pow__ 返回 Any，mypy strict 会拒绝
+    factor: float = 0.5 ** (hours / half_life_hours)
     return baseline + (current - baseline) * factor
 ```
 
@@ -1101,11 +1113,21 @@ def decay_toward(current: float, baseline: float, elapsed: timedelta,
 | arousal | 2 小时 | 兴奋/紧张消退更快 |
 | fatigue | 8 小时（但睡眠时快速恢复） | 疲劳积累慢、恢复靠睡眠 |
 
-**规则 2 · 事件冲击**：外部事件直接改变情绪。
+**规则 2 · 事件冲击**：外部事件直接改变情绪。事件本身是领域模型，
+在 `domain/emotion.py` 里定义（`EmotionalEvent`）：
+
+```python
+@dataclass(frozen=True, slots=True)
+class EmotionalEvent:
+    description: str              # 必填，会写进 emotion_log.reason
+    valence_delta: float = 0.0
+    arousal_delta: float = 0.0
+    fatigue_delta: float = 0.0
+```
 
 ```python
 def apply_event(current: Emotion, event: EmotionalEvent) -> Emotion:
-    """event 含 valence_delta / arousal_delta / fatigue_delta"""
+    """不带惯性的干净加减。带惯性的路径是 update_emotion。"""
     return replace(
         current,
         valence=clamp(current.valence + event.valence_delta, -1, 1),
@@ -1135,11 +1157,14 @@ def apply_with_inertia(current: Emotion, valence_delta: float,
 ```python
 def update_fatigue(current: float, elapsed: timedelta, block: ScheduleBlock | None) -> float:
     hours = elapsed.total_seconds() / 3600
-    if block and block.category == "sleep":
+    if block is not None and block.is_sleep:
         return max(0.0, current - hours * 0.8)      # 每小时恢复 0.8
     # 清醒时每小时 +0.05（即 20 小时从 0 到 1）
     return min(1.0, current + hours * 0.05)
 ```
+
+`block` 必须是「**这段时间内**所处的日程块」：恢复与累积用同一段经过时间做系数，
+传错块会把一整段清醒时间当成睡眠。
 
 **疲劳对行为的影响**（在 Intention 阶段体现）：
 
@@ -1158,10 +1183,11 @@ def update_emotion(
     baseline: Emotion,
     sensitivity: float,
     elapsed: timedelta,
+    block: ScheduleBlock | None = None,
 ) -> tuple[Emotion, str]:
     """领域层纯函数。返回新情绪与变化原因（用于 emotion_log.reason）。
 
-    顺序很重要：先回归，再冲击，最后惯性修正。
+    顺序很重要：先回归，再冲击，最后疲劳。
     """
     reasons = []
 
@@ -1171,21 +1197,27 @@ def update_emotion(
     if abs(v - current.valence) > 0.02:
         reasons.append(f"情绪自然回落 {current.valence:+.2f}→{v:+.2f}")
 
-    # 2) 事件冲击（含惯性）
+    # 2) 事件冲击（效价含惯性；唤醒度与疲劳按敏感度缩放）
+    fatigue = current.fatigue
     for e in events:
         old = v
         v = apply_with_inertia(replace(current, valence=v), e.valence_delta, sensitivity)
         a = clamp(a + e.arousal_delta * sensitivity, 0, 1)
+        fatigue = clamp(fatigue + e.fatigue_delta * sensitivity, 0, 1)
         reasons.append(f"{e.description} 效价 {old:+.2f}→{v:+.2f}")
 
-    # 3) 疲劳
-    new_fatigue = update_fatigue(current.fatigue, elapsed, None)
+    # 3) 疲劳：block 必须来自调用方，否则睡眠恢复永远不生效
+    new_fatigue = update_fatigue(fatigue, elapsed, block)
 
     new = Emotion(valence=round(v, 3), arousal=round(a, 3), fatigue=round(new_fatigue, 3),
                   label=infer_label(v, a), updated_at=current.updated_at + elapsed)
 
     return new, "；".join(reasons) or "无显著变化"
 ```
+
+**为什么 `block` 是参数而不是 `ctx` 里的东西**：领域层无 IO、无全局，
+`update_emotion` 是纯函数，日程块只能由调用方（`TickContext`）取当前时刻查好后传进来。
+把它写死成 `None` 会让「规则 4 · 睡眠时每小时恢复 0.8」变成一段永不执行的代码。
 
 ---
 
@@ -1242,27 +1274,38 @@ def strength_at(memory: Memory, now: datetime) -> float:
 - 仍留在库中（可被 `alterego memory list --forgotten` 查看）
 - 可被**强关联触发**重新激活
 
+这一过程拆成**纯函数**（判断与变换，可测）与**副作用**（落库与派生新记忆，在 Sim 层）两半：
+
 ```python
+# domain/memory.py——纯函数
+def should_resurrect(memory: Memory, *, min_importance: float = 0.5) -> bool:
+    """强关联：已遗忘且当年足够重要。"""
+    return memory.forgotten and memory.importance >= min_importance
+
+
+def resurrect(memory: Memory, *, now: datetime, strength_ratio: float = 0.4) -> Memory:
+    """把记忆唤醒：恢复但不如原来清晰，并记一次回忆。"""
+    if not memory.forgotten:
+        raise ValueError("只有已遗忘的记忆才需要被激活")
+    return replace(memory, forgotten=False, strength=memory.importance * strength_ratio,
+                   last_recalled_at=now, recall_count=memory.recall_count + 1)
+```
+
+```python
+# sim/——副作用
 def maybe_resurrect(memory_id: str, storage, now: datetime) -> None:
-    """被强烈关联到当前情境时，遗忘的记忆可能"突然想起来" """
     m = storage.memory.get(memory_id)
-    if not m or not m.forgotten:
+    if m is None or not should_resurrect(m):
         return
-    # 强关联：有实体重叠且当前情绪与其情绪印记一致
-    if m.importance >= 0.5:
-        m.forgotten = False
-        m.strength = m.importance * 0.4        # 恢复但不如原来清晰
-        m.last_recalled_at = now
-        m.recall_count += 1
-        storage.memory.save(m)
-        # 这个"想起来"的瞬间本身值得记忆
-        storage.memory.save(Memory(
-            kind="episodic",
-            content=f"突然想起了{m.summary}",
-            summary=f"想起：{m.summary}",
-            importance=0.45, source="tick",
-            occurred_at=now, persona_id=m.persona_id,
-        ))
+    storage.memory.save(resurrect(m, now=now))
+    # 这个「想起来」的瞬间本身值得记忆
+    storage.memory.save(Memory(
+        kind="episodic",
+        content=f"突然想起了{m.summary}",
+        summary=f"想起：{m.summary}",
+        importance=0.45, source="tick",
+        occurred_at=now, persona_id=m.persona_id,
+    ))
 ```
 
 ### 7.4 记忆巩固

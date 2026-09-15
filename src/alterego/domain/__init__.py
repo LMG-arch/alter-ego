@@ -12,5 +12,7 @@
 
 from __future__ import annotations
 
+from alterego.domain import emotion, memory, schedule
 
-__all__: list[str] = []
+
+__all__ = ["emotion", "memory", "schedule"]

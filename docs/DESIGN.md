@@ -1138,13 +1138,13 @@ alter-ego/
 │   │   ├── storage.py
 │   │   └── simulation.py
 │   ├── domain/                      # 领域模型：纯函数，无 IO
+│   │   ├── schedule.py              # ✅ 已实现：ScheduleBlock / current_block / is_interruptible
+│   │   ├── emotion.py               # ✅ 已实现：二维情绪、四条更新规则、标签推导
+│   │   ├── memory.py                # ✅ 已实现：强度衰减、检索重排、遗忘与激活、巩固
 │   │   ├── media.py                 # build_portrait_prompt()：一致性骨架的唯一入口
 │   │   ├── untrusted.py             # INJECTION_PATTERNS 与外部内容包裹
 │   │   ├── persona.py
-│   │   ├── emotion.py
-│   │   ├── memory.py
 │   │   ├── relationship.py
-│   │   ├── schedule.py
 │   │   ├── world.py
 │   │   ├── post.py
 │   │   └── conversation.py
@@ -1405,3 +1405,4 @@ PR 模板中包含勾选清单，未勾选不予合并。
 | 2026-09-15 | v0.1.0 | 初版设计文档 | LMG-arch |
 | 2026-09-15 | v0.1.1 | § 13 目录树补上 `kernel/manifest.py` / `kernel/context.py`，展开 `interfaces/`（对齐实现） | LMG-arch |
 | 2026-09-15 | v0.2.0 | 新增四类能力设计：§ 6.1 六类→**八类插件**（新增 `image` / `source`）；§ 9.2 修正表数（16→**26**，补入 6 张新表 + 2 个视图）；§ 10.2 页面 8→**13**、SSE 事件补 4 类；§ 15 非目标中「图像生成」移出；§ 17 新增分册 07–11；新增 ADR-0008/0009/0010 | LMG-arch |
+| 2026-09-15 | v0.2.1 | § 13 目录树标注 `domain/` 三个已实现模块；§ 3 领域层草图对齐实现：`strength_at` 公式以 [04](design/04-simulation-loop.md) § 7.2 为准（按 kind 分半衰期）、`ScheduleBlock` 字段名以 DDL 为准、`update_emotion` 增补 `block` 参数、`Emotion.label` 词表改为开放 | LMG-arch |

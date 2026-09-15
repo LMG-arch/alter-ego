@@ -1044,6 +1044,32 @@ LIMIT 50;
 -- 且要便于单元测试与调整权重
 ```
 
+重排函数与权重都是领域层模型（`domain/memory.py`）：
+
+```python
+@dataclass(frozen=True, slots=True)
+class RetrievalWeights:
+    relevance: float = 0.40
+    importance: float = 0.25
+    recency: float = 0.20
+    mood: float = 0.15
+
+def rank_memories(
+    candidates: Sequence[MemoryCandidate],
+    now: datetime,
+    *,
+    query_valence: float | None = None,
+    weights: RetrievalWeights = DEFAULT_RETRIEVAL_WEIGHTS,
+    limit: int | None = DEFAULT_TOP_K,
+    min_strength: float = FADE_THRESHOLD,
+) -> list[MemorySearchHit]: ...
+```
+
+- `MemoryCandidate` = `(memory, relevance)`，`relevance` 是上一步交给领域层的 $R$ 项。
+- `query_valence` 为 `None` 时 $E$ 项一律取 1.0（没有情绪上下文，就不让它扰动排序）。
+- `min_strength` 先于 `limit` 生效：先丢掉低于阈值的，再取 Top-K。
+- 同分时按 `memory.id` 排序，保证同一输入两次调用结果一致（P6 可复现）。
+
 ### 6.4 中文分词
 
 SQLite FTS5 内置 `unicode61` 分词器对中文按**单字**切分，效果一般。两个改进选项：
@@ -1104,6 +1130,55 @@ async def consolidate(repo: MemoryRepository, llm: LLMProvider, now: datetime) -
 ```
 
 **副作用**：巩固后原始 episodic 记忆的 `strength` 会被降低（信息已上提），模拟「细节模糊了但记住了大概」。
+
+---
+
+## 6.9 领域模型的归属
+
+`§ 7` 的 Repository 契约引用了 20 多个领域类型。它们**不在存储层定义**，归属规则如下：
+
+| 东西 | 住哪 | 为什么 |
+| --- | --- | --- |
+| 表镜像（一行 ↔ 一个对象） | `domain/` | 它是数据模型本身，不是存储实现细节；换后端不该换类型 |
+| 业务规则与纯函数（`strength_at` / `rank_memories` / `update_emotion`） | `domain/` | 无 IO、无全局，可直接单测 |
+| SQL、事务、JSON 序列化、往返映射 | `storage/` | 换 `sqlite` 为 `postgres` 时只有这一层要重写 |
+
+**已经实现（本批次）**：`domain/schedule.py` / `domain/emotion.py` / `domain/memory.py`。
+
+### 6.9.1 只有查询才需要的类型
+
+有两个类型不对应任何表，它们是**查询结果**的形状，因此也住在 `domain/memory.py`：
+
+```python
+@dataclass(frozen=True, slots=True)
+class MemorySearchHit:
+    memory: Memory
+    score: float          # 四项加权总和
+    relevance: float      # R
+    importance: float     # I（已乘上 strength_at）
+    recency: float        # N
+    mood: float           # E
+    strength: float       # strength_at(memory, now) 的快照
+```
+
+保留分解而不只给一个 `score`，是因为「为什么排到前面」是调试检索质量时唯一看得见的东西——
+`alterego memory search --explain` 直接把这几列打出来。
+
+```python
+@dataclass(frozen=True, slots=True)
+class MemoryStats:
+    total: int = 0
+    active: int = 0
+    forgotten: int = 0
+    by_kind: Mapping[str, int] = field(default_factory=dict)
+    avg_importance: float = 0.0
+    avg_strength: float = 0.0
+    oldest_at: datetime | None = None
+    newest_at: datetime | None = None
+```
+
+`stats(persona_id)` 没有 `now` 参数，所以 `avg_strength` 用的是 `memory.strength`
+这一列的**快照值**，不是现算的——这正是那个列必须存在的原因。
 
 ---
 

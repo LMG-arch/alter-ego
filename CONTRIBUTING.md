@@ -107,6 +107,7 @@ alter-ego/
 ├── src/alterego/
 │   ├── kernel/          # 内核：配置、总线、注册表、插件、时钟、调度、错误
 │   ├── domain/          # 领域：纯函数业务逻辑（人设/情绪/记忆/关系/日程...）
+│   │   └── ...          #   schedule.py / emotion.py / memory.py 已实现
 │   ├── sim/             # 推演：六阶段流水线、意图、预算、TickContext
 │   ├── storage/         # 存储：SQLite 实现（connection/migrator/backend）、Repository、迁移
 │   │   └── sqlite/      #   └─ migrations/ 里的 .sql 是 schema 的唯一出处

@@ -175,6 +175,33 @@
   而不是迁移机器）
 - `docs/plans/2026-09-15-storage-framework.md` —— 本批次的实施计划（含三处契约冲突的判定）
 
+**领域层（阶段 D 纵向切片，已实现）**
+
+领域层按**纵向切片**落地：只做文档里有**可执行量化验收标准**的那一片（情绪 + 记忆 + 日程），
+其余 21 张表的镜像模型等 Repository 到位后再铺开。理由与对比表见
+`docs/plans/2026-09-15-domain-emotion-memory.md` § 1
+
+- `domain/schedule.py` —— `ScheduleBlock` 与两个查询纯函数。`contains()` 是**左闭右开**，
+  所以 12:00 结束的块不会和 12:00 开始的块重叠；`current_block()` 在重叠时取开始时间最晚的
+  那个（临时改过的日程优先）；`is_interruptible()` 在「不在任何块内」时返回 `True`——
+  没有日程的人不该被当成不可打扰。字段名以 DDL（`001_initial.sql` 表 13）为准
+- `domain/emotion.py` —— 二维情绪（效价 / 唤醒度 / 疲劳）+ 四条更新规则。
+  `decay_toward()` 减半的是**与基线的距离**而不是数值本身（基线 +0.2、当前 -0.6，
+  一个半衰期后是 -0.2 而非 -0.3）；`apply_with_inertia()` 同向放大（最高 1.4×）、
+  反向削弱（最低 0.6×）；`update_fatigue()` 睡眠每小时 -0.8、清醒每小时 +0.05；
+  `infer_label()` 是 LLM 不可用时的降级路径，输出封闭的 8 个标签
+- `domain/memory.py` —— 记忆的强度衰减、检索重排、遗忘与激活、巩固。
+  `strength_at()` 的 λ 按**记忆类型**取（episodic 7 天 / semantic 180 天 / emotional 365 天
+  半衰期），复现了 `04-simulation-loop.md § 7.2` 的验证表：0 天 0.70 / 7 天 0.35 /
+  21 天 0.09 / 28 天 0.04（低于 0.05 阈值 → 遗忘）；`rank_memories()` 返回
+  **带分数分解**的 `MemorySearchHit`（R/I/N/E 四项 + 总分 + strength 快照）而不是只给一个分数，
+  因为「为什么排到前面」是调试检索质量时唯一看得见的东西；同分按 `memory.id` 排序保证可复现
+- 三个领域模型的补定义：`EmotionalEvent`、`MemorySearchHit`、`MemoryStats`
+  —— 这三者在文档里被引用却从未定义。它们定义在**拥有它们的模块里**，文档随后引用
+- 测试 154 个：`test_domain_schedule.py` / `test_domain_emotion.py` / `test_domain_memory.py`
+- `docs/plans/2026-09-15-domain-emotion-memory.md` —— 本批次的实施计划
+  （含四处文档冲突的判定与实测结果）
+
 ### 变更
 
 - **迁移文件从此只管 DDL**。四个 `.sql` 里没有任何 `PRAGMA` 头、没有 `IF NOT EXISTS`、
@@ -223,6 +250,21 @@
   两者都是既定风格而非疏忽，已在配置里写明理由
 - `.gitignore` 放行 `logs/`、`instances/`、`exports/` 下的 `.gitkeep`：目录结构要能被
   clone 出来的代码感知，内容依然不进版本库
+- **`update_emotion()` 新增 `block: ScheduleBlock | None` 参数**。原设计里它硬编码
+  `update_fatigue(current.fatigue, elapsed, None)`，于是「规则 4 · 睡眠时每小时恢复 0.8」
+  是一段**永不执行的代码**，`EmotionalEvent.fatigue_delta` 也从未被使用。
+  领域层无 IO、无全局，日程块只能由调用方（`TickContext`）取当前时刻查好后传进来
+- **`Emotion.label` 的词表由闭集改为开放**。原实现按 `infer_label()` 的输出做校验，
+  会把「感动」「委屈」「恼火」这类合法标签拒之门外 —— 那 10 个词写在同一份文档的
+  `01-architecture.md § 3.2` 里。现在：`infer_label()` 的 8 词封闭集合是
+  **降级路径**的词表，`label` 本身只有非空约束。测试加了一条不变量保证两者不分叉
+- **`ScheduleBlock` 的字段名以 DDL 为准**（`start_at` / `end_at` 而非 `start` / `end`）。
+  物理列名是唯一能往返的真源，草图跟着改
+- **`strength_at()` 的公式以 `04-simulation-loop.md § 7.2` 为准**（λ 按记忆类型取，
+  半衰期 episodic 7 天 / semantic 180 天 / emotional 365 天）。
+  `01-architecture.md § 3` 曾给出 `exp(-0.05 × days) × (1 + log1p(recall_count))` ——
+  单一衰减率，与同一份文档里「三种记忆半衰期不同」直接矛盾，且 `log1p` 会让
+  回忆 1 次就翻倍（真实的复习效应是 `1 + 0.35 × recall_count`）
 
 ### 修复
 
@@ -249,6 +291,17 @@
   复制一份 DDL 的代价不是多打几行字，而是从那一刻起存在两个「真相」——而它们必然分叉
 - `v_trace` 的选择列与 `ORDER BY` 不兼容（视图列名在前者里是 `step`、后者拼错成
   `tick_id`），且 `event_log` 那一路漏了 `payload_json`
+- `Emotion.__post_init__` 的三维范围校验被写坏：`arousal` 那条实际在判 `valence`，
+  于是 `valence=1.5` 报的是「arousal 必须在 0 ~ 1」。两个字段的区间不同（-1~1 与 0~1），
+  所以这个 bug 只在**恰好落在两个区间之间**的值上暴露 —— 正好是测试挑的那几个
+- `decay_toward()` 的 `0.5 ** x` 在 typeshed 里返回 `Any`，mypy strict 的
+  `no-any-return` 会拦下来；改为显式标注 `factor: float` 并说明原因（否则下一个人会
+  把标注当成冗余删掉）
+- `infer_label()` 的「疲惫」特例判据是 `arousal < 0.25 and valence < 0.1`，
+  但它**先于**其他分支执行，于是吞掉了整个低唤醒区：`(-0.5, 0.2)` 得到「疲惫」而不是
+  「低落」、`(0.0, 0.2)` 也是「疲惫」而不是「平静」。测试原先按文档的标签顺序写了期望，
+  失败后**没有去改规则**（改规则要重做验收表），而是改成断言可达区间 + 新增一条测试
+  把这条规则的真实代价钉死，并在 `04-simulation-loop.md § 6.2` 补了「已知取舍」说明
 
 ### 安全
 
@@ -300,6 +353,21 @@
 - `docs/DESIGN.md § 12` 目录树展开 `storage/sqlite/`（`connection.py` / `migrator.py` /
   `backend.py` / `migrations/`）；`CONTRIBUTING.md` 项目结构树同步，并修正 `migrations/`
   曾被错画在 `src/alterego/` 顶层的问题
+- `docs/design/01-architecture.md § 3.2` 的 `domain/` 三个模块草图对齐实现：
+  `update_emotion` 的签名（`EmotionEvent` → `EmotionalEvent`、新增 `block` 参数）、
+  `memory.py` 的 `strength_at(memory, now)`（去掉 `decay_rate` 参数，公式以 04 分册为准）、
+  `schedule.py` 的字段名（以 DDL 为准）。并加了一条说明：**草图描述的是目标接口，
+  代码才是权威**
+- `docs/design/04-simulation-loop.md § 6 / § 7` 同步四处：§ 6.2 补 `infer_label` 的
+  「已知取舍」（疲惫特例吞掉低唤醒区）、§ 6.3 补齐 `EmotionalEvent` 定义与
+  `decay_toward` 的类型标注、§ 6.4 重写 `update_emotion` 并说明「`block` 为什么是参数」、
+  § 7.3 把 `maybe_resurrect` 拆成纯函数 `should_resurrect` / `resurrect` 与
+  Sim 层的副作用版本
+- `docs/design/03-data-model.md` 新增 § 6.4 `RetrievalWeights` 与 § 6.9「领域模型的归属」
+  （表镜像 vs 业务规则 vs SQL 的三行分工表），并补 § 6.9.1 只有查询才需要的两个类型
+  （`MemorySearchHit` / `MemoryStats`）
+- `docs/DESIGN.md` § 13 标注 `domain/` 三个已实现模块，变更记录加 v0.2.1 行
+- `docs/design/06-roadmap.md` 阶段 D 的进度说明更新为「存储层 + 领域层第一条纵向切片已完成」
 
 ### 架构
 
