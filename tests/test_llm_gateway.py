@@ -11,8 +11,11 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Sequence
+from dataclasses import fields
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -148,6 +151,97 @@ class TestResolve:
         gateway, _ = _gateway(routing=_routing(cheap=""))
         with pytest.raises(ConfigError, match="档位没有指向供应商"):
             gateway.resolve("memory")
+
+
+# ────────────────────────────────────────────────────────────
+#  文档 § 2.4 的用途表与代码对账
+# ────────────────────────────────────────────────────────────
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+#: 权威用途表所在的文件。
+PURPOSE_TABLE_DOC = REPO_ROOT / "docs" / "design" / "07-model-routing-and-media.md"
+
+#: 路由表里不是用途、只是档位的两个键。
+_TIER_KEYS = frozenset({"strong", "cheap"})
+
+_MARKERS = {"✅": "wired", "🔌": "key_only", "⏳": "planned"}
+
+
+def _documented_purposes() -> dict[str, str]:
+    """把 § 2.4 的表解析成 ``{用途: wired|key_only|planned}``。
+
+    只认第一格是反引号包起来的标识符、且有五格的行，表头与说明行自然被跳过。
+    """
+    lines = PURPOSE_TABLE_DOC.read_text(encoding="utf-8").splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("### 2.4"))
+    end = next(i for i, line in enumerate(lines[start:], start) if line.startswith("## 3."))
+
+    rows: dict[str, str] = {}
+    for line in lines[start:end]:
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) != 5:
+            continue
+        match = re.fullmatch(r"`([a-z_]+)`", cells[0])
+        if match is None:
+            continue
+        marker = next((key for key in _MARKERS if cells[3].startswith(key)), None)
+        assert marker is not None, f"§ 2.4 的 {cells[0]} 那一行状态列写的是 {cells[3]!r}"
+        rows[match.group(1)] = _MARKERS[marker]
+    return rows
+
+
+def _purposes_declared_in_source() -> set[str]:
+    """扫源码里模块级的 ``PURPOSE: Final[str] = "..."``。
+
+    这是本项目的约定：一个模块要用哪一种用途，就在模块顶部写一次常量，
+    调用时传它——而不是在每处 `complete()` 里手敲字面量（那样就会散、就会敲错）。
+    """
+    pattern = re.compile(r'^PURPOSE: Final\[str\] = "([a-z_]+)"', re.MULTILINE)
+    found: set[str] = set()
+    for path in (REPO_ROOT / "src" / "alterego").rglob("*.py"):
+        found.update(pattern.findall(path.read_text(encoding="utf-8")))
+    return found
+
+
+class TestThePurposeTableMatchesTheCode:
+    """§ 2.4 是「有哪些用途」的权威读取入口，不能和代码脱节。
+
+    文档是代码的依据（``AGENTS.md`` § 10），所以那张表必须是对的。
+    它同时回答了三个不同的问题：哪些用途真的接上线了、哪些只有配置键、
+    哪些连键都还没有。三个答案一旦有一个错了，读者就会照着一行不存在的
+    配置去写，然后被未知键告警点名——或者更早一点：什么都不发生。
+
+    这里的三个断言合起来把三者钉在一起：配置类、文档、真实调用点。
+    """
+
+    def test_the_documented_purposes_equal_the_routing_fields(self) -> None:
+        documented = _documented_purposes()
+        assert len(documented) >= 8, f"只解析到 {sorted(documented)}，表格结构可能变了"
+
+        declared = {info.name for info in fields(LLMRoutingConfig)} - _TIER_KEYS
+        live = {name for name, kind in documented.items() if kind != "planned"}
+        planned = {name for name, kind in documented.items() if kind == "planned"}
+
+        assert live == declared, (
+            "文档与 LLMRoutingConfig 对不上："
+            f"文档多出 {sorted(live - declared)}，配置类多出 {sorted(declared - live)}"
+        )
+        assert not (planned & declared), (
+            f"这些用途被标成未实现，但配置类里已经有键了：{sorted(planned & declared)}"
+        )
+
+    def test_the_purposes_marked_wired_are_actually_called(self) -> None:
+        """标了 ✅ 的用途必须真有人用，否则那个 ✅ 是装饰。"""
+        wired = {name for name, kind in _documented_purposes().items() if kind == "wired"}
+        called = _purposes_declared_in_source()
+
+        assert wired == called, (
+            "§ 2.4 说这些用途已接线，但源码里找不到对应的 "
+            f"`PURPOSE: Final[str]` 常量：{sorted(wired - called)}；"
+            f"反过来，源码里有而文档没标的：{sorted(called - wired)}"
+        )
 
     def test_a_provider_that_was_never_registered_is_refused(self) -> None:
         gateway, _ = _gateway(routing=_routing(cheap="ghost"))

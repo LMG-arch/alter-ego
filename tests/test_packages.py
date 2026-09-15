@@ -114,3 +114,60 @@ def test_every_package_declares_where_its_rules_are_written() -> None:
             offenders.append(f"{module_name}（{len(docstring)} 字）")
 
     assert not offenders, "这些包的 __init__.py 没有说明自己的职责：" + "、".join(offenders)
+
+
+def test_domain_reexports_every_public_module() -> None:
+    """``domain/__init__.py`` 的模块清单必须**等于**目录里的公开模块。
+
+    ``domain/`` 的约定跟 ``kernel/`` / ``sim/`` 正好相反：后两个明确声明
+    「本模块不做 re-export」（``__all__ = []``），而领域层把每个公开模块
+    重新导出，让 ``from alterego.domain import memory`` 和
+    ``import alterego.domain.memory`` 两条路都通。代价是这份清单得有人维护。
+
+    这条测试就是那个「有人」。在它出现之前 ``consolidation`` 已经漏了一整批：
+    模块在、它的 ``__all__`` 在、``sim/consolidation.py`` 的 import 在、
+    `tests/test_domain_consolidation.py` 也在，**只有** ``domain/__init__.py``
+    里没有它。而读那个文件的人不会发现少了什么——缺失是看不见的。
+
+    下划线开头的是私有模块（``_toml.py``），不参与。
+    """
+    package = importlib.import_module("alterego.domain")
+    declared = set(package.__all__)
+    on_disk = {
+        path.stem
+        for path in (PACKAGE_ROOT / "domain").glob("*.py")
+        if path.stem != "__init__" and not path.stem.startswith("_")
+    }
+
+    # 先确认这条测试不是空转：目录真被读到了，清单真不是空的。
+    assert "memory" in on_disk
+    assert "memory" in declared
+
+    missing = sorted(on_disk - declared)
+    extra = sorted(declared - on_disk)
+    assert not missing, f"domain/__init__.py 没导出这些模块：{missing}"
+    assert not extra, f"domain/__init__.py 导出了并不存在的模块：{extra}"
+
+
+def test_every_interface_module_is_reexported() -> None:
+    """``interfaces/__init__.py`` 要从它的**每个**子模块里导出至少一个名字。
+
+    ``interfaces/`` 的约定和 ``domain/`` 不同：它导出的是**符号**而不是模块。
+    「每个子模块都被提到」比「清单完全相等」松一些，因为一个子模块导出
+    两三个符号还是二十个是它自己的事——但**一个都没导出**意味着
+    ``from alterego.interfaces import X`` 拿不到它，这个模块就成了隐形的。
+    """
+    package = importlib.import_module("alterego.interfaces")
+    text = (PACKAGE_ROOT / "interfaces" / "__init__.py").read_text(encoding="utf-8")
+    modules = {
+        path.stem
+        for path in (PACKAGE_ROOT / "interfaces").glob("*.py")
+        if path.stem != "__init__" and not path.stem.startswith("_")
+    }
+
+    assert package.__all__
+    assert len(modules) >= 4, f"interfaces/ 下只找到 {sorted(modules)}，这条测试失去了意义"
+
+    missing = sorted(name for name in modules if f"interfaces.{name} import" not in text)
+
+    assert not missing, f"interfaces/__init__.py 没有从这些子模块导出任何名字：{missing}"
