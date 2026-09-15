@@ -1,0 +1,57 @@
+# 示例插件清单
+#
+# 这是「照着抄就能跑」的最小插件，演示 docs/design/02-plugin-api.md § 3 的字段。
+#
+#   enabled_by_default = false —— 示例插件不该在别人的实例里默默跑起来。
+#   想试它：在 config/alterego.toml 里加
+#       [plugins]
+#       enabled = ["capability.example"]
+#
+# 字段含义见 docs/design/02-plugin-api.md § 3.1。
+
+[plugin]
+id = "capability.example"
+version = "0.1.0"
+api_version = 1
+kind = "capability"
+entry = "plugin:ExampleCapability"
+
+name = "示例能力"
+description = "演示一个 capability 插件的最小形态：声明配置、注册能力、写日志。"
+authors = ["LMG-arch"]
+license = "MIT"
+tags = ["example", "capability"]
+
+# 没有任何依赖：想加载它，只要有内核就够。
+# requires = ["llm.any"]        # 这行是语法示例，不要取消注释
+# optional = ["storage.any"]
+# provides = ["capability.greeting"]
+
+enabled_by_default = false
+priority = 0
+auto_reload = true
+
+# ── 插件配置 ──────────────────────────────────────────────
+# 每个字段都要有说明：`alterego plugins config capability.example` 会把它打出来。
+# secret = true 的字段在日志与 CLI 里显示为 ***
+# env = "VAR" 表示「该环境变量优先于配置文件」。
+
+[plugin.config.greeting]
+type = "string"
+default = "你好"
+description = "问候语的开头。"
+min_length = 1
+max_length = 40
+
+[plugin.config.punctuation]
+type = "string"
+default = "!"
+choices = ["!", "。", "~"]
+description = "句尾的标点。换一个就能看出配置生效。"
+
+[plugin.config.repeat]
+type = "integer"
+default = 1
+min = 1
+max = 5
+description = "问候语重复几次。"
