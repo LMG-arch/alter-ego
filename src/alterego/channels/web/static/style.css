@@ -248,6 +248,42 @@ details.group > summary .count {
   opacity: .7;
 }
 
+/* 模型端点（设置页「模型」组里的 provider 配置那一行）。
+ *
+ * 一行一个端点、一个端点一张卡片：端点数是个位数，卡片比表格好读；而且每张卡片
+ * 有自己的「保存」，用户不必去想「我改了三处，该点哪个按钮」。
+ * 字段名用等宽字体，因为它就是要写进配置文件里的那个键——用户会拿它去对文件。 */
+.providers { width: 100%; }
+.provider {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin: 10px 0;
+}
+.provider > .spread { margin-bottom: 6px; }
+.provider .name { font-weight: 600; }
+.provider .key { font-size: 12px; color: var(--dim); }
+.provider .field {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 6px 0;
+}
+.provider .field .label {
+  flex: 0 0 140px;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 13px;
+  color: var(--dim);
+}
+.provider .field input { flex: 1 1 200px; min-width: 0; }
+/* 「加一个端点」里的两格是一对「键 / 值」：键那一格窄一些，它们并排才读得出来
+ * 是一行。值留给剩下的宽度，因为值通常比键长。 */
+.provider .field input[data-new-key] { flex: 0 1 180px; }
+details.provider > summary { font-weight: 600; }
+details.provider[open] > summary { margin-bottom: 8px; }
+.provider .ctl { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+
 .gate {
   position: fixed;
   inset: 0;
@@ -273,4 +309,6 @@ details.group > summary .count {
   th, td { padding: 6px 5px; }
   .setting .ctl { flex-direction: column; align-items: stretch; }
   .setting .ctl input[type="text"], .setting .ctl select { min-width: 0; width: 100%; }
+  /* 字段名那一格在窄屏上独占一行：140px 的固定宽度加上输入框会把这一行挤爆。 */
+  .provider .field .label { flex: 1 1 100%; }
 }

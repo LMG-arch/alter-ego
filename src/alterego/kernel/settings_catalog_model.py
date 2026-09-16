@@ -173,6 +173,9 @@ SETTINGS: Final[tuple[Setting, ...]] = (
         group="模型",
         effect="这里没有内核认识的键，写错只会让对应的 provider 读不到自己的配置并报错，不会影响别的 provider。",
         advanced=True,
+        # 端点是在 serve/chat 启动时一次性建好的（cli_serve._providers），
+        # 改了之后正在跑的那个进程手里还是旧的。同 llm.default_provider。
+        requires_restart=True,
     ),
     # ── 预算 ────────────────────────────────────────────────
     Setting(

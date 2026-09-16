@@ -39,6 +39,7 @@ import os
 import re
 import shutil
 import tomllib
+from collections.abc import Sequence
 from pathlib import Path
 
 from alterego.kernel.config import Config
@@ -46,7 +47,7 @@ from alterego.kernel.errors import AlterEgoError, ConfigError
 from alterego.kernel.settings import Setting, SettingKind
 
 
-__all__ = ["patch_text", "render_value", "save_setting"]
+__all__ = ["patch_text", "render_value", "save_setting", "save_settings"]
 
 
 #: ``[llm.routing]`` 这样的表头。右边的注释允许存在：``[core]  # 常规``。
@@ -383,6 +384,39 @@ def _insert(
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def save_settings(
+    path: Path,
+    edits: Sequence[tuple[str, str, Setting]],
+    *,
+    backup: bool = True,
+) -> Config:
+    """一次改**多项**设置并原子地写回，返回重新加载后的新配置。
+
+    为什么需要「一次多项」：写盘是「临时文件 → fsync → 校验 → 备份 → replace」
+    一整套动作，改 5 行就走 5 次的话，中间任何一次失败都会留下改了一半的文件；
+    而设置页上一张表单里的 5 行，在用户眼里本来就是一件事情。
+
+    落盘部分与 :func:`save_setting` 完全共用 :func:`_commit`——一次改一项和
+    一次改十项，留下的文件在磁盘上没有任何区别。
+
+    Args:
+        path: ``alterego.toml`` 的路径。
+        edits: ``[(点分键, 用户给的原始值, 元数据), ...]``，按顺序依次套用。
+            同一个键出现两次时后一次覆盖前一次。
+        backup: 是否留一份 ``.bak``。由 ``settings.auto_backup`` 决定。
+
+    Returns:
+        重新加载后的配置。
+
+    Raises:
+        ConfigError: 文件不存在、读不了、不是合法 TOML，或新值没通过加载校验。
+    """
+    text = _read(path)
+    for key, raw, setting in edits:
+        text = patch_text(text, key, render_value(setting, raw))
+    return _commit(path, text, backup=backup)
+
+
 def save_setting(
     path: Path,
     key: str,
@@ -408,6 +442,8 @@ def save_setting(
     - ``Config.load`` 读临时文件：**验的就是将要落盘的那份内容**，不多也不少。
     - ``os.replace``：POSIX 与 Windows 上都是原子的（同目录）。
 
+    改多项走 :func:`save_settings`，它用的是同一段落盘逻辑。
+
     Args:
         path: ``alterego.toml`` 的路径。
         key: 点分键。
@@ -421,14 +457,20 @@ def save_setting(
     Raises:
         ConfigError: 文件不存在、读不了、不是合法 TOML，或新值没通过加载校验。
     """
-    text = _read(path)
-    literal = render_value(setting, raw)
-    updated = patch_text(text, key, literal)
+    return save_settings(path, [(key, raw, setting)], backup=backup)
 
+
+def _commit(path: Path, text: str, *, backup: bool) -> Config:
+    """把替换好的**全文**原子地落盘，返回重新加载后的配置。
+
+    只认「将要落盘的那份文本」这一件事，不关心它是改了一行还是十行——
+    这就是 :func:`save_setting` 与 :func:`save_settings` 能共用它的原因，
+    也是两者在磁盘上留下同样文件的原因。
+    """
     tmp = path.with_name(path.name + ".tmp")
     try:
         with tmp.open("w", encoding="utf-8", newline="") as handle:
-            handle.write(updated)
+            handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
         # 用加载时**同一个**校验器读将要落盘的那份内容

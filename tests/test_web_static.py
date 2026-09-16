@@ -186,3 +186,43 @@ def test_the_collapsed_state_is_remembered_not_hardcoded() -> None:
     assert re.search(r"state\.collapsed\.(add|delete)\(", js), (
         f"{JS.name} 里没人往 state.collapsed 里记东西——只读不写的话，那个集合永远是空的"
     )
+
+
+# ── 模型端点：在页面上加/改 ──────────────────────────────────────
+#
+# 这一页原本的 ``llm.providers`` 那一行是一句灰字：「这一项是一整段表，请直接
+# 改配置文件。」那个死胡同本身就是事故——设置页有九十多项，用户会以为「能改的都
+# 能改」，于是把「改不了」也读成「还没做」，最后去改那个没用的地方。
+#
+# 这两条守的是它退回去的路：接口不调（页面又只剩一句灰字），以及密钥行被当成
+# 普通行渲染（值此时是 ``{"set": true}``，页面上会出现一个填着 ``[object Object]``
+# 的输入框，用户一保存就把 ``{set:true}`` 写进配置文件）。
+
+_PROVIDER_EDITOR = "/api/settings/providers"
+
+
+def test_the_settings_page_edits_model_endpoints_through_the_api() -> None:
+    js = _read(JS)
+
+    assert _PROVIDER_EDITOR in js, (
+        f"{JS.name} 没有调 {_PROVIDER_EDITOR}——设置页的模型端点又会变回一句灰字"
+    )
+    assert "data-provider-add" in js and "data-provider-save" in js, (
+        f"{JS.name} 里没有「加一个端点」与「保存这个端点」的把手，页面只能看，不能改"
+    )
+
+
+def test_a_secret_row_is_checked_before_the_not_editable_branch() -> None:
+    """密钥行的判定必须排在「不是标量」那条判定**前面**。
+
+    密钥行的 ``editable`` 也是 ``false``（值压根没传上来），所以顺序反了的症状是：
+    用户看到「这一行是嵌套的表，请在文件里改：{"set":true}」——既没说他有个密钥，
+    又顺手把接口的内部形状显示给他看。
+    """
+    js = _read(JS)
+    secret_at = js.index('field.kind === "secret"')
+    nested_at = js.index("这一行是嵌套的表")
+
+    assert secret_at < nested_at, (
+        f"{JS.name} 里密钥行落在了「不是标量」那条分支后面，密钥行会被当成嵌套的表显示"
+    )

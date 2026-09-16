@@ -395,7 +395,11 @@ views.plugins = async function () {
 };
 
 views.settings = async function () {
-  const [schema, current] = await Promise.all([api("/api/settings/schema"), api("/api/settings")]);
+  const [schema, current, providers] = await Promise.all([
+    api("/api/settings/schema"),
+    api("/api/settings"),
+    api("/api/settings/providers"),
+  ]);
   const values = current.values || {};
   const groups = new Map();
   for (const setting of schema.settings) {
@@ -403,6 +407,15 @@ views.settings = async function () {
     if (!groups.has(group)) groups.set(group, []);
     groups.get(group).push(setting);
   }
+
+  // 一段表里的键，有多少已经被单独列成设置了。用来把「这一项是一整段表，请直接改
+  // 配置文件」这句话换掉——[llm.routing] 的九行本来就在下面各自成行，还这么说
+  // 就是让用户去改一个其实不用改的文件。
+  const keys = new Set(schema.settings.map((setting) => setting.key));
+  const ctx = {
+    providers,
+    expanded: (key) => [...keys].some((other) => other.startsWith(`${key}.`)),
+  };
 
   const head =
     `<p class="muted">配置文件：${current.source ? `<code>${esc(current.source)}</code>` : "内置默认值（还没跑过 alterego init，这一页改不了任何东西）"}</p>`;
@@ -413,7 +426,7 @@ views.settings = async function () {
   // 是净损失；这里要的是「能收起」，不是「默认收起」。
   const sections = [...groups.entries()]
     .map(([group, settings]) => {
-      const rows = settings.map((setting) => settingRow(setting, values[setting.key]));
+      const rows = settings.map((setting) => settingRow(setting, values[setting.key], ctx));
       const open = state.collapsed.has(group) ? "" : " open";
       return (
         `<details class="group" data-group="${attr(group)}"${open}>` +
@@ -433,7 +446,7 @@ views.settings = async function () {
   return head + sections + unknown;
 };
 
-function settingRow(setting, value) {
+function settingRow(setting, value, ctx) {
   const key = attr(setting.key);
   const secret = setting.kind === "secret";
   const mapping = setting.kind === "mapping";
@@ -443,8 +456,14 @@ function settingRow(setting, value) {
   if (secret) {
     control = `<span class="tag ${set ? "ok" : ""}">${set ? "已设置" : "未设置"}</span>` +
       `<span class="muted">密钥不从这里改——把它写成 \${环境变量名}，改环境变量。</span>`;
+  } else if (ctx && ctx.providers && setting.key === ctx.providers.key) {
+    // 这一段的内层键由 provider 的插件解释（P4），没有 schema 可查，所以它走一套
+    // 自己的读写口：类型从文件里现有的那一行猜，猜不出来的老实显示成灰字。
+    control = providerTable(ctx.providers);
   } else if (mapping) {
-    control = `<span class="muted">这一项是一整段表，请直接改配置文件。</span>`;
+    control = ctx && ctx.expanded(setting.key)
+      ? `<span class="muted">这一节的每一行在下面单独列出了，改那几行就行。</span>`
+      : `<span class="muted">这一项是一整段表，请直接改配置文件。</span>`;
   } else if (setting.kind === "enum") {
     const options = (setting.choices || [])
       .map((choice) => {
@@ -478,15 +497,131 @@ function settingRow(setting, value) {
   ].join("");
 
   const disabled = secret || mapping;
+  const editor = Boolean(ctx && ctx.providers && setting.key === ctx.providers.key);
+  const ctl = editor
+    ? control
+    : `<div class="ctl">${control}` +
+      (disabled ? "" : `<button type="button" data-save="${key}">保存</button>`) +
+      `</div>`;
   return (
     `<div class="setting">` +
     `<div class="spread"><span class="name">${esc(setting.label)}</span><span class="key">${esc(setting.key)}</span></div>` +
     (setting.description ? `<div class="effect">${esc(setting.description)}</div>` : "") +
     (setting.effect ? `<div class="effect">改了会怎样：${esc(setting.effect)}</div>` : "") +
     (meta ? `<div>${meta}</div>` : "") +
-    `<div class="ctl">${control}` +
-    (disabled ? "" : `<button type="button" data-save="${key}">保存</button>`) +
-    `</div></div>`
+    ctl +
+    `</div>`
+  );
+}
+
+/* ── 模型端点（[llm.providers.*]）──────────────────────────
+ *
+ * 这一节和别处不一样：内层键由那个 provider 的插件解释（P4），内核没有它们的
+ * schema，所以类型（字符串/数字/开关/数组）是从**文件里现有的那一行**猜出来的；
+ * 猜不出来（嵌套的表）就老实显示成灰字，而不是画一个文本框——画了文本框，用户
+ * 改完保存，写进去的是一个字符串，然后 provider 在运行时报一个和「刚才改的那
+ * 一下」看起来毫无关系的错。
+ *
+ * 字段名同理：补全列表里是**你自己配置里出现过的**字段名，不是一份内核声称
+ * 「provider 该有哪些键」的清单——那种清单一定会和插件漂移，然后页面开始教用户
+ * 写一个插件根本不读的键。
+ *
+ * 名字看起来是密钥的那几行（api_key / token / secret）只显示「设了没有」，值一个
+ * 字都不回。provider 插件的正常用法就是 api_key_env 指向一个环境变量，而万一有人
+ * 把密钥直接写在文件里，这一页也不该把它送到浏览器上。
+ *
+ * 这里没有删除：删掉一个还被 [llm.routing] 指着的端点，下次 serve 直接起不来，
+ * 而文本补丁删行删段没法回滚（只留一份 .bak，连着撤两步就撤不回去了）。
+ * 要删就在文件里删，那里顺手改 [llm.routing]，本来也是同一件事。
+ */
+
+function providerTable(data) {
+  const cards = (data.providers || []).map((item) => providerCard(item, data.writable)).join("");
+  const empty = (data.providers || []).length
+    ? ""
+    : `<p class="muted">配置文件里一个端点都没有。</p>`;
+  const known = (data.known_fields || [])
+    .map((name) => `<option value="${attr(name)}"></option>`)
+    .join("");
+  return (
+    `<div class="providers" data-providers>` +
+    `<p class="muted">每个端点对应配置里的一段 <code>[llm.providers.名字]</code>。` +
+    `<code>api_key_env</code> 填的是环境变量的名字，密钥本身不会进这个页面。</p>` +
+    empty +
+    cards +
+    (data.writable ? providerNew() : "") +
+    `<datalist id="provider-fields">${known}</datalist>` +
+    `</div>`
+  );
+}
+
+function providerCard(item, writable) {
+  const head =
+    `<div class="spread"><span class="name">${esc(item.name)}</span>` +
+    `<span class="key">[llm.providers.${esc(item.name)}]</span></div>`;
+  if (!item.editable) {
+    // 值不是一张表（手写的 ``providers.x = "..."``）。照样画出来，否则用户会以为
+    // 页面把他的配置弄丢了。
+    return (
+      `<div class="provider">` + head +
+      `<div class="effect">这一行不是一张表，改不了它：<code>${esc(JSON.stringify(item.value))}</code></div>` +
+      `</div>`
+    );
+  }
+  const rows = (item.fields || []).map(providerField).join("");
+  const save = writable
+    ? `<div class="ctl"><button type="button" data-provider-save="${attr(item.name)}">保存这个端点</button></div>`
+    : "";
+  return `<div class="provider" data-provider="${attr(item.name)}">` + head + rows + save + `</div>`;
+}
+
+function providerField(field) {
+  const label = `<span class="label">${esc(field.name)}</span>`;
+  if (field.kind === "secret") {
+    // 名字里带 api_key / token / secret 的行只回「设了没有」。
+    // 回显它就是把这个密钥送到浏览器上，和 /api/settings 的规矩对不上。
+    const state = field.value && field.value.set ? "已设置" : "没有设置";
+    return (
+      `<div class="field">` + label +
+      `<span class="muted">${state}，值不经过这个页面 · ` +
+      `密钥放环境变量，文件里只写变量名（通常是 <code>api_key_env</code>）</span>` +
+      `</div>`
+    );
+  }
+  if (!field.editable) {
+    return (
+      `<div class="field">` + label +
+      `<span class="muted">这一行是嵌套的表，请在文件里改：<code>${esc(JSON.stringify(field.value))}</code></span>` +
+      `</div>`
+    );
+  }
+  const text = Array.isArray(field.value) ? field.value.join(", ") : (field.value ?? "");
+  return (
+    `<div class="field">` + label +
+    `<input type="text" data-field="${attr(field.name)}" value="${attr(text)}" spellcheck="false">` +
+    `</div>`
+  );
+}
+
+function providerNew() {
+  return (
+    `<details class="provider new" data-provider-new>` +
+    `<summary>加一个端点</summary>` +
+    `<div class="field"><span class="label">名字</span>` +
+    `<input type="text" data-new-name placeholder="deepseek" spellcheck="false"></div>` +
+    `<div data-new-rows>${providerNewRow()}</div>` +
+    `<div class="ctl"><button type="button" data-add-row>再加一行</button>` +
+    `<button type="button" data-provider-add>创建</button></div>` +
+    `</details>`
+  );
+}
+
+function providerNewRow() {
+  return (
+    `<div class="field" data-new-row>` +
+    `<input type="text" data-new-key list="provider-fields" placeholder="字段名" spellcheck="false">` +
+    `<input type="text" data-new-value placeholder="值" spellcheck="false">` +
+    `</div>`
   );
 }
 
@@ -587,6 +722,73 @@ function hookSettings() {
         button.disabled = false;
       }
     });
+  }
+  hookProviders();
+}
+
+function hookProviders() {
+  const table = view().querySelector("[data-providers]");
+  if (!table) return;
+  for (const button of table.querySelectorAll("[data-add-row]")) {
+    button.addEventListener("click", () => {
+      const rows = button.closest("[data-provider-new]").querySelector("[data-new-rows]");
+      rows.insertAdjacentHTML("beforeend", providerNewRow());
+      const added = rows.lastElementChild.querySelector("input");
+      if (added) added.focus();
+    });
+  }
+  for (const button of table.querySelectorAll("[data-provider-add]")) {
+    button.addEventListener("click", () => postProvider(button, newProviderBody(button), "创建中…"));
+  }
+  for (const button of table.querySelectorAll("[data-provider-save]")) {
+    button.addEventListener("click", () => postProvider(button, cardBody(button), "保存中…"));
+  }
+}
+
+/** 一张已存在的端点卡片：表单里每一行都写回去。 */
+function cardBody(button) {
+  const fields = {};
+  for (const input of button.closest(".provider").querySelectorAll("[data-field]")) {
+    fields[input.dataset.field] = input.value;
+  }
+  return { name: button.dataset.providerSave, fields };
+}
+
+/** 「加一个端点」表单：键名空着的行当它不存在。 */
+function newProviderBody(button) {
+  const form = button.closest("[data-provider-new]");
+  const fields = {};
+  for (const row of form.querySelectorAll("[data-new-row]")) {
+    // 键名都没填的行是「点了一下『再加一行』但没用上」，不是「我要写一个叫空字符串
+    // 的字段」。键名填了而值是空的，就是**明确地**写一个空字符串——api_key_env
+    // 为空本来就是「这个端点不校验密钥」的意思。
+    const name = row.querySelector("[data-new-key]").value.trim();
+    if (name) fields[name] = row.querySelector("[data-new-value]").value;
+  }
+  return { name: form.querySelector("[data-new-name]").value.trim(), fields };
+}
+
+async function postProvider(button, body, busy) {
+  const before = button.textContent;
+  button.disabled = true;
+  button.textContent = busy;
+  try {
+    const result = await api("/api/settings/providers", { method: "POST", body });
+    if ((result.added || []).length) {
+      // 新加的行值得单独说一句：这一段里的键由 provider 自己解释，名字拼错了
+      // 不会有任何提示，它只是读不到那一行。
+      alert(
+        `已写进 ${result.source}。\n\n` +
+          `新加的行：${result.added.join("、")}\n` +
+          `这一节里的键由 provider 自己解释，名字写错不会有提示——它只是读不到。`,
+      );
+    }
+    button.textContent = (result.restart_needed || []).length ? "已保存 · 待重启" : "已保存";
+    await render();
+  } catch (error) {
+    button.textContent = before;
+    button.disabled = false;
+    alert(`${error.message}${error.detail && error.detail.hint ? `\n\n${error.detail.hint}` : ""}`);
   }
 }
 

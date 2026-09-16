@@ -20,12 +20,13 @@ import pytest
 
 from alterego.kernel.config import Config
 from alterego.kernel.errors import ConfigError
-from alterego.kernel.settings import Choice, Setting, SettingKind
+from alterego.kernel.settings import Choice, Setting, SettingKind, infer_setting_from_value
 from alterego.kernel.settings_catalog import get_setting_metadata, section_paths
 from alterego.kernel.settings_write import (
     patch_text,
     render_value,
     save_setting,
+    save_settings,
     toml_literal,
 )
 
@@ -461,3 +462,122 @@ def test_choices_are_used_verbatim() -> None:
         effect="改成 stop 之后它会直接停下，不再回你消息。",
     )
     assert render_value(setting, "degrade") == '"degrade"'
+
+
+# ═══════════════════════════════════════════════════════════════
+#  save_settings —— 一次改多项，只落一次盘
+# ═══════════════════════════════════════════════════════════════
+#
+# 在设置页上「编辑一个模型端点」是**一次**用户动作，但它对应文件里好几行
+# （``base_url`` / ``model`` / ``api_key_env``）。拆成 N 次 save_setting 会有两个
+# 后果：备份只剩最后那一份；中途失败时留下半个端点——base_url 换过了、model
+# 还没换，而且退出码是 0，下一次启动报的错和用户刚做的那件事对不上。
+
+
+def test_save_settings_changes_several_keys_at_once(tmp_path: Path) -> None:
+    path = _write(tmp_path)
+    config = save_settings(
+        path,
+        [(LIMIT.key, "5", LIMIT), ("core.user_name", "阿岚", _setting("core.user_name"))],
+    )
+    assert config.disturb_budget.daily_message_limit == 5
+    assert config.core.user_name == "阿岚"
+    assert _load(path).disturb_budget.daily_message_limit == 5
+    assert "# 拟我 · 配置文件" in path.read_text(encoding="utf-8")
+    assert not path.with_name(path.name + ".tmp").exists()
+
+
+def test_save_settings_keeps_one_backup_for_the_whole_call(tmp_path: Path) -> None:
+    """备份是这次改动**之前**的样子，而不是上一次改动的中间态。"""
+    path = _write(tmp_path)
+    save_settings(
+        path,
+        [(LIMIT.key, "5", LIMIT), ("core.user_name", "阿岚", _setting("core.user_name"))],
+    )
+    backup = path.with_name(path.name + ".bak")
+    assert backup.read_text(encoding="utf-8") == CONFIG_TOML
+
+
+def test_save_settings_leaves_the_file_alone_when_render_rejects_one(tmp_path: Path) -> None:
+    """渲染阶段就拦下来：一个字节不写，临时文件也不留。"""
+    path = _write(tmp_path)
+    with pytest.raises(ConfigError):
+        save_settings(path, [(LIMIT.key, "5", LIMIT), (PORT.key, "99999", PORT)])
+    assert path.read_text(encoding="utf-8") == CONFIG_TOML
+    assert not path.with_name(path.name + ".tmp").exists()
+    assert not path.with_name(path.name + ".bak").exists()
+
+
+def test_save_settings_leaves_the_file_alone_when_the_loader_rejects_the_result(
+    tmp_path: Path,
+) -> None:
+    """渲染都过了、文本也拼好了，**加载**不过：原文件依然一个字没动。
+
+    这一条才是「一次落盘」的核心。如果实现是「先写第一项、再写第二项」，
+    第一项这时候已经在磁盘上了，用户拿到的是半新半旧的配置和一个成功的退出码。
+    """
+    path = _write(tmp_path)
+    with pytest.raises(ConfigError, match="紧急上限不能低于普通上限"):
+        save_settings(
+            path,
+            [(LIMIT.key, "7", LIMIT), ("core.user_name", "阿岚", _setting("core.user_name"))],
+        )
+    assert path.read_text(encoding="utf-8") == CONFIG_TOML
+    assert not path.with_name(path.name + ".tmp").exists()
+
+
+def test_save_settings_with_nothing_to_change_is_a_no_op(tmp_path: Path) -> None:
+    """空改动也要能安全走过：页面上「打开对话框然后直接点保存」就是这条路。"""
+    path = _write(tmp_path)
+    config = save_settings(path, [])
+    assert path.read_text(encoding="utf-8") == CONFIG_TOML
+    assert config.disturb_budget.daily_message_limit == 3
+
+
+def test_save_settings_lets_the_last_word_win_for_the_same_key(tmp_path: Path) -> None:
+    """同一个键在一次调用里出现两次：以最后那次为准，而且文件里只剩一行。"""
+    path = _write(tmp_path)
+    config = save_settings(path, [(LIMIT.key, "1", LIMIT), (LIMIT.key, "4", LIMIT)])
+    assert config.disturb_budget.daily_message_limit == 4
+    assert path.read_text(encoding="utf-8").count("daily_message_limit") == 1
+
+
+def test_save_settings_equals_saving_one_by_one(tmp_path: Path) -> None:
+    """与连续调用 ``save_setting`` 的产物**逐字节**相同。
+
+    页面上「单个字段点保存」和「整块保存」两条路都还在，它们必须写到同一份
+    文件上；否则用户先点单个保存、再点整块保存，会得到两种格式。
+    """
+    one = _write(tmp_path, name="one.toml")
+    other = _write(tmp_path, name="other.toml")
+    edits = [(LIMIT.key, "5", LIMIT), ("core.user_name", "阿岚", _setting("core.user_name"))]
+    save_settings(one, edits)
+    for key, raw, setting in edits:
+        save_setting(other, key, raw, setting=setting)
+    assert one.read_text(encoding="utf-8") == other.read_text(encoding="utf-8")
+
+
+def test_a_provider_endpoint_is_written_one_leaf_at_a_time(tmp_path: Path) -> None:
+    """``[llm.providers.*]`` 的内层键由插件解释（P4），内核没有它们的元数据。
+
+    所以设置页不碰 ``llm.providers`` 这一整项（``render_value`` 对 MAPPING 直接
+    拒绝），而是把每个叶子当成一个**独立的点号键**写进去：键名原样保留，值的类型
+    从文件里现有的那个值推断出来。这一段守着这两件事：新段名能补出来，且补出来
+    之后真的能加载。
+    """
+    path = _write(tmp_path)
+    fields = {
+        "base_url": "https://api.deepseek.com/v1",
+        "api_key_env": "DEEPSEEK_API_KEY",
+    }
+    edits = []
+    for name, value in fields.items():
+        setting = infer_setting_from_value(value, key=f"llm.providers.deepseek.{name}")
+        assert setting is not None
+        edits.append((f"llm.providers.deepseek.{name}", value, setting))
+    config = save_settings(path, edits)
+    assert dict(config.llm.providers["deepseek"]) == fields
+    text = path.read_text(encoding="utf-8")
+    assert "[llm.providers.deepseek]" in text
+    assert 'base_url = "https://api.deepseek.com/v1"' in text
+    assert "# 拟我 · 配置文件" in text, "注释必须还在"

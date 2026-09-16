@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import dataclasses
 import dataclasses as dc
+import tomllib
 from pathlib import Path
 from typing import Any, Literal, get_args, get_origin
 
@@ -28,6 +29,7 @@ from alterego.kernel.settings import (
     Setting,
     SettingKind,
     infer_setting,
+    infer_setting_from_value,
     is_annotated,
 )
 from alterego.kernel.settings_catalog import (
@@ -39,6 +41,7 @@ from alterego.kernel.settings_catalog import (
     section_paths,
     settings_for,
 )
+from alterego.kernel.settings_write import render_value
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -364,6 +367,82 @@ def test_choices_of_a_string_enum_are_empty() -> None:
     inferred = infer_setting(catalog.section_paths["core"], "log_level", prefix="core")
     assert inferred is not None
     assert inferred.choices == ()
+
+
+# ═══════════════════════════════════════════════════════════════
+#  infer_setting_from_value —— 元数据的第四层：从**值**推断
+# ═══════════════════════════════════════════════════════════════
+#
+# 第三层是从类型注解猜，这一层是从值本身猜。它存在的理由是开放容器：
+# [llm.providers.*] 的内层键由那个 provider 的插件解释（P4），内核没有它们的
+# schema，但设置页要让人在浏览器里改一个端点。
+
+
+@pytest.mark.parametrize(
+    ("value", "kind"),
+    [
+        (True, SettingKind.BOOL),
+        (3, SettingKind.INT),
+        (2.5, SettingKind.FLOAT),
+        ("https://api.deepseek.com/v1", SettingKind.STR),
+        (["a", "b"], SettingKind.LIST),
+        (("a",), SettingKind.LIST),
+    ],
+)
+def test_infer_setting_from_value_reads_the_value(value: Any, kind: SettingKind) -> None:
+    inferred = infer_setting_from_value(value, key="llm.providers.deepseek.f")
+    assert inferred is not None
+    assert inferred.kind is kind
+    assert inferred.default == value
+    assert inferred.advanced, "猜出来的项一律算高级：没人替它写过说明"
+    assert not is_annotated(inferred), "猜出来的项没有 effect，要显示成「未标注」"
+
+
+def test_infer_setting_from_value_asks_bool_before_int() -> None:
+    """``bool`` 是 ``int`` 的子类，问错顺序的后果是一个数字框配一个布尔值。
+
+    页面上画成数字框之后，用户填 ``2`` 就写进去一个非法布尔，而报错出现在
+    下一次启动——离他刚才做的那件事很远。
+    """
+    inferred = infer_setting_from_value(True, key="llm.providers.deepseek.stream")
+    assert inferred is not None
+    assert inferred.kind is SettingKind.BOOL
+
+
+def test_infer_setting_from_value_refuses_anything_that_is_not_a_scalar() -> None:
+    """嵌套的表认不出来，返回 ``None``，**不回落成字符串**。
+
+    回落成字符串的表现：页面画一个文本框，用户在里面改两下保存，写进文件的是
+    一个字符串字面量，把原来那张表整个换掉——然后 provider 报一个和「刚才改的
+    那一下」看起来毫无关系的错。
+    """
+    for value in [{}, {"a": 1}, [1, 2], [{"a": 1}], [None], None, b"bytes"]:
+        assert infer_setting_from_value(value, key="llm.providers.x.f") is None, value
+
+
+def test_infer_setting_from_value_labels_the_last_segment() -> None:
+    """label 取键的最后一段；分组是调用方给的（这一段属于哪个组，只有它知道）。"""
+    inferred = infer_setting_from_value("x", key="llm.providers.deepseek.base_url", group="模型")
+    assert inferred is not None
+    assert inferred.label == "base_url"
+    assert inferred.group == "模型"
+    assert inferred.key == "llm.providers.deepseek.base_url"
+
+
+@pytest.mark.parametrize("value", [True, False, 3, 2.5, "https://x/v1", ["a", "b"], []])
+def test_a_value_read_out_of_the_file_can_be_written_back(value: Any) -> None:
+    """读出来 → 页面上显示 → 写回去，值必须一模一样。
+
+    这是 :func:`infer_setting_from_value` 与 ``render_value`` 这一对函数存在的
+    **全部**理由：页面拿到的类型和写回去用的类型必须是同一套判定，否则「我什么
+    都没改，顺手存一下」就会把 ``3`` 变成 ``"3"``。这里的手写 ``shown``
+    就是页面做的那一下（数组用逗号连起来，其余 ``String()``）。
+    """
+    setting = infer_setting_from_value(value, key="llm.providers.x.f")
+    assert setting is not None
+    shown = ", ".join(value) if isinstance(value, list) else str(value)
+    literal = render_value(setting, shown)
+    assert tomllib.loads(f"f = {literal}")["f"] == value
 
 
 def test_choice_is_frozen() -> None:

@@ -565,6 +565,14 @@ reflection = { daily_usd_limit = 0.50 }
 > 「换一个便宜的模型来省钱」这件事要多改一处。
 > 等真的需要分别调参时再加，那时也就知道该调什么了。
 
+> **这两层里，今天页面上能动的部分**：`[llm.providers.<名字>]` 的每一行都能在设置页
+> 加和改（`GET` / `POST /api/settings/providers`）——控件类型按**文件里现有的那一行**
+> 推断，猜不出来就灰字显示「这一行请在文件里改」，绝不把一整张嵌套表当成一个字符串；
+> `[llm.routing]` 的 9 个键本来就是独立的单值配置项，页面按普通行渲染。
+> 端点**不能在页面上删**：删掉一个还被 `routing` 指着的名字，下次启动就会失败，
+> 而文本补丁只有一份 `.bak`，回滚不了。边界与理由见
+> [`10-settings-center.md`](10-settings-center.md) § 7.5。
+
 ```toml
 # ── 供应商 ──
 [llm.providers.deepseek]
@@ -656,3 +664,4 @@ max_images_per_day = 20
 | 2026-09-15 | v0.4.0 | 补记**已落地**的两层形状：`[llm.providers.<名字>]` + `[llm.routing]`（值落在档位或供应商名上）；`memory` 用途同时服务 `distill` 与 `consolidate`；网关的重试退避与「每次尝试都记账」；`core.user_name` | LMG-arch |
 | 2026-09-16 | v0.4.0 | 补第 9 个**已实现**的用途 `vault`（Obsidian 知识库整理）。它是第一个让模型去动**外部可见产物**的用途，因此除了给用途键，还把「目录合法 / 标题非空 / 那一篇真在收集箱里」做成了逐条校验 | LMG-arch |
 | 2026-09-16 | v0.4.1 | § 2.4 的 `vault` 行补上第二个调用方（`alterego study next` 学一格）；不新增 purpose，理由是形状相同 | LMG-arch |
+| 2026-09-16 | v0.4.1 | § 9 补一句「今天页面上能动的部分」：`[llm.providers.*]` 的叶子可以在设置页加改，端点不能在页面上删 | LMG-arch |

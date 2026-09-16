@@ -1084,6 +1084,359 @@ async def test_a_giant_value_is_400(tmp_path: Path) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  /api/settings/providers
+# ═══════════════════════════════════════════════════════════════════════
+#
+# 这一对端点让「加一个模型端点」能在页面上做完。它和上面那种「一个键一个值」
+# 的接口是两回事：``llm.providers`` 的内层键由那个 provider 的插件解释（P4），
+# 内核既没有 schema，也不该替它编一份——所以类型是从**文件里现有的那一行**猜的，
+# 猜不出来就老实标成「这一行请在文件里改」。
+
+PROVIDER_TOML = """\
+# 一份带端点的配置。
+
+[llm.providers]
+handwritten = "https://手写的/v1"
+
+[llm.providers.deepseek]
+base_url = "https://api.deepseek.com/v1"   # 这一行有注释
+model = "deepseek-chat"
+max_retries = 3
+stream = true
+api_key = "sk-不能外传"
+
+[llm.providers.deepseek.extra_headers]
+"X-App" = "alterego"
+
+[llm.providers.local]
+base_url = "http://127.0.0.1:11434/v1"
+model = "qwen2.5:7b"
+"""
+
+
+def _provider_config(tmp_path: Path) -> Config:
+    """一份真的落在磁盘上、且已经配了两个端点的配置。"""
+    path = tmp_path / "alterego.toml"
+    path.write_text(PROVIDER_TOML, encoding="utf-8", newline="")
+    return Config.load(path=path, env={})
+
+
+def _rows(body: dict[str, Any], name: str) -> dict[str, dict[str, Any]]:
+    for item in body["providers"]:
+        if item["name"] == name:
+            return {row["name"]: row for row in item["fields"]}
+    raise AssertionError(f"没有这个端点：{name}")
+
+
+async def test_providers_lists_every_endpoint_and_its_rows(tmp_path: Path) -> None:
+    async with _client(_deps(_provider_config(tmp_path))) as client:
+        body = (await client.get("/api/settings/providers")).json()
+
+    assert body["key"] == "llm.providers"
+    assert [item["name"] for item in body["providers"]] == ["deepseek", "handwritten", "local"]
+    assert [row["name"] for row in body["providers"][0]["fields"]] == [
+        "base_url",
+        "model",
+        "max_retries",
+        "stream",
+        "api_key",
+        "extra_headers",
+    ], "行的顺序就是文件里的顺序"
+    assert _rows(body, "deepseek")["base_url"]["key"] == "llm.providers.deepseek.base_url"
+
+
+async def test_providers_guesses_the_kind_from_the_value_in_the_file(tmp_path: Path) -> None:
+    """页面画什么控件，取决于**文件里现有的那一行**，不是内核的清单（P4）。"""
+    async with _client(_deps(_provider_config(tmp_path))) as client:
+        body = (await client.get("/api/settings/providers")).json()
+
+    rows = _rows(body, "deepseek")
+    assert rows["base_url"]["kind"] == "str"
+    assert rows["max_retries"]["kind"] == "int"
+    assert rows["stream"]["kind"] == "bool"
+    assert rows["extra_headers"]["kind"] == ""
+
+
+async def test_a_nested_row_is_shown_but_not_editable(tmp_path: Path) -> None:
+    """一个表渲染成文本框，用户改完保存就写进去一个字符串——那是静默的错写。"""
+    async with _client(_deps(_provider_config(tmp_path))) as client:
+        body = (await client.get("/api/settings/providers")).json()
+
+    row = _rows(body, "deepseek")["extra_headers"]
+    assert row["editable"] is False
+    assert row["value"] == {"X-App": "alterego"}
+
+
+async def test_a_provider_that_is_not_a_table_is_shown_but_not_editable(tmp_path: Path) -> None:
+    """手写的 ``providers.x = "..."`` 也要画出来，否则用户以为页面把他的配置弄丢了。"""
+    async with _client(_deps(_provider_config(tmp_path))) as client:
+        body = (await client.get("/api/settings/providers")).json()
+
+    handwritten = body["providers"][1]
+    assert handwritten["editable"] is False
+    assert handwritten["value"] == "https://手写的/v1"
+    assert handwritten["fields"] == []
+
+
+async def test_providers_never_hands_out_a_key_written_into_the_file(
+    tmp_path: Path,
+) -> None:
+    """provider 插件允许把 ``api_key`` 直接写在文件里，但页面不该把它送到浏览器上。
+
+    断言整段响应原文里都找不到它，而不是只看那一个字段：泄漏常常发生在
+    「顺手多带了一个字段」的地方，而不是被声明为密钥的那一行。
+    """
+    async with _client(_deps(_provider_config(tmp_path))) as client:
+        response = await client.get("/api/settings/providers")
+
+    assert "sk-不能外传" not in response.text
+    row = _rows(response.json(), "deepseek")["api_key"]
+    assert row["value"] == {"set": True}
+    assert row["kind"] == "secret"
+    assert row["editable"] is False
+
+
+async def test_the_name_of_the_variable_is_visible_and_editable(tmp_path: Path) -> None:
+    """``api_key_env`` 的值是一个**变量名**，不是密钥：隐藏它反而害人。
+
+    ``api_key_env`` 会命中密钥的名字规则（里面有 ``api_key``），但它填的是
+    「去读哪个环境变量」。页面不显示它，用户就没法发现自己把变量名拼错了——
+    那一种错在启动时不会报，只会安静地拿着空密钥去请求。
+    """
+    async with _client(_deps(_provider_config(tmp_path))) as client:
+        response = await client.post(
+            "/api/settings/providers",
+            json={"name": "deepseek", "fields": {"api_key_env": "DEEPSEEK_API_KEY"}},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["after"]["api_key_env"] == "DEEPSEEK_API_KEY"
+
+
+async def test_known_fields_comes_from_your_own_config(tmp_path: Path) -> None:
+    """补全列表是「你自己配过的字段名」，不是内核声称插件该有哪些键。"""
+    async with _client(_deps(_provider_config(tmp_path))) as client:
+        body = (await client.get("/api/settings/providers")).json()
+
+    assert body["known_fields"] == [
+        "base_url",
+        "model",
+        "max_retries",
+        "stream",
+        "api_key",
+        "extra_headers",
+    ]
+
+
+async def test_providers_says_there_is_nowhere_to_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    async with _client(_deps(_config(tmp_path))) as client:
+        body = (await client.get("/api/settings/providers")).json()
+
+    assert body["writable"] is False
+    assert body["source"] is None
+    assert body["providers"] == []
+
+
+async def test_adding_an_endpoint_writes_it_into_the_file(tmp_path: Path) -> None:
+    async with _client(_deps(_provider_config(tmp_path))) as client:
+        response = await client.post(
+            "/api/settings/providers",
+            json={
+                "name": "ollama",
+                "fields": {"base_url": "http://127.0.0.1:11434/v1", "model": "qwen2.5:7b"},
+            },
+        )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["created"] is True
+    assert body["before"] == {}
+    assert body["after"] == {
+        "base_url": "http://127.0.0.1:11434/v1",
+        "model": "qwen2.5:7b",
+    }
+    assert body["added"] == ["base_url", "model"]
+    assert body["requires_restart"] is True
+    assert body["restart_needed"] == ["llm.providers"], "端点是在启动时一次性建好的"
+    text = Path(body["source"]).read_text(encoding="utf-8")
+    assert "[llm.providers.ollama]" in text
+    assert "# 一份带端点的配置。" in text, "注释必须还在"
+
+
+async def test_editing_an_endpoint_keeps_the_type_of_the_row(tmp_path: Path) -> None:
+    """``max_retries`` 原来是个数字，改完还得是数字：写成字符串，插件读到的就是字符。"""
+    async with _client(_deps(_provider_config(tmp_path))) as client:
+        response = await client.post(
+            "/api/settings/providers",
+            json={"name": "deepseek", "fields": {"max_retries": "5"}},
+        )
+
+    body = response.json()
+    assert body["created"] is False
+    assert body["added"] == []
+    assert body["after"]["max_retries"] == 5
+    text = Path(body["source"]).read_text(encoding="utf-8")
+    assert text.count("max_retries") == 1, "改的是原来那一行，不是补了一行"
+    assert 'base_url = "https://api.deepseek.com/v1"   # 这一行有注释' in text, (
+        "没改的行要一个字不动"
+    )
+
+
+async def test_a_boolean_row_is_rendered_as_a_boolean(tmp_path: Path) -> None:
+    """``stream`` 是 ``true``：``bool`` 是 ``int`` 的子类，问错顺序会写成 ``1``。"""
+    async with _client(_deps(_provider_config(tmp_path))) as client:
+        response = await client.post(
+            "/api/settings/providers", json={"name": "deepseek", "fields": {"stream": "false"}}
+        )
+
+    assert response.json()["after"]["stream"] is False
+    assert "stream = false" in Path(response.json()["source"]).read_text(encoding="utf-8")
+
+
+async def test_a_typo_in_a_field_name_is_reported_as_an_addition(tmp_path: Path) -> None:
+    """写错的字段名不会有任何报错——插件只是读不到它。
+
+    所以响应要点名「这一行是新加的」，页面据此提醒用户：这一层不认识你的字段名，
+    拼错了不会有人告诉你。
+    """
+    async with _client(_deps(_provider_config(tmp_path))) as client:
+        response = await client.post(
+            "/api/settings/providers", json={"name": "deepseek", "fields": {"base_ur1": "x"}}
+        )
+
+    assert response.json()["added"] == ["base_ur1"]
+
+
+@pytest.mark.parametrize("name", ["", "   ", "a.b", "1x", "deep seek", "端点的名字"])
+async def test_a_name_that_cannot_be_a_table_is_400(tmp_path: Path, name: str) -> None:
+    """``llm.providers.a.b`` 在 TOML 里是「a 里面有一张叫 b 的表」。
+
+    放过去的结果是用户以为加了个端点，实际上加了一层嵌套，而那个端点根本不存在。
+    """
+    async with _client(_deps(_provider_config(tmp_path))) as client:
+        response = await client.post(
+            "/api/settings/providers", json={"name": name, "fields": {"x": "1"}}
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "bad_request"
+
+
+@pytest.mark.parametrize("field", ["", "   ", "a.b", "1x", "model name"])
+async def test_a_field_name_that_cannot_be_a_bare_key_is_400(tmp_path: Path, field: str) -> None:
+    async with _client(_deps(_provider_config(tmp_path))) as client:
+        response = await client.post(
+            "/api/settings/providers", json={"name": "deepseek", "fields": {field: "1"}}
+        )
+
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize("fields", [{}, None, "x", []])
+async def test_a_provider_without_a_single_row_is_400(tmp_path: Path, fields: Any) -> None:
+    """一张什么都不写的表单不是「新建一个空端点」：它一定是哪里点错了。"""
+    async with _client(_deps(_provider_config(tmp_path))) as client:
+        response = await client.post(
+            "/api/settings/providers", json={"name": "empty", "fields": fields}
+        )
+
+    assert response.status_code == 400
+
+
+async def test_too_many_rows_is_400(tmp_path: Path) -> None:
+    """挡住「把一整份文件贴进来」，不是防谁——请求来自本机已经登录的页面。"""
+    payload = {"name": "big", "fields": {f"f{index}": "1" for index in range(51)}}
+    async with _client(_deps(_provider_config(tmp_path))) as client:
+        response = await client.post("/api/settings/providers", json=payload)
+
+    assert response.status_code == 400
+    assert "50" in response.json()["detail"]["what"]
+
+
+async def test_a_giant_provider_value_is_400(tmp_path: Path) -> None:
+    async with _client(_deps(_provider_config(tmp_path))) as client:
+        response = await client.post(
+            "/api/settings/providers", json={"name": "x", "fields": {"f": "y" * 4001}}
+        )
+
+    assert response.status_code == 400
+    assert "4000" in response.json()["detail"]["what"]
+
+
+async def test_editing_a_nested_row_is_400_and_names_the_file(tmp_path: Path) -> None:
+    """不能改的东西要让用户知道去哪儿改——否则他只会再点几次保存。"""
+    async with _client(_deps(_provider_config(tmp_path))) as client:
+        response = await client.post(
+            "/api/settings/providers",
+            json={"name": "deepseek", "fields": {"extra_headers": "X-App=alterego"}},
+        )
+
+    assert response.status_code == 400
+    assert "嵌套的表" in response.json()["detail"]["what"]
+    assert "alterego.toml" in response.json()["detail"]["hint"]
+
+
+async def test_editing_a_row_whose_name_looks_like_a_key_is_400(tmp_path: Path) -> None:
+    """密钥落进配置文件是**不可撤销**的：它可能已经在某个 git 历史里了。"""
+    async with _client(_deps(_provider_config(tmp_path))) as client:
+        response = await client.post(
+            "/api/settings/providers",
+            json={"name": "deepseek", "fields": {"api_key": "sk-新密钥"}},
+        )
+
+    assert response.status_code == 400
+    assert "环境变量" in response.json()["detail"]["hint"]
+    assert "sk-新密钥" not in Path(tmp_path / "alterego.toml").read_text(encoding="utf-8")
+
+
+async def test_a_value_the_row_type_cannot_hold_is_400(tmp_path: Path) -> None:
+    """校验失败是「用户输了东西」，不是服务器出错。"""
+    async with _client(_deps(_provider_config(tmp_path))) as client:
+        response = await client.post(
+            "/api/settings/providers",
+            json={"name": "deepseek", "fields": {"max_retries": "很多"}},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "invalid_value"
+    assert "整数" in response.json()["detail"]["what"]
+
+
+async def test_a_failed_provider_write_leaves_the_file_alone(tmp_path: Path) -> None:
+    """一次改好几行：其中一行不合法，那么一行都不写。"""
+    config = _provider_config(tmp_path)
+    async with _client(_deps(config)) as client:
+        response = await client.post(
+            "/api/settings/providers",
+            json={
+                "name": "deepseek",
+                "fields": {"model": "deepseek-reasoner", "max_retries": "很多"},
+            },
+        )
+
+    assert response.status_code == 400
+    source = Path(str(config.source))
+    assert source.read_text(encoding="utf-8") == PROVIDER_TOML
+    assert not source.with_name(source.name + ".tmp").exists()
+
+
+async def test_writing_a_provider_without_a_config_file_is_503(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    async with _client(_deps(_config(tmp_path))) as client:
+        response = await client.post(
+            "/api/settings/providers", json={"name": "x", "fields": {"f": "1"}}
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["error"] == "unavailable"
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  两个应用共处一个进程
 # ═══════════════════════════════════════════════════════════════════════
 

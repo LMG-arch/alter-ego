@@ -45,6 +45,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import MISSING, dataclass, fields, is_dataclass
 from datetime import time
@@ -56,7 +57,23 @@ from alterego.kernel.config import _SECRET_KEY_PATTERN
 from alterego.kernel.config_values import type_hints
 
 
-__all__ = ["Choice", "Setting", "SettingKind", "infer_setting", "is_annotated"]
+__all__ = [
+    "Choice",
+    "Setting",
+    "SettingKind",
+    "infer_setting",
+    "infer_setting_from_value",
+    "is_annotated",
+]
+
+
+#: 以 ``_env`` 结尾的键，值是**变量名**而不是密钥本身。
+#:
+#: provider 插件的惯例键名 ``api_key_env`` 正是这种，而它会命中
+#: ``_SECRET_KEY_PATTERN``。把它也当成密钥，页面就没法告诉你这个端点读的是哪个
+#: 环境变量——而那恰恰是应该写在文件里、也值得让人看见的东西（写错了，它启动时
+#: 只是安静地带着一个空密钥去请求）。
+_ENV_NAME = re.compile(r"_env$", re.IGNORECASE)
 
 
 class SettingKind(StrEnum):
@@ -221,6 +238,77 @@ def infer_setting(
         choices=_choices_of(annotation),
         advanced=True,
     )
+
+
+def infer_setting_from_value(
+    value: Any,
+    *,
+    key: str,
+    label: str = "",
+    group: str = "",
+) -> Setting | None:
+    """从一个**运行时值**猜一条元数据。
+
+    与 :func:`infer_setting` 的分工：那个从**类型注解**猜（配置类里声明过的
+    字段），这个从**值本身**猜。它存在的理由是开放容器——``llm.providers``
+    是 ``Mapping[str, Any]``，里面有哪些键由那个 provider 的插件解释（P4），
+    内核无从声明；但设置页要让人在浏览器里改一个端点，就必须知道
+    「这一行是个字符串、还是数字、还是字符串数组」。
+
+    猜不出来返回 ``None``，调用方据此把这一行标成「只能在文件里改」。
+    **不要为了「总能猜出来」而回落成字符串**：把一个嵌套的表当成字符串
+    渲染，用户改完一保存，写进去的是一个字符串字面量，然后 provider 报一个
+    和用户刚才做的事看起来毫无关系的错。
+
+    Args:
+        value: 从配置里读出来的值。
+        key: 这一行的完整点分键，如 ``"llm.providers.deepseek.base_url"``。
+        label: 界面上那一行的标题。留空时取键的最后一段。
+        group: 设置页分组。
+
+    Returns:
+        猜出来的 :class:`Setting`（``effect`` 为空，也就是「未标注」）；
+        值不是标量、也不是「全是字符串的数组」时返回 ``None``。
+    """
+    kind = _kind_of_value(value)
+    if kind is None:
+        return None
+    leaf = key.rpartition(".")[2]
+    if _SECRET_KEY_PATTERN.search(leaf) and not _ENV_NAME.search(leaf):
+        # 与 :func:`infer_setting` 同一条规则：名字里带 api_key / token / secret
+        # 的行按密钥算。这一层猜的是**别人的**表（provider 插件的键），而那几个插件
+        # 允许把 api_key 直接写在文件里；不拦一下，页面就会把密钥原样送到浏览器上。
+        kind = SettingKind.SECRET
+    return Setting(
+        key=key,
+        label=label or key.rpartition(".")[2],
+        description="",
+        kind=kind,
+        default=value,
+        group=group,
+        advanced=True,
+    )
+
+
+def _kind_of_value(value: Any) -> SettingKind | None:
+    """运行时值 → 控件种类。
+
+    **判断顺序要紧**：``bool`` 是 ``int`` 的子类，先问 ``int`` 会把 ``true``
+    认成 ``1``，于是页面上出现一个数字框，用户填 ``2`` 就写出一个非法布尔。
+    """
+    if isinstance(value, bool):
+        return SettingKind.BOOL
+    if isinstance(value, int):
+        return SettingKind.INT
+    if isinstance(value, float):
+        return SettingKind.FLOAT
+    if isinstance(value, str):
+        return SettingKind.STR
+    if isinstance(value, (list, tuple)) and all(isinstance(item, str) for item in value):
+        # 只有「全是字符串的数组」才当列表：混着数字和表的数组用逗号分隔表达不了
+        # （就是 ``render_value`` 那一侧的限制，这里认了它也存不回去）。
+        return SettingKind.LIST
+    return None
 
 
 def _kind_of(annotation: Any) -> SettingKind | None:
