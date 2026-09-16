@@ -17,9 +17,11 @@ from alterego.domain import (
     calendar,
     consolidation,
     conversation,
+    dataset,
     emotion,
     knowledge,
     memory,
+    redact,
     schedule,
     vault,
 )
@@ -30,9 +32,11 @@ __all__ = [
     "calendar",
     "consolidation",
     "conversation",
+    "dataset",
     "emotion",
     "knowledge",
     "memory",
+    "redact",
     "schedule",
     "vault",
 ]

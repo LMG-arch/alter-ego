@@ -85,8 +85,14 @@ flowchart LR
 >    由它自己归类。见 [`plans/2026-09-16-obsidian-vault.md`](../plans/2026-09-16-obsidian-vault.md)。
 >    它的插件 `capability.obsidian_vault` 默认**关闭**且**不含业务逻辑**——
 >    插件拿不到 `ctx.llm()`（v0.2.0 才有），而整理要调模型。
+> 7. **训练数据集**——`alterego dataset {build,list,paths,show}`（`sim/dataset.py`、
+>    `cli_dataset.py`），把对话、思考过程、工具调用整理成脱敏后的 JSONL，
+>    供本地模型微调。见 [`plans/2026-09-16-training-datasets.md`](../plans/2026-09-16-training-datasets.md)
+>    与 [ADR-0011](../adr/0011-training-datasets-are-derived-and-redacted.md)。
+>    **这一条一个模型调用都没有**，所以它连用量账本都不需要；
+>    `capability.dataset_exporter` 同样默认关闭、同样不含业务逻辑。
 >
-> 至此共 1836 个测试，全局覆盖率 **96.65%**。
+> 至此共 2127 个测试，全局覆盖率 **96.27%**。
 >
 > **领域层其余模块与 12 个 Repository 未开始**。阶段 E–M 均未开始。
 >

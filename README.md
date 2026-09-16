@@ -125,7 +125,29 @@ alterego vault status     # 现在库里什么样，有没有坏链
 默认建在 `exports/<角色名>的知识库/`。五条命令都以**只读**方式打开数据库——
 知识库是数据库的下游，从不往回写。
 
-### 🏠 数据完全本地
+### � 聊过的、想过的、调过的，都能拿去微调
+
+它攒下来的东西还有第二个出口：把对话、思考过程、工具调用分别整理成 JSONL，
+**先脱敏再落盘**，拿去微调一个更贴这个项目的本地小模型。
+
+```bash
+alterego dataset paths                      # 会落在哪几个文件（还没跑过也能问）
+alterego dataset build --dry-run            # 只算不写：几条、多大、脱了什么
+alterego dataset build                      # 真写：.jsonl + manifest.json + README.md
+alterego dataset show --limit 3             # 现场渲染几条出来看
+alterego dataset list                       # 磁盘上那一批什么样、该不该重跑
+```
+
+三类数据分别是 `conversation`（怎么和你说话）、`reasoning`（怎么想事情）、
+`tooluse`（想干什么 → 调用了什么 → 得到什么），各能出 `chat` / `sharegpt` / `alpaca`
+三种形状。整个「对话内容自动脱敏整理为训练集」这条链**一次模型调用都没有**：
+八条内置规则加你自己填的几个词，全在本机跑完。
+
+默认落在 `exports/datasets/<角色名>/`，`dataset paths` 会把完整路径打出来。
+每个目录里都留一份 `README.md`（怎么用、脱了什么、四条已知局限）和
+`manifest.json`（条数、字节数、sha256、规则指纹），换台机器也说得清这批数据是什么。
+
+### �🏠 数据完全本地
 SQLite 本地存储，无遥测、无云端、无账号。密钥走环境变量。导出支持匿名化。
 
 ---

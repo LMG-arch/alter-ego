@@ -435,6 +435,76 @@
     只在某一次运行里变成一条飘忽的 `unclosed database` 警告——
     而 `filterwarnings = ["error"]` 会把它记成某个**无关测试**的失败
 
+**拿去微调的语料（`alterego dataset`，已实现）**
+
+「对话内容自动脱敏整理为对话训练集」「思考推理过程保存为思考推理训练集」
+「工具调用过程也进行整理保存为训练集」——这一批把库里已经攒下来的东西
+摊成三类可以直接喂给微调脚本的 JSONL，**而且先脱敏再落盘**。
+为什么不做「导出时顺手问问模型该怎么脱」、为什么不做成一张新表、
+为什么 `tooluse` 现在教不了「怎么填参数」，见
+[`docs/adr/0011-training-datasets-are-derived-and-redacted.md`](docs/adr/0011-training-datasets-are-derived-and-redacted.md) 的六条决定。
+完整取舍见 [`docs/plans/2026-09-16-training-datasets.md`](docs/plans/2026-09-16-training-datasets.md)。
+
+- `domain/redact.py` —— **八条内置脱敏规则**（网址里的凭据 / API 密钥 / 邮箱 /
+  身份证号 / 手机号 / IPv4 / Windows 路径 / `/home/xxx`）。纯函数、无 IO，
+  所以 `domain/` 的 95% 覆盖率下限它自己扛得住。
+  替换用 **NUL 分隔的哨兵** `\x00<序号>\x00` 而不是 `[手机号]` 这样的
+  成品文本：后者会被下一条规则再吃一遍，于是「手机号里那串数字变成
+  `[手机号]`、外面又被加了一层」
+- `domain/redact.digest()` —— 那套规则的 sha256 前 12 位。落进
+  `manifest.json` 的 `redact_digest`，`list` 拿它和**现在**算出来的比：
+  改了规则却没重导，磁盘上那份就是按**旧规则**脱的，必须说出来
+- `domain/dataset.py` —— 三种样本形状（`chat` / `sharegpt` / `alpaca`）
+  × 三类数据（`conversation` / `reasoning` / `tooluse`）的拼装与渲染。
+  `render_manifest()` 给机器看（条数、字节数、sha256、脱敏摘要、规则指纹），
+  `render_readme()` 给人看（怎么用、脱了什么、四条已知局限）
+- `sim/dataset.py` —— 编排与落盘。取数走 `DatasetSourceRepository` 协议，
+  所以它既不知道存储是 SQLite，也不知道格式怎么拼
+- `interfaces/repository.py` 新增 `DatasetSourceRepository`（4 个方法），
+  `storage/sqlite/repositories.py` 新增 `SqliteDatasetSourceRepository`。
+  **没有新表**：四张现有的表（`conversation` / `message` / `tick_log` /
+  `activity_log`）已经够了，`user_version` 仍是 5
+- `cli_dataset.py` —— 第五个组装根（前四个是 `cli.py` / `cli_db.py` /
+  `cli_memory.py` / `cli_vault.py`）。`build` / `list` / `paths` / `show` 四条命令，
+  **全部以只读方式打开数据库**：数据集是库的**下游**，从不往回写
+- 配置新增 `[dataset]` 段（`export_dir` / `formats` / `redact_terms` /
+  `lookback_days`），三处同步：`kernel/config.py` 的 dataclass、
+  `templates/alterego.toml` 里带注释的默认值、`docs/design/05-channels.md` 的配置表。
+  `defaults.toml` **没动**——那个文件只放「内核不该知道的键」（provider 名、
+  存储后端名），而 `[dataset]` 是结构性的（间隔、形状、上限），它的家是 data class
+- `plugins/dataset_exporter/` —— 插件壳（`capability.dataset_exporter`，默认**关闭**）。
+  和 `obsidian_vault` 同一个形状，只做声明：三项配置、`describe()` 说人话、
+  `health()` 永远报正常。**真正干活的不在这里**——插件拿不到
+  `StorageBackend`（第 3 组红线），也不该自己开文件
+- 测试新增 267 个：`test_domain_redact.py`（75）/ `test_domain_dataset.py`（54）/
+  `test_sim_dataset.py`（39）/ `test_storage_dataset.py`（25）/
+  `test_cli_dataset.py`（45）/ `test_dataset_exporter_plugin.py`（29）。
+  覆盖率：`domain/redact.py` 100%、`domain/dataset.py` 96.74%、
+  `sim/dataset.py` 95.70%、`cli_dataset.py` 89.88%、**全库 96.27%**
+- **两件事是刻意的，都不算「还没做完」，是设计选择**：
+  - **目录里只留当次那一份形状。** `formats` 从 `["chat"]` 改成 `["sharegpt"]`
+    之后，上一次留下的 `*.chat.jsonl` 被删掉，`build` 的输出里看得见删了哪几个。
+    不这样做的话，任何按 `*.jsonl` 整体训练的脚本会**把每段对话学两遍**，
+    而 `README.md` 只描述了其中一种形状。清扫**只在这一次真的写出了东西时**才跑：
+    否则 `build --days 1` 碰上空窗口，会把一份好好的 30 天数据集清掉
+  - **不在 `manifest.json` 里的 `.jsonl` 会被点出来。** 用户自己丢进去的、
+    或者上一次因为「一条样本都没拼成」而跳过了清扫的文件，`list` 会报
+    「有不在这份记录里的文件」，`README.md` 里也会多一节。它不在记录里，
+    就没人知道它是按哪套规则脱的——这种文件不该被默默喂给训练脚本
+- **写这一批的过程里逮到 4 个只有真跑一次才看得见的 bug**：
+  - **换形状不清旧的**。改完 `formats` 之后目录里同时躺着 `*.chat.jsonl`
+    和 `*.sharegpt.jsonl`，`README.md` 里写着「一行长这样」的却只有一种
+  - **README 里的示例在骗人**。三种形状的包裹键完全不同
+    （`messages` / `conversations` / `instruction`），而生成器不管选了哪种，
+    都印同一句 `{"messages": [{"role": "user" ...}]}`。照它写的解析器
+    拿到 `sharegpt` 那一份会一条都读不出来
+  - **思考标签没闭合**。示例里 `<thinking>` 用 `</response>` 收的尾。
+    训练数据里出现一个不配对的标签，模型会学成「标签可以乱配」
+  - **工具名被加了两次前缀**。`activity_log.intent` 本来就带着
+    `social/` 这样的分类前缀，拼装时又按 `category` 加了一遍，
+    于是拼出 `social/social/reply`——而工具名是模型调用时唯一能写的东西，
+    名字错等于这个工具**永远调不起来**
+
 ### 变更
 
 - **迁移文件从此只管 DDL**。四个 `.sql` 里没有任何 `PRAGMA` 头、没有 `IF NOT EXISTS`、

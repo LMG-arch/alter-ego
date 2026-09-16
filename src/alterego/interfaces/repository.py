@@ -24,12 +24,14 @@ from typing import TYPE_CHECKING, Protocol
 
 
 if TYPE_CHECKING:
+    from alterego.domain.dataset import ActivityRow, MessageRow, TickRow
     from alterego.domain.memory import Memory, MemoryKind
 
 
 __all__ = [
     "ActivityRecord",
     "ActivityRepository",
+    "DatasetSourceRepository",
     "MemoryRepository",
     "PersonaRecord",
     "PersonaRepository",
@@ -270,5 +272,81 @@ class SourceRepository(Protocol):
 
         ``dropped`` 的那些不出现：它们是过滤掉的中间产物
         （提示词注入、过长、重复），不是它「搜集到的东西」。
+        """
+        ...
+
+
+# ────────────────────────────────────────────────────────────
+# 训练数据集的源。**下面这个契约是只读的**：数据集是库的派生产物，
+# 从不往回写（ADR-0011）。这也是它不需要任何迁移的原因。
+# ────────────────────────────────────────────────────────────
+
+
+class DatasetSourceRepository(Protocol):
+    """训练数据集要用到的三张源表的只读访问。
+
+    **返回的是 ``domain.dataset`` 里的行，不是本模块的 ``*Record``。**
+    看起来不一致，但另一条路更糟：那三个行类型与库里的列一一对应，
+    而 ``domain/dataset.py`` 的纯函数直接吃它们——中间再放一层 DTO，
+    只会让时间字段在「库里的 TEXT → ``datetime`` → 又变回 TEXT」之间来回转两趟，
+    而每一趟都是可能出错的转换点。
+
+    这也正是本模块文件头对 :class:`ActivityRecord` 的解释里说的那种情况：
+    「还没有需要纯函数去处理的规则」的行住在这里；**有纯函数要吃它们的行，
+    就住在 ``domain/``**。
+    """
+
+    def list_conversation_messages(
+        self,
+        persona_id: str,
+        *,
+        since: datetime,
+        limit: int = 20000,
+    ) -> list[MessageRow]:
+        """**和用户的**会话里的消息，按 ``(conversation_id, created_at, id)`` 正序。
+
+        只取 ``counterpart_kind = 'user'`` 的会话。和 NPC 的来往不在这一批里：
+        那批数据训的是「它怎么和别的角色相处」，与「它怎么和你说话」
+        是两件事，混在一起会稀释掉后者。
+
+        正序是有意的——``domain`` 那边合并相邻同向的消息，
+        顺序错了合出来的话也就错了。
+        """
+        ...
+
+    def list_ticks(
+        self,
+        persona_id: str,
+        *,
+        since: datetime,
+        limit: int = 5000,
+    ) -> list[TickRow]:
+        """``since`` 之后的推演日志，按 ``(virtual_time, id)`` 正序。
+
+        ``status`` 不在这里筛。失败的轨迹也要取出来——由 ``domain`` 决定
+        哪些能用，因为「哪些算成功」是业务判断，不是取数的事。
+        """
+        ...
+
+    def list_activities(
+        self,
+        persona_id: str,
+        *,
+        since: datetime,
+        limit: int = 20000,
+    ) -> list[ActivityRow]:
+        """``since`` 之后的行为日志，按 ``(started_at, id)`` 正序。"""
+        ...
+
+    def map_tick_intents(
+        self,
+        persona_id: str,
+        *,
+        since: datetime,
+    ) -> dict[str, str]:
+        """``tick_id → chosen_intent``，给工具调用数据集补「它想做的是什么」。
+
+        单独的查询而不是让调用方从 ``list_ticks`` 里自己挖：行为日志里
+        只有被规范化过的 ``intent``，而两者之差恰恰是「它想做」与「它实际做的」。
         """
         ...

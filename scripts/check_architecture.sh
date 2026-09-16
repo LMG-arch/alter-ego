@@ -228,18 +228,20 @@ check_forbidden \
 #   cli_memory.py  同理，`alterego memory` 的两条梳理命令。
 #   cli_vault.py   同理，`alterego vault` 的五个知识库命令。它也要挑一个
 #               具体的仓储实现装上（日程 / 搜集到的 / 人设）。
+#   cli_dataset.py 同理，`alterego dataset` 的四个导出命令。它要装上
+#               DatasetSourceRepository 的具体实现。
 #   storage/    实现自己。`backend.py` / `migrator.py` 当然要互相 import。
 #
 # 组装根的价值在于「只有这几个地方知道存储到底是什么」，所以每多一个都得
-# 说得清为什么。现在有四个，都叫 cli_*.py，都能一句话说清职责；
+# 说得清为什么。现在有五个，都叫 cli_*.py，都能一句话说清职责；
 # 再加下一个之前先想想能不能并进现有的某一个。文件名统一成 `cli_` 开头
 # 也是为此——它一眼就能看出「这是组装根，不是业务代码」。
 check_forbidden_excluding \
     "sqlite 实现只被组装根与存储层引用" \
     "from alterego\.storage\.sqlite|import alterego\.storage\.sqlite" \
     "$SRC" \
-    "cli(_db|_memory|_vault)?\.py:|/storage/" \
-    "除 cli.py / cli_db.py / cli_memory.py / cli_vault.py（组装根）与 storage/ 之外，一律通过 StorageBackend Protocol 访问。想要具体实现，让组装根构造好再传进来。"
+    "cli(_db|_dataset|_memory|_vault)?\.py:|/storage/" \
+    "除 cli.py / cli_db.py / cli_dataset.py / cli_memory.py / cli_vault.py（组装根）与 storage/ 之外，一律通过 StorageBackend Protocol 访问。想要具体实现，让组装根构造好再传进来。"
 
 check_forbidden \
     "sim/ 不直接依赖具体 LLM 客户端" \

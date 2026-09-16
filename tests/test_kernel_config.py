@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from alterego.domain.dataset import FORMATS
 from alterego.kernel.config import (
     DEFAULT_CONFIG_PATH,
     DEFAULT_CONFIG_PATHS,
@@ -535,3 +536,114 @@ def test_authoritative_template_loads_real_values() -> None:
     assert config.simulation.mode == "realtime"
     assert config.llm.budget.on_exceed == "degrade"
     assert config.channels.enabled == ("channel.file", "channel.web")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  训练数据集
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_the_format_names_are_a_mirror_of_the_domain() -> None:
+    """``_DATASET_FORMATS`` 必须与 ``domain.dataset.FORMATS`` 一模一样。
+
+    内核不能 import domain（第 4 条红线：内核不引用任何上层模块），
+    所以这份名单在内核里被抄了一遍。抄件与原件对不上时，症状是
+    「配置填得出、内核也放行，但导出到一半才说没这种形状」——
+    一个只有真跑一次才看得见的错。把两边钉在一起，改一边就红。
+    """
+    from alterego.domain import dataset as domain_dataset
+    from alterego.kernel.config import _DATASET_FORMATS
+
+    assert frozenset(domain_dataset.FORMATS) == _DATASET_FORMATS
+    # 顺序也要一致：README 用 formats[0] 当主形状，命令行的 choices
+    # 也是按这个顺序展示的。
+    assert tuple(sorted(_DATASET_FORMATS)) == tuple(sorted(domain_dataset.FORMATS))
+
+
+def test_dataset_defaults_are_conservative() -> None:
+    """默认只出一种形状、不脱任何自定义词——多出几份是用户主动要的。"""
+    config = Config.load(path=None, env={})
+
+    assert config.dataset.export_dir == Path("exports/datasets")
+    assert config.dataset.formats == ("chat",)
+    assert config.dataset.redact_terms == ()
+    assert config.dataset.lookback_days == 30
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"formats": []}, "formats 不能为空"),
+        ({"formats": ["yaml"]}, "不认识的形状"),
+        ({"redact_terms": ["", "  "]}, "空条目"),
+    ],
+)
+def test_bad_dataset_options_are_rejected(overrides: dict[str, object], message: str) -> None:
+    """每个坏值都要说清自己的后果，不能混成一句「配置非法」。
+
+    形状一个都没选 → 一个文件都不会写，用户以为工具坏了；
+    形状不认识 → 内核放行、导出到一半才炸；
+    脱敏词是空的 → 用户以为脱过了，其实那条规则被静默跳过。
+    """
+    with pytest.raises(ConfigError) as caught:
+        Config.load(path=None, env={}, overrides={"dataset": overrides})
+
+    assert message in caught.value.message
+    # 报错要带上「怎么办」：不是一句 hint，就是一份能用的清单。
+    assert caught.value.context
+
+
+def test_an_unknown_format_lists_what_is_supported() -> None:
+    """报「不认识 yaml」时得顺手把认得的都列出来。
+
+    只说「不认识」的话，用户要去翻文档才知道该填什么。
+    """
+    with pytest.raises(ConfigError) as caught:
+        Config.load(path=None, env={}, overrides={"dataset": {"formats": ["yaml"]}})
+
+    assert caught.value.context["unknown"] == ["yaml"]
+    assert set(caught.value.context["supported"]) == set(FORMATS)
+
+
+@pytest.mark.parametrize("bad", [0, -3])
+def test_a_non_positive_lookback_is_rejected(bad: int) -> None:
+    """回溯天数非正的话窗口是空的，导出结果永远是零条还不报错。"""
+    with pytest.raises(ConfigError) as caught:
+        Config.load(path=None, env={}, overrides={"dataset": {"lookback_days": bad}})
+
+    # 这条复用内核的通用正数检查，所以名字在 context 里而不是消息里。
+    assert caught.value.context["key"] == "lookback_days"
+    assert caught.value.context["value"] == bad
+
+
+def test_several_dataset_formats_are_kept_in_the_given_order() -> None:
+    """多份形状按写的顺序来——README 拿第一个当主形状讲。"""
+    config = Config.load(
+        path=None,
+        env={},
+        overrides={"dataset": {"formats": ["alpaca", "chat"]}},
+    )
+
+    assert config.dataset.formats == ("alpaca", "chat")
+
+
+def test_a_relative_export_dir_stays_relative() -> None:
+    """相对路径不在内核里解析。
+
+    「相对」相对的是**命令跑起来时的工作目录**，内核在导入期并不知道
+    那个目录是哪儿。在这里 ``resolve()`` 会让配置的含义变成
+    「相对内核被 import 的那一刻」，那是另一种、更说不清的路径——
+    组装根 ``cli_dataset`` 才负责把它接上 ``Path.cwd()``。
+    """
+    config = Config.load(path=None, env={}, overrides={"dataset": {"export_dir": "here"}})
+
+    assert config.dataset.export_dir == Path("here")
+    assert not config.dataset.export_dir.is_absolute()
+
+
+def test_an_absolute_export_dir_is_kept_verbatim(tmp_path: Path) -> None:
+    config = Config.load(
+        path=None, env={}, overrides={"dataset": {"export_dir": str(tmp_path / "out")}}
+    )
+
+    assert config.dataset.export_dir == tmp_path / "out"

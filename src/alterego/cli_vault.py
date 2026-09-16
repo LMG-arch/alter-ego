@@ -34,7 +34,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Final
 
-from alterego.cli_db import _peek_db, _require_sqlite
+from alterego.cli_db import _peek_db, _require_sqlite, _resolve_persona
 from alterego.cli_io import _RULE, _err, _out
 from alterego.domain.vault import CONTENT_FOLDERS, FOLDER_INBOX, FOLDER_INDEX, validate
 from alterego.interfaces.llm import LLMProvider
@@ -60,9 +60,7 @@ from alterego.sim.vault import (
 )
 from alterego.storage.sqlite import (
     SqliteActivityRepository,
-    SqliteConnection,
     SqliteMemoryRepository,
-    SqlitePersonaRepository,
     SqliteScheduleRepository,
     SqliteSourceRepository,
     SqliteStorageBackend,
@@ -139,37 +137,6 @@ def _registry(providers: Mapping[str, OpenAICompatibleProvider]) -> ServiceRegis
     for name, provider in providers.items():
         registry.register(LLMProvider, provider, name=name)
     return registry
-
-
-def _resolve_persona(conn: SqliteConnection, *, name: str | None) -> PersonaRecord:
-    """找到这次要给谁建知识库。
-
-    ``--persona`` 给的是**名字**不是 id：敲命令的人手上有名字，
-    而 id 是他从没见过的一串字符。
-    """
-    repo = SqlitePersonaRepository(conn)
-    if name:
-        found = repo.find_by_name(name)
-        if found is None:
-            raise StorageError(
-                "没有叫这个名字的人设",
-                name=name,
-                hint="跑 `alterego vault status` 不行的话，看看数据库里到底有谁。",
-            )
-        return found
-
-    everyone = repo.list_all()
-    if not everyone:
-        raise StorageError(
-            "数据库里还没有人设",
-            hint="先跑 `alterego init` 生成一个人设，再回来建知识库。",
-        )
-    if len(everyone) > 1:
-        raise StorageError(
-            "有多个人设，请用 --persona 指明是哪一个",
-            candidates=", ".join(persona.name for persona in everyone),
-        )
-    return everyone[0]
 
 
 def _workbench(

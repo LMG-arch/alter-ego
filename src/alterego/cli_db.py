@@ -22,10 +22,16 @@ from datetime import datetime
 from pathlib import Path
 
 from alterego.cli_io import _RULE, _human_size, _out, _pad, _width
+from alterego.interfaces.repository import PersonaRecord
 from alterego.kernel.clock import resolve_timezone
 from alterego.kernel.config import Config, StorageConfig
 from alterego.kernel.errors import StorageError
-from alterego.storage.sqlite import MigrationPlan, SqliteStorageBackend
+from alterego.storage.sqlite import (
+    MigrationPlan,
+    SqliteConnection,
+    SqlitePersonaRepository,
+    SqliteStorageBackend,
+)
 
 
 def _db_config() -> Config:
@@ -86,6 +92,45 @@ def _require_sqlite(config: Config) -> None:
             backend=backend,
             hint="把 [storage] backend 改回 sqlite；别的后端要等插件体系落地后才会出现",
         )
+
+
+def _resolve_persona(conn: SqliteConnection, *, name: str | None) -> PersonaRecord:
+    """找到这次要操作的是哪个人设。``cli_vault`` 与 ``cli_dataset`` 共用。
+
+    ``--persona`` 给的是**名字**不是 id：敲命令的人手上有名字，
+    而 id 是他从没见过的一串字符。
+
+    这个函数住在 ``cli_db`` 而不是各自的组装根里，因为它一个字都不用改
+    就对两个功能都成立——它回答的是「你说的那个人是谁」，
+    与接下来要干什么无关；而答案的形状（``PersonaRecord``）也一样。
+
+    （``cli_memory`` 里那份没有合并过来：它返回的是 ``(id, name)`` 两个字符串，
+    形状不同，合成一个反而要给它加一个用不上的分支。）
+    """
+    repo = SqlitePersonaRepository(conn)
+    if name:
+        found = repo.find_by_name(name)
+        if found is None:
+            raise StorageError(
+                "没有叫这个名字的人设",
+                name=name,
+                hint="用 `alterego db status` 看库里到底有谁。",
+            )
+        return found
+
+    everyone = repo.list_all()
+    if not everyone:
+        raise StorageError(
+            "数据库里还没有人设",
+            hint="先跑 `alterego init` 生成一个人设。",
+        )
+    if len(everyone) > 1:
+        # 随便挑一个等于随机改别人的数据，宁可不做。
+        raise StorageError(
+            "有多个人设，请用 --persona 指明是哪一个",
+            candidates=", ".join(persona.name for persona in everyone),
+        )
+    return everyone[0]
 
 
 def _stamp(config: Config) -> str:

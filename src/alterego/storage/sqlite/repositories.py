@@ -1,6 +1,6 @@
-"""SQLite 仓储实现：记忆、行为日志、用量账本、人设、日程、搜集到的信息。
+"""SQLite 仓储实现：记忆、行为日志、用量账本、人设、日程、搜集到的信息、训练数据集的源。
 
-六张表、六个类。**这里只做「一行 ↔ 一个对象」**：SQL、JSON 序列化、
+七张表、七个类。**这里只做「一行 ↔ 一个对象」**：SQL、JSON 序列化、
 往返映射都在这里；业务规则（重要度怎么衰减、什么时候该降权）在 `domain/`
 （见 `docs/design/03-data-model.md` § 6.9）。
 
@@ -17,7 +17,12 @@
 后三个（人设 / 日程 / 搜集到的信息）是**只读**的，给知识库用。只读不是
 遗漏：知识库是库的下游，从不往回写。
 
-依据: docs/design/03-data-model.md § 7、docs/plans/2026-09-16-obsidian-vault.md § 6
+最后一个（训练数据集的源）同样只读，同样是下游的取数口。
+它和上面六个的差别是：它返回的是 ``domain.dataset`` 的行，而不是
+``interfaces.repository`` 的 ``*Record``——理由写在那边的契约文档里。
+
+依据: docs/design/03-data-model.md § 7、docs/plans/2026-09-16-obsidian-vault.md § 6、
+docs/adr/0011-training-datasets-are-derived-and-redacted.md
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ from collections.abc import Iterator, Sequence
 from datetime import UTC, date, datetime
 from typing import Any, cast
 
+from alterego.domain.dataset import ActivityRow, MessageRow, TickRow
 from alterego.domain.memory import Memory, MemoryKind, MemorySource
 from alterego.interfaces.llm import LLMUsage
 from alterego.interfaces.repository import (
@@ -43,6 +49,7 @@ from alterego.storage.sqlite.connection import SqliteConnection
 
 __all__ = [
     "SqliteActivityRepository",
+    "SqliteDatasetSourceRepository",
     "SqliteMemoryRepository",
     "SqlitePersonaRepository",
     "SqliteScheduleRepository",
@@ -597,3 +604,141 @@ class SqliteSourceRepository:
             (persona_id, _format_dt(since), int(limit)),
         )
         return [_row_to_source(row) for row in rows]
+
+
+# ── 训练数据集的源 ──────────────────────────────────────────
+#
+# 这三个映射**刻意不解析时间**。上面五张表的 ``_row_to_*`` 都走 ``_require_dt``，
+# 时间戳畸形就抛 ``StorageError``；这里不抛，理由是这两件事的失败代价不同：
+# 知识库与提示词是实时路径，时间错了会算出错误的「今天」；
+# 数据集是一次性导出，一条时间戳畸形的行不该让整次导出失败。
+# 而且按字符串排序在同一个时区下仍然是时间序（见 ``_format_dt`` 的说明）。
+# 真畸形了会在 ``alterego dataset show`` 里一眼看见，跑不掉。
+
+
+def _row_to_message(row: sqlite3.Row) -> MessageRow:
+    return MessageRow(
+        id=str(row["id"]),
+        conversation_id=str(row["conversation_id"]),
+        direction=str(row["direction"]),
+        content=str(row["content"]),
+        content_type=str(row["content_type"] or "text"),
+        created_at=str(row["created_at"] or ""),
+    )
+
+
+def _row_to_tick(row: sqlite3.Row) -> TickRow:
+    return TickRow(
+        id=str(row["id"]),
+        virtual_time=str(row["virtual_time"] or ""),
+        status=str(row["status"]),
+        state_snapshot_json=str(row["state_snapshot_json"] or "{}"),
+        percepts_json=str(row["percepts_json"] or "{}"),
+        candidates_json=str(row["candidates_json"] or "[]"),
+        chosen_intent=str(row["chosen_intent"] or ""),
+        motivation=str(row["motivation"] or ""),
+        trigger_note=str(row["trigger_note"] or ""),
+        suppressed_json=str(row["suppressed_json"] or "[]"),
+        memories_json=str(row["memories_json"] or "[]"),
+        notes_json=str(row["notes_json"] or "[]"),
+    )
+
+
+def _row_to_activity_row(row: sqlite3.Row) -> ActivityRow:
+    return ActivityRow(
+        id=str(row["id"]),
+        intent=str(row["intent"]),
+        category=str(row["category"] or ""),
+        description=str(row["description"]),
+        detail_json=str(row["detail_json"] or "{}"),
+        location=str(row["location"] or ""),
+        inner_voice=str(row["inner_voice"] or ""),
+        duration_minutes=int(row["duration_minutes"] or 0),
+        tick_id=str(row["tick_id"] or ""),
+        started_at=str(row["started_at"] or ""),
+        suppressed_intent=str(row["suppressed_intent"] or ""),
+        suppress_reason=str(row["suppress_reason"] or ""),
+    )
+
+
+class SqliteDatasetSourceRepository:
+    """:class:`~alterego.interfaces.repository.DatasetSourceRepository` 的 SQLite 实现。"""
+
+    __slots__ = ("_conn",)
+
+    def __init__(self, conn: SqliteConnection) -> None:
+        self._conn = conn
+
+    def list_conversation_messages(
+        self,
+        persona_id: str,
+        *,
+        since: datetime,
+        limit: int = 20000,
+    ) -> list[MessageRow]:
+        """和用户的会话里的消息。
+
+        ``JOIN conversation`` 是为了筛 ``counterpart_kind``——那个字段在
+        ``conversation`` 上，而 ``message`` 只有 ``conversation_id``。
+        一次 JOIN 比「先查会话 id 再 IN (…)」便宜，也不用担心 id 多到
+        跨过 SQLite 的变量上限。
+        """
+        rows = self._conn.query(
+            "SELECT m.* FROM message AS m "
+            "JOIN conversation AS c ON c.id = m.conversation_id "
+            "WHERE c.persona_id = ? AND c.counterpart_kind = 'user' AND m.created_at >= ? "
+            "ORDER BY m.conversation_id ASC, m.created_at ASC, m.id ASC LIMIT ?",
+            (persona_id, _format_dt(since), int(limit)),
+        )
+        return [_row_to_message(row) for row in rows]
+
+    def list_ticks(
+        self,
+        persona_id: str,
+        *,
+        since: datetime,
+        limit: int = 5000,
+    ) -> list[TickRow]:
+        """推演日志。``status`` 不在这里筛——那是业务判断，交给 ``domain/``。"""
+        rows = self._conn.query(
+            "SELECT * FROM tick_log "
+            "WHERE persona_id = ? AND virtual_time >= ? "
+            "ORDER BY virtual_time ASC, id ASC LIMIT ?",
+            (persona_id, _format_dt(since), int(limit)),
+        )
+        return [_row_to_tick(row) for row in rows]
+
+    def list_activities(
+        self,
+        persona_id: str,
+        *,
+        since: datetime,
+        limit: int = 20000,
+    ) -> list[ActivityRow]:
+        """行为日志。不筛 ``distilled_at``：训练集要的是全部行为，不是没梳理过的那些。"""
+        rows = self._conn.query(
+            "SELECT * FROM activity_log "
+            "WHERE persona_id = ? AND started_at >= ? "
+            "ORDER BY started_at ASC, id ASC LIMIT ?",
+            (persona_id, _format_dt(since), int(limit)),
+        )
+        return [_row_to_activity_row(row) for row in rows]
+
+    def map_tick_intents(
+        self,
+        persona_id: str,
+        *,
+        since: datetime,
+    ) -> dict[str, str]:
+        """``tick_id → chosen_intent``。
+
+        没选意图的 tick 不进字典。填一个空串进去会让工具调用数据集
+        把「请求」渲染成空白——那是**看起来有内容、实际什么都没有**的样本，
+        比缺一条难发现得多。
+        """
+        rows = self._conn.query(
+            "SELECT id, chosen_intent FROM tick_log "
+            "WHERE persona_id = ? AND virtual_time >= ? AND chosen_intent IS NOT NULL",
+            (persona_id, _format_dt(since)),
+        )
+        return {str(row["id"]): str(row["chosen_intent"]) for row in rows if row["chosen_intent"]}

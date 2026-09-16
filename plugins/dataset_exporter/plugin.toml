@@ -1,0 +1,47 @@
+# 训练数据集导出插件清单
+#
+# 装它：把 plugins/dataset_exporter 拷到你的插件搜索路径下，然后在
+# config/alterego.toml 里加
+#     [plugins]
+#     enabled = ["capability.dataset_exporter"]
+#
+# 字段含义见 docs/design/02-plugin-api.md § 3.1。
+
+[plugin]
+id = "capability.dataset_exporter"
+version = "0.1.0"
+api_version = 1
+kind = "capability"
+entry = "plugin:DatasetExporter"
+
+name = "训练数据集导出"
+description = "把对话、思考过程与工具调用整理成脱敏后的 JSONL，供本地模型微调。"
+authors = ["LMG-arch"]
+license = "MIT"
+tags = ["dataset", "finetune", "redact", "capability"]
+
+enabled_by_default = false
+priority = 0
+auto_reload = true
+
+# 三项配置，对应 [dataset] 里三项真的会改变导出结果的。
+# 「导过没有」「脱了几处」不是配置——那是磁盘和 manifest.json 的事实，
+# 做成开关只会多一个能骗人的旋钮（设计原则 P4）。
+
+[plugin.config.export_dir]
+type = "string"
+default = ""
+description = "导出根目录。留空表示交给 `alterego dataset` 按角色名决定（exports/datasets/<角色名>）。"
+max_length = 400
+
+[plugin.config.formats]
+type = "array"
+item_type = "string"
+default = []
+description = "要出哪些形状：chat / sharegpt / alpaca。留空表示按 [dataset] formats。"
+
+[plugin.config.redact_terms]
+type = "array"
+item_type = "string"
+default = []
+description = "内置八条规则之外，还要额外脱掉的词。"

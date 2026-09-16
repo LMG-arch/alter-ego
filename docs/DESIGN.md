@@ -1019,6 +1019,12 @@ media_private_keep_days = 90
 source_item_keep_days = 90
 auto_vacuum = true
 
+[dataset]                            # 训练数据集：派生，不建表、不写库、不调模型
+export_dir = "exports/datasets"      # 实际落盘在 <export_dir>/<角色名>/
+formats = ["chat"]                   # chat | sharegpt | alpaca，可多选
+redact_terms = []                    # 内置八条规则之外额外要摘掉的字面量
+lookback_days = 30                   # 往回看多少天
+
 [plugins]
 enabled = [
   "llm.openai_compatible",
@@ -1124,7 +1130,7 @@ alter-ego/
 │   ├── adr/                         # 架构决策记录
 │   │   ├── README.md                # 索引：新增 ADR 必须在这里补一行
 │   │   ├── 0000-template.md
-│   │   └── 0001…0010                # 机制/语言/存储/渠道/降级/选型即数据/归属视图/定妆照/不可信输入/元数据强制
+│   │   └── 0001…0011                # 机制/语言/存储/渠道/降级/选型即数据/归属视图/定妆照/不可信输入/元数据强制/训练集派生且脱敏
 │   ├── plans/                       # ✅ 每个批次的落地计划（记录历史，不做实时维护）
 │   └── guide/                       # 用户手册
 │       ├── getting-started.md
@@ -1141,6 +1147,7 @@ alter-ego/
 │   ├── cli_db.py                    # ✅ alterego db；组装根：唯一 import 具体存储实现的地方
 │   ├── cli_memory.py                # ✅ alterego memory；组装根：自己开库、自己拿供应商
 │   ├── cli_vault.py                 # ✅ alterego vault；组装根：库是数据库的下游，只读打开
+│   ├── cli_dataset.py               # ✅ alterego dataset；组装根：训练集也是下游，四个命令全只读
 │   ├── kernel/                      # 内核：零业务逻辑
 │   │   ├── config.py                # ✅ 配置加载与校验
 │   │   ├── config_values.py         # ✅ 配置值的类型构造
@@ -1162,7 +1169,7 @@ alter-ego/
 │   │   ├── image.py                 # ImageProvider / ImageRequest / GeneratedImage
 │   │   ├── source.py                # SearchProvider / FeedReader / PageFetcher
 │   │   ├── channel.py               # ✅ Channel 协议（唯一入站见 ADR-0004）
-│   │   ├── repository.py            # ✅ 仓储 Protocol：Memory / Activity / Persona / Schedule / Source
+│   │   ├── repository.py            # ✅ 仓储 Protocol：Memory / Activity / Persona / Schedule / Source / Dataset
 │   │   ├── storage.py               # ✅ StorageBackend
 │   │   └── simulation.py            # ✅ Stage / StageResult / Capability / CapabilityResult / IntentType / Tool
 │   ├── domain/                      # 领域模型：纯函数，无 IO
@@ -1176,6 +1183,8 @@ alter-ego/
 │   │   ├── birthday.py              # ✅ 已实现：三种主体、闰日、按年展开、同一天合并成一条
 │   │   ├── _toml.py                 # ✅ 已实现：节日与生日共用的取值助手
 │   │   ├── conversation.py          # ✅ 已实现：回复时机、主动话题、复读检测（对话节奏部分）
+│   │   ├── redact.py                # ✅ 已实现：八条内置脱敏规则、NUL 哨兵替换、规则指纹
+│   │   ├── dataset.py               # ✅ 已实现：三类训练样本的拼装与三种形状的渲染
 │   │   ├── media.py                 # build_portrait_prompt()：一致性骨架的唯一入口
 │   │   ├── untrusted.py             # INJECTION_PATTERNS 与外部内容包裹
 │   │   ├── persona.py
@@ -1191,6 +1200,7 @@ alter-ego/
 │   │   ├── context.py               # ✅ 已实现：TickContext / StateSnapshot（推演过程中的载体）
 │   │   ├── consolidation.py         # ✅ 已实现：记忆巩固（唯一已接线的 purpose: memory）
 │   │   ├── vault.py                 # ✅ 已实现：知识库整理（purpose: vault）
+│   │   ├── dataset.py               # ✅ 已实现：取数 → 拼样本 → 脱敏 → 落盘（purpose: 无，不调模型）
 │   │   ├── engine.py
 │   │   ├── budget.py
 │   │   ├── narrator.py
@@ -1273,7 +1283,10 @@ alter-ego/
 │   ├── example_plugin/              # ✅ 插件开发模板
 │   │   ├── plugin.toml
 │   │   └── plugin.py
-│   └── obsidian_vault/              # ✅ capability 插件：把整理结果写进 Obsidian 库
+│   ├── obsidian_vault/              # ✅ capability 插件：把整理结果写进 Obsidian 库
+│   │   ├── plugin.toml
+│   │   └── plugin.py
+│   └── dataset_exporter/            # ✅ capability 插件：声明「这个实例会导出训练集」
 │       ├── plugin.toml
 │       └── plugin.py
 │
@@ -1402,7 +1415,7 @@ PR 模板中包含勾选清单，未勾选不予合并。
 | 语音、视频能力 | v1/v0.2.0 只做文本与**图像生成**；语音与视频理解推迟到 v0.5.0 探索 |
 | 与真实人类社交平台账号打通（自动发朋友圈到微信） | 涉及风控与账号安全，不做 |
 | 分布式 / 微服务 | 单进程足够，分布式是过度设计 |
-| 自研 LLM 微调 | 用现成 API 即可 |
+| 自研 LLM 微调 | 用现成 API 即可。**备料不算微调**：`alterego dataset` 只把已有的对话／思考／工具调用脱敏导出成 JSONL，训练脚本、算力、效果评测都在本项目之外——它交付的是**语料**，不是模型 |
 | 完整前端 SPA 框架 | 原生 HTML + SSE 满足需求 |
 | 移动端 App | Web 页面已适配移动端浏览器 |
 | 实时语音对话 | 超出「生活模拟」核心价值 |
@@ -1456,3 +1469,4 @@ PR 模板中包含勾选清单，未勾选不予合并。
 | 2026-09-15 | v0.2.1 | § 13 目录树标注 `domain/` 三个已实现模块；§ 3 领域层草图对齐实现：`strength_at` 公式以 [04](design/04-simulation-loop.md) § 7.2 为准（按 kind 分半衰期）、`ScheduleBlock` 字段名以 DDL 为准、`update_emotion` 增补 `block` 参数、`Emotion.label` 词表改为开放 | LMG-arch |
 | 2026-09-15 | v0.2.2 | 新增分册 [12](design/12-calendar-and-conversation.md)（节日日历与对话节奏）；§ 5.2 领域层表补入 `calendar.py` 并标注实现状态；§ 7.5 作息与 § 7.6 世界接入节日上下文；节日**不**进 `world.events`（提前几天就知道是它特有的性质） | LMG-arch |
 | 2026-09-15 | v0.3.0 | [12](design/12-calendar-and-conversation.md) 新增 § 17 生日：生日 = `personal` 类的节日，不另开平行模型；数据住 `data/birthdays.toml`（你自己的数据，不进版本库）；新增 `domain/birthday.py`、`domain/_toml.py` 与 `birthdays/` 读取器；`day_kind()` 改为只按 `days_off` 判定「谁占哪一天」；§ 5.2 领域层表补入 `birthday.py` 与 `_toml.py` | LMG-arch |
+| 2026-09-16 | v0.3.1 | § 12.1 增 `[dataset]` 段；§ 13 目录树补 `cli_dataset.py` / `domain/redact.py` / `domain/dataset.py` / `sim/dataset.py` / `plugins/dataset_exporter/`；§ 13 子目录 `adr/` 改为 `0001…0011`；[05](design/05-channels.md) § 8.1 命令树补 `dataset` 组、§ 8.3 组装根四→**五**；新增 [ADR-0011](adr/0011-training-datasets-are-derived-and-redacted.md) | LMG-arch |

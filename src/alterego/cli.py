@@ -37,6 +37,7 @@ from pathlib import Path
 
 from alterego import __version__
 from alterego.birthdays import default_path, load_book, save_book
+from alterego.cli_dataset import add_dataset_parser
 from alterego.cli_db import (
     cmd_db_backup,
     cmd_db_migrate,
@@ -522,7 +523,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="version",
         version=f"alterego {__version__}",
     )
-    commands = parser.add_subparsers(dest="command", metavar="{calendar,birthday,db,memory,vault}")
+    commands = parser.add_subparsers(
+        dest="command", metavar="{calendar,birthday,dataset,db,memory,vault}"
+    )
 
     calendar_parser = commands.add_parser("calendar", help="节日日历：它知道过几天要过节")
     calendar_commands = calendar_parser.add_subparsers(
@@ -616,6 +619,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     add_memory_parser(commands)
     add_vault_parser(commands)
+    add_dataset_parser(commands)
 
     return parser
 

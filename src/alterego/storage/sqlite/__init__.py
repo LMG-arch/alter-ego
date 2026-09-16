@@ -5,7 +5,7 @@
 代价与边界见 docs/adr/0003-sqlite-as-sole-storage-backend.md。
 
 ⚠️ 本目录的代码只被两处引用：**组装根**（``cli.py`` / ``cli_db.py`` /
-``cli_memory.py`` / ``cli_vault.py``）与存储层自己。
+``cli_memory.py`` / ``cli_vault.py`` / ``cli_dataset.py``）与存储层自己。
 其余代码一律通过 `StorageBackend` Protocol 访问，不得 `import alterego.storage.sqlite`——
 包括 `sim/`，也包括将来会写在外面的每一个 Repository。
 这条已由 `scripts/check_architecture.sh` 第 3 组红线覆盖整个 `src/`。
@@ -24,6 +24,7 @@ from alterego.storage.sqlite.connection import SqliteConnection
 from alterego.storage.sqlite.migrator import MigrationPlan
 from alterego.storage.sqlite.repositories import (
     SqliteActivityRepository,
+    SqliteDatasetSourceRepository,
     SqliteMemoryRepository,
     SqlitePersonaRepository,
     SqliteScheduleRepository,
@@ -37,6 +38,7 @@ __all__ = [
     "MigrationPlan",
     "SqliteActivityRepository",
     "SqliteConnection",
+    "SqliteDatasetSourceRepository",
     "SqliteMemoryRepository",
     "SqlitePersonaRepository",
     "SqliteScheduleRepository",

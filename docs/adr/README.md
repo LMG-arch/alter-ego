@@ -127,6 +127,7 @@ src/           →  实际实现
 | [0008](0008-anchor-character-consistency-in-a-canonical-portrait.md) | 角色形象一致性锚定在一张定妆照上 | 已接受 | 2026-09-15 |
 | [0009](0009-fetched-content-is-untrusted.md) | 抓取的外部内容一律视为不可信输入 | 已接受 | 2026-09-15 |
 | [0010](0010-every-setting-carries-display-metadata.md) | 每个配置项都必须携带可展示的元数据 | 已接受 | 2026-09-15 |
+| [0011](0011-training-datasets-are-derived-and-redacted.md) | 训练数据集是派生物，且先脱敏再落盘 | 已接受 | 2026-09-16 |
 
 > 新增 ADR 后请在此表补充一行。**忘记更新索引是最常见的疏漏。**
 

@@ -658,8 +658,13 @@ optional = ["channel.web"]
 支持版本约束：`>=`、`<=`、`==`、`~=`（兼容版本）、无约束。
 
 > 上面这两个 id 是**语法示例**，两个插件都还不存在。今天随内核一起发的只有
-> `capability.example`（示例）与 `capability.obsidian_vault`（知识库）；
+> `capability.example`（示例）、`capability.obsidian_vault`（知识库）与
+> `capability.dataset_exporter`（训练数据集，它只**声明**这个实例会导出训练集，
+> 真正的取数／脱敏／落盘在 `sim/dataset.py`，由 `alterego dataset` 驱动）；
 > 存储后端与 LLM provider 都是内核自带的，不走插件。
+>
+> **三个插件都是 `enabled_by_default = false`。** 插件不许替用户做决定——
+> 尤其是 `dataset_exporter` 这种会把对话写成文件的。
 
 ### 8.2 解析流程
 

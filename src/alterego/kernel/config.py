@@ -29,7 +29,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from datetime import time
 from pathlib import Path
-from typing import Any, Literal, cast, get_args
+from typing import Any, Final, Literal, cast, get_args
 
 from alterego.kernel.clock import resolve_timezone
 from alterego.kernel.config_values import build_section, type_hints
@@ -404,6 +404,82 @@ class RetentionConfig:
         _require_positive("activity_log_keep_days", self.activity_log_keep_days)
 
 
+#: ``domain.dataset.FORMATS`` 的镜像。
+#:
+#: 内核不能 import ``domain``（第 4 条架构红线），所以这里必须重复一遍。
+#: 重复是要付代价的，所以 `tests/test_kernel_config.py` 里有一条断言把两边钉在一起——
+#: 在 ``domain`` 那边加形状而忘了改这里，测试会红，而不是等到用户配了才发现。
+_DATASET_FORMATS: Final[frozenset[str]] = frozenset({"chat", "sharegpt", "alpaca"})
+
+
+@dataclass(frozen=True)
+class DatasetConfig:
+    """``[dataset]`` —— 训练数据集的导出。
+
+    数据集是库的**派生产物**：只读 ``message`` / ``tick_log`` / ``activity_log``
+    三张已有的表，不建任何新表，也不往回写（ADR-0011）。
+
+    所以这里没有任何开关式字段。没有 ``enabled``——不想要这个功能，
+    不跑那条命令就行；加一个 ``enabled`` 只会让「为什么没数据」多一种可能。
+    也没有 LLM 相关字段——导出一步都不调模型。
+    """
+
+    export_dir: Path = Path("exports/datasets")
+    """导出根目录。相对路径按**当前工作目录**解析，与知识库的 ``exports/`` 一致。
+
+    实际落盘在 ``<export_dir>/<角色名>/``。多套一层角色名，
+    是为了将来多角色共用一份配置时互不覆盖。
+    """
+
+    formats: tuple[str, ...] = ("chat",)
+    """这一批要产出哪几种形状：``chat`` / ``sharegpt`` / ``alpaca``。
+
+    可以同时选多个。同一批样本渲染成多份，直接拿去比哪份训出来的好——
+    渲染不调任何模型，代价只有磁盘。
+
+    默认只出 ``chat``：多出一个用不上的文件，比少一个你以为存在的文件好。
+    """
+
+    redact_terms: tuple[str, ...] = ()
+    """额外要摘掉的**字面量**（不是正则）。
+
+    在八个内置规则之外再加一份你自己的名单：真名、公司名、住址里的门牌。
+    按字面量处理，所以填 ``红中`` 不会被当成量词；留空就只用内置规则。
+
+    ⚠️ 改了它之后要重跑 ``alterego dataset build``。``dataset list`` 会比对
+    规则指纹并提示哪一批是旧规则脱的，但**不会自动重跑**——什么时候花这份
+    时间该由你定。
+    """
+
+    lookback_days: int = 30
+    """往回看多少天。
+
+    比知识库默认的 7 天长：知识库要的是「最近发生了什么」，
+    训练集要的是「够不够多」。调小会让样本变少、导出变快。
+    """
+
+    def __post_init__(self) -> None:
+        _require_positive("lookback_days", self.lookback_days)
+        if not self.formats:
+            raise ConfigError(
+                "formats 不能为空",
+                hint="至少选一个：chat / sharegpt / alpaca",
+            )
+        unknown = sorted(set(self.formats) - _DATASET_FORMATS)
+        if unknown:
+            raise ConfigError(
+                "formats 里有不认识的形状",
+                unknown=unknown,
+                supported=sorted(_DATASET_FORMATS),
+            )
+        if any(not term.strip() for term in self.redact_terms):
+            # 静默忽略一条用户明确要求的脱敏词 = 隐私事故。这里必须响。
+            raise ConfigError(
+                "redact_terms 里有空条目",
+                hint="空条目会被规则表跳过，等于你要求的脱敏根本没发生；把它删掉",
+            )
+
+
 @dataclass(frozen=True)
 class PluginsConfig:
     """``[plugins]`` —— 插件体系自身的行为。"""
@@ -479,6 +555,7 @@ class Config:
     routing: RoutingConfig = field(default_factory=RoutingConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     retention: RetentionConfig = field(default_factory=RetentionConfig)
+    dataset: DatasetConfig = field(default_factory=DatasetConfig)
     plugins: PluginsConfig = field(default_factory=PluginsConfig)
     web: WebConfig = field(default_factory=WebConfig)
     #: 实际读到的配置文件；全部使用内置默认值时为 ``None``。

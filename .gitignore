@@ -160,6 +160,7 @@ plugins/*/
 !plugins/tokenizer_jieba/
 !plugins/example_*/
 !plugins/obsidian_vault/
+!plugins/dataset_exporter/
 
 # 临时文件
 tmp/

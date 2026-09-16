@@ -977,8 +977,8 @@ AlterEgo v0.1.0
 ### 8.1 命令总览
 
 > **图例**：✅ = 已有代码、能跑；没有标记的 = **设计意图，尚未实现**。
-> 真源是 `alterego --help`（现在只有 `calendar` / `birthday` / `db` / `memory` / `vault`
-> 五组）。照着没标记的那个敲，`argparse` 会报 `invalid choice`。
+> 真源是 `alterego --help`（现在只有 `calendar` / `birthday` / `dataset` / `db` /
+> `memory` / `vault` 六组）。照着没标记的那个敲，`argparse` 会报 `invalid choice`。
 > **漏标一个已实现的命令**是文档 bug（P7），发现就补 ✅。
 
 ```
@@ -1046,6 +1046,18 @@ alterego
 │
 │                           vacuum 见 § 10 的优化建议；
 │                           **没有** rollback --to，理由见 03-data-model.md § 8.5
+│
+├── dataset                 每个子命令都接 --out DIR / --persona NAME    ✅（整组）
+│   ├── build [--format F] [--days N] [--dry-run]
+│   │                       取数 → 脱敏 → 写 .jsonl / manifest.json / README.md
+│   ├── list                磁盘上那一批什么样、该不该重跑
+│   ├── paths               会落在哪几个文件（还没跑过也能问）
+│   └── show [--limit N]    现场渲染几条出来看，不写文件
+│
+│                           三类数据：conversation / reasoning / tooluse；
+│                           三种形状：chat / sharegpt / alpaca。
+│                           落地信息与六条设计决定见
+│                           plans/2026-09-16-training-datasets.md 与 adr/0011
 │
 ├── vault                   每个子命令都接 --vault DIR / --persona NAME    ✅（整组）
 │   ├── init                搭骨架：目录、.obsidian/、索引页
@@ -1275,6 +1287,54 @@ LLM 消耗   今日 $1.12 / $2.00
 - **五个命令都以只读方式打开数据库**。知识库是数据库的**下游**，从不往回写；
   唯一往回写的是用量账本，它挂在单独的一条可写连接上。
 
+**`alterego dataset paths`**（存档位置一目了然，见
+[`plans/2026-09-16-training-datasets.md`](../plans/2026-09-16-training-datasets.md) § 4 与 § 5）：
+
+```
+人设      林晚（p1）
+目录      D:\ai\个人agent\exports\datasets\林晚
+──────────────────────────────────────────────────────────
+  对话训练集       D:\ai\个人agent\exports\datasets\林晚\conversation.chat.jsonl
+  思考推理训练集   D:\ai\个人agent\exports\datasets\林晚\reasoning.chat.jsonl
+  工具调用训练集   D:\ai\个人agent\exports\datasets\林晚\tooluse.chat.jsonl
+
+还没跑过的话上面这些文件都还不存在——`build` 会把它们写出来。
+空的数据集不会写成空文件：`build` 会说清是哪一种空，
+而不是留一个 0 字节的 .jsonl 让人以为文件坏了。
+```
+
+**`alterego dataset build --dry-run`**（只算不写）：
+
+```
+人设      林晚（p1）
+时刻      2026-09-16 08:34
+目录      D:\ai\个人agent\exports\datasets\林晚
+范围      最近 30 天
+形状      chat
+──────────────────────────────────────────────────────────
+  对话训练集            1 条  conversation.chat.jsonl        178 B
+  工具调用训练集        1 条  tooluse.chat.jsonl             253 B
+  思考推理训练集     空 · 取到 1 行，但一行都没拼成样本——字段缺失或全是空内容，看 debug 日志
+  脱敏                  2 处（手机号 1、路径 1）
+──────────────────────────────────────────────────────────
+合计      2 条 / 431 B
+
+这只是预演：**一个文件都没写**。去掉 --dry-run 再跑一次才会落盘。
+```
+
+三条不能省的约定：
+
+- **空的一类说清是「哪一种空」，不留空文件。** 三种原因分别是
+  「库里这个时间段还没有对应的记录」「取到 N 行但一行都没拼成样本」
+  「取到 N 条行为但没有一条挂在记下了选中意图的 tick 上」。
+  写一个 0 字节的 `.jsonl` 出来，用户只会以为文件坏了或者代码出错了。
+- **不花钱。** 脱敏是八条正则加用户自己填的几个词（`domain/redact.py`），
+  全部在本地跑完，一次模型调用都没有——所以它连用量账本都不需要。
+  「导出时顺手问问模型该怎么脱」被明确否决了，理由见 [ADR-0011](../adr/0011-training-datasets-are-derived-and-redacted.md)。
+- **四个命令都以只读方式打开数据库。** 训练集是数据库的**下游**，从不往回写。
+  这和知识库是同一条理由；区别在于知识库有一件事要写库（记账），
+  而导出数据集一件都没有。
+
 ### 8.3 实现
 
 **argparse**（零依赖）。真实实现住在 `src/alterego/cli.py`：
@@ -1308,25 +1368,28 @@ LLM 消耗   今日 $1.12 / $2.00
 | 3 | 插件依赖环 |
 | 4 | 数据库迁移失败 |
 
-**为什么分成五个文件**：`cli.py`（参数树 + calendar/birthday）→
-`cli_io.py`（输出助手）→ `cli_db.py` / `cli_memory.py` / `cli_vault.py`
-（三个命令组，各自是**组装根**）。
+**为什么这么拆**：`cli.py`（参数树 + calendar/birthday）→
+`cli_io.py`（输出助手）→ `cli_db.py` / `cli_memory.py` / `cli_vault.py` /
+`cli_dataset.py`（四个命令组，各自是**组装根**）。
 切分的直接原因是 `AGENTS.md` § 5 的「单文件 ≤ 900 行」——`cli.py` 一度是 937 行。
 不是因为「一个文件干太多事」，而是因为**加一个命令组就会再撞一次上限**。
-第一次拆分（`cli_db.py`）划下的边界后来被直接用上了：`cli_memory.py` 与
-`cli_vault.py` 是新开文件，`cli.py` 没有再涨回去。
+第一次拆分（`cli_db.py`）划下的边界后来被直接用上了：`cli_memory.py` /
+`cli_vault.py` / `cli_dataset.py` 都是新开文件，`cli.py` 没有再涨回去。
 
-**组装根**：整个程序里只有这四个文件（`cli.py` / `cli_db.py` / `cli_memory.py` /
-`cli_vault.py`）知道「存储用的是 SQLite」，其余代码一律只认 `StorageBackend` Protocol。
+**组装根**：整个程序里只有这五个文件（`cli.py` / `cli_db.py` / `cli_memory.py` /
+`cli_vault.py` / `cli_dataset.py`）知道「存储用的是 SQLite」，
+其余代码一律只认 `StorageBackend` Protocol。
 `scripts/check_architecture.sh` 第 3 组红线覆盖整个 `src/` 来钉住它，
-例外写在脚本的注释里——**例外要出现在能看见的地方，才叫例外**。
+例外写在脚本的注释里（那串 `cli(_db|_dataset|_memory|_vault)?\.py:` 就是它）
+——**例外要出现在能看见的地方，才叫例外**。
 
-四个组装根大小不一，但形状是同一个：**自己开库、自己拿供应商、自己关掉**。
-`cli_vault.py` 这一份多一层限制：它的内容连接是**只读**的，
-因为知识库是数据库的下游。而「花钱要记账」是唯一需要写库的事，
-所以那条连接单独开——把账本挂在只读连接上不会报错，
-只会在日志里留一句 `attempt to write a readonly database`，
-而命令照样打印「账记在 llm_usage 表」。
+五个组装根大小不一，但形状是同一个：**自己开库、自己拿供应商、自己关掉**。
+后两个各多一层限制，而且是同一条：
+`cli_vault.py` 的内容连接是**只读**的，因为知识库是数据库的下游；
+`cli_dataset.py` 四个命令的连接**全都是只读**的，因为训练集也是数据库的下游。
+知识库唯一需要写库的事是「花钱要记账」（那个例外就在 `cli_vault.py` 里），
+而导出数据集**一分钱都不花**——它是纯读 + 纯算 + 写文件，
+所以它连那条例外都不需要。
 
 
 ---
