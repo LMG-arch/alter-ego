@@ -777,21 +777,21 @@ optional = ["channel.web"]
 支持版本约束：`>=`、`<=`、`==`、`~=`（兼容版本）、无约束。
 
 > 上面这两个 id 是**语法示例**，两个插件都还不存在。今天随内核一起发的只有
-> `capability.example`（示例）、`capability.obsidian_vault`（知识库）与
-> `capability.dataset_exporter`（训练数据集，它只**声明**这个实例会导出训练集，
-> 真正的取数／脱敏／落盘在 `sim/dataset.py`，由 `alterego dataset` 驱动）；
+> `capability.example`（示例）、`capability.obsidian_vault`（知识库）、
+> `capability.dataset_exporter`（训练数据集）与 `capability.study`（专项学习）。
+> **后两个都只「声明」**——真正干活的代码不在插件里：训练集的取数／脱敏／落盘在
+> `sim/dataset.py`（由 `alterego dataset` 驱动），专项学习的课程表／召回／落笔在
+> `domain/study.py` 与 `sim/study.py`（由 `alterego study` 驱动）。
 > 存储后端与 LLM provider 都是内核自带的，不走插件。
 >
-> **三个插件都是 `enabled_by_default = false`。** 插件不许替用户做决定——
-> 尤其是 `dataset_exporter` 这种会把对话写成文件的。
+> **四个插件都是 `enabled_by_default = false`。** 插件不许替用户做决定——
+> 尤其是 `dataset_exporter`（会把对话写成文件）与 `study`（`next` 会花钱调模型）。
 >
-> **专项学习（`alterego study`）刻意没有对应的插件。** 它长得像一条
-> `capability.study`——有状态、有配置、有自己的命令——但它要做的事
-> 一件都离不开内核：写知识库笔记要跨目录白名单，召回要用内核自己的切词，
-> 记进度要接下一次命令。插件拿不到这些东西（第 3/4 组红线），
-> 硬做成插件只会把它自己劈成两半。**判断标准不是「长得像不像」，
-> 而是「拆出去之后两边是不是都还得认识同一个内核数据结构」**——
-> 是，就不该拆。理由与八个备选方案见
+> **为什么「只声明」也算插件。** 因为 `alterego plugins list` 是用户唯一能问
+> 「这个实例有哪些本事」的地方；没这条清单，专项学习就只能活在文档里。
+> 判断标准不是「长得像不像插件」，也不是「逻辑够不够多」，而是
+> **「拆出去之后两边是不是都还得认识同一个内核数据结构」**——是，逻辑就留在内核这边，
+> 插件只留声明。理由与备选方案见
 > [ADR-0012](../adr/0012-specialized-study-is-a-curriculum-not-a-prompt.md) 决策八。
 
 ### 8.2 解析流程
@@ -835,7 +835,10 @@ def on_load(self, ctx: PluginContext) -> None:
 
 ### 9.1 本地 drop-in
 
-扫描 `config.plugins.search_paths`（默认 `["plugins", "~/.alterego/plugins"]`）下的每个一级子目录，要求包含 `plugin.toml`。
+扫描 `config.plugins.search_paths` 下的每个一级子目录，要求包含 `plugin.toml`。
+**默认只有 `plugins/` 一处**：`kernel/loader.py` 里的 `DEFAULT_SEARCH_PATHS`
+虽然写着 `plugins/` 与 `~/.alterego/plugins` 两个，但每个调用点都会把
+`Config.plugins.search_paths` 显式传进去，所以**以配置为准**。
 
 ```
 plugins/
@@ -855,6 +858,11 @@ plugins/
 
 这样插件内部的 `import helpers` 会解析成 `alterego_plugins.<id>.helpers`——
 既不会污染全局命名空间，也不会和 pip 包撞名。
+
+> **插件目录里不需要 `__init__.py`。** 架构检查的「含 `.py` 的目录必须有
+> `__init__.py`」那一项只扫 `src/alterego/`，`plugins/` 不在范围里
+> （随包的四个插件目录都没有那个文件）。内核建包时把 `__path__` 直接指向目录，
+> 所以 `import helpers` 照样能找到邻居。
 
 > `entry` 里的模块路径**相对插件根目录**，不是插件 id。写成插件 id 时
 > 报错会明确提醒这一点（`_entry_hint`）。

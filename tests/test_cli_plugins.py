@@ -23,11 +23,21 @@ from alterego.interfaces.common import HealthStatus
 from alterego.kernel.config import Config
 
 
-#: 随包的三个示例插件。用例直接拿它们当被测对象——它们腐烂了，
+#: 随包的插件。用例直接拿它们当被测对象——它们腐烂了，
 #: ``test_example_plugin.py`` 会先红，这里再红一次也无妨。
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent / "plugins"
 EXAMPLE = "capability.example"
 VAULT = "capability.obsidian_vault"
+STUDY = "capability.study"
+
+
+def _shipped_plugin_count() -> int:
+    """``plugins/`` 下带清单的目录个数。
+
+    测试里不写死这个数：写死的话每加一个随包插件这里都要改一遍，
+    而那种红说明的是「测试过期」，不是「代码错了」——假红会把真红淹掉。
+    """
+    return sum(1 for path in PLUGIN_ROOT.iterdir() if (path / "plugin.toml").is_file())
 
 
 # ── 夹具 ────────────────────────────────────────────────────
@@ -174,13 +184,14 @@ class TestList:
         shown = capsys.readouterr().out
         assert EXAMPLE in shown
         assert VAULT in shown
-        assert "发现 3 个" in shown
+        assert STUDY in shown
+        assert f"发现 {_shipped_plugin_count()} 个" in shown
 
     def test_none_of_the_examples_are_enabled_by_default(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        # 三个示例清单里都是 enabled_by_default = false。这不是巧合：
-        # 示例不该在用户没要求的时候自己跑起来。
+        # 随包的清单里都是 enabled_by_default = false。这不是巧合：
+        # 插件不该在用户没要求的时候自己跑起来。
         assert main(["plugins", "list"]) == 0
 
         shown = capsys.readouterr().out

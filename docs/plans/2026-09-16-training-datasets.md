@@ -74,8 +74,15 @@ outbound → role = "assistant"
 | 结果 | `activity_log.description` |
 | 内心 | `activity_log.inner_voice`（含被预算拦下的那些） |
 
-> ⚠️ **今天这个数据集必定是 0 条。** `activity_log` 与 `tick_log` 都还没有写入者
-> （`sim/` 主体未实现）。`build` 会如实报 0 并打印一句解释，**不生成假数据**。
+> ⚠️ **0 条 ≠「上游还没落地」。** 这两张表的写入者都已存在——`sim/engine.py`
+> 的 Persist 一环往 `activity_log` 与 `tick_log` 各写一行。所以 `build` 报 0 时
+> 只有三种可能：时间范围里真没记录、取到行但拼不出样本、或者库里本来就是空的。
+> 它**不生成假数据**，也不把第一种说成第二种。
+>
+> ⚠️ 这条提醒是**改过一次的**：原先这里写「`activity_log` 与 `tick_log` 都还没有
+> 写入者（`sim/` 主体未实现）」，推演引擎落地后没人回改，于是 `DatasetSpec.upstream_ready`
+> 一直钉在 `False` 上，CLI 把「你时间范围开小了」统报成「上游还没落地」。
+> 现在由 `tests/test_domain_dataset.py::test_every_dataset_has_a_writer_today` 守着。
 
 ---
 
@@ -144,7 +151,10 @@ alterego dataset show  NAME [--limit N] [--format F] [--persona NAME]
 
 **极薄，和 `obsidian_vault` 同一个形状**：
 
-- `PluginContext` 没有 `llm()`（那是 v0.2.0），所以真活全在 `sim/dataset.py`
+- `PluginContext`（`kernel/context.py`）里**没有 `llm()`**——插件拿到它的时机是
+  `on_load`，那时既没有本轮提示词也没有用量归属。能调 LLM 的是钩子里的
+  `TickContext.llm()`（`sim/context.py`），而导出是**一次性动作、没有 tick**，
+  所以真活全在 `sim/dataset.py`
 - **不订阅任何事件**——导出是一次性动作，不该由 tick 频率驱动
 - `intent_types = frozenset()`（空的，故意的）
 - `enabled_by_default = false`
@@ -157,7 +167,7 @@ alterego dataset show  NAME [--limit N] [--format F] [--persona NAME]
 | --- | --- |
 | Web 数据页面 | `src/alterego/channels/web/` 只有 docstring 与空 `static/`，**零 HTTP server 实现**。建它是独立一大块 |
 | `alterego dataset train` | 见 ADR-0011 决策五：不做训练，只产出数据 |
-| 工具调用数据集的真实内容 | 上游 `sim/` 未实现，今天必然 0 条 |
+| 工具调用的**逐字调用记录** | `activity_log` 压根没有「工具名 / 参数 / 返回值」这三列：工具名由 `category`+`intent` 拼出，参数与产物来自 `detail_json`。要真记录得改表结构与写入端，不在本批次范围内 |
 | 用 LLM 二次审脱敏结果 | 违反 P3（不可测）且每条花钱 |
 
 ---

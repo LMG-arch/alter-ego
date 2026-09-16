@@ -842,6 +842,62 @@ alterego serve --no-web              # 只装插件、不开界面
   `/api/tick/{id}` 不存在（`TickLogRepository` 只写不读）、`/api/logs*` 与相册未接进来
 - 这些**全部是仓储接口的缺口**，不是界面层的——它们排在下一批「接口一致性审计」里
 
+**专项学习的插件（`capability.study`）**
+
+「训练数据集导出」与「专项深入学习」是**两个功能，也就是两个插件**。前者随
+`c3c7cba` 一起落地，后者当时只做了命令、没有清单项，而且文档还把这件事**论证错了**。
+这一批把它补齐，并把那个论证拆开重写。
+
+- `plugins/study/`（`plugin.toml` / `plugin.py` / `README.md`）——**只声明、不含逻辑**。
+  课程表、切词、打分、落笔全在 `domain/study.py`、`sim/study.py`、`cli_study.py`。
+  `intent_types` 是空集合（一次 `study next` 要花钱，该由人来按，不该由 tick 来选）、
+  不订阅任何事件、`health()` 恒报正常，与 `capability.dataset_exporter` 同形
+- **它一个配置项都没有，这是有意的**。四个真旋钮（`field` / `rounds` /
+  `recall_limit` / `min_score`）住在 `[study]` 段里，由 `alterego study` 直接读；
+  在 `[plugin.config.*]` 里抄一份就是**一件事的两个真源**——改插件那份不改命令的行为，
+  改命令那份不改插件说的话，两边都「看起来对」，而其中一个是谎话。
+  代价照实说：`alterego plugins config capability.study` 会说「清单里没有声明任何配置项」，
+  所以这件事写在 `plugin.toml` 的注释与插件 `README.md` 里，
+  并且指南新增 § 2.4.1「什么时候**不该**有配置项」把判断标准写下来
+- **这里踩过一次坑，写下来免得再踩。** 文档原来的措辞是「专项学习刻意没有对应的插件」，
+  理由是「插件拿不到那些东西」。第一句话是对的，第二句话却不成立——`dataset_exporter`
+  早就是活生生的反例。**「业务逻辑不能住进插件」不等于「这个功能不该有插件」**：
+  两句话被并成一句，结论就错了。拆开之后两条红线一条都没碰，而
+  `alterego plugins list` 是用户唯一能问「这个实例有哪些本事」的地方；没这条清单，
+  专项学习就只能活在文档里。ADR-0012 决策八按这两句话重写，并补了备选方案 L
+- `tests/test_study_plugin.py`（**23 个**，与 `test_dataset_exporter_plugin.py` 走同一条真实路径：
+  清单校验 → 依赖解析 → 导入 → 注册 → 描述 → 卸载）。它**不测「它学会了什么」**——
+  那件事由 `test_domain_study.py` / `test_sim_study.py` / `test_cli_study.py` 负责
+- `tests/test_interfaces_consistency.py::test_plugins_only_depend_on_the_two_allowed_entries`——**架构检查管不到这条**：
+  那 23 项只扫 `src/alterego`（外加「插件不得互相依赖」），于是没有任何东西拦得住插件
+  `import alterego.sim` 把自己的内部焊死在推演层上。这条测试 AST 扫 `plugins/*/plugin.py`，
+  把违规的 import 点名列出来；它还断言「至少找到过一个插件文件」，
+  免得路径写错时静默变绿（该文件 26 → **27** 个测试）
+- **三处写死的数字**。`test_cli_plugins.py` 断言过「发现 4 个」，加一个插件就要改一遍——
+  而那种红说明的是「测试过期」不是「代码错了」，假红会把真红淹掉，改成从 `plugins/` 目录数出来；
+  `cli_plugins.py` 与 `settings_catalog_infra.py` 里同样写死的「随包的三个示例」改成不数数
+- **顺手纠正了四处不精确的说法**：「插件拿不到 `ctx.llm()`」被当成插件不能做某事的理由——
+  但 `on_tick_pre` / `on_tick_post` 交给插件的正是 `TickContext`，`ctx.llm()` 在里面。
+  真实理由有两条：插件只被允许 import 契约与内核门面（拿不到已装好的存储连接），
+  而 `alterego study next` 是命令行上的一次，**不是 tick**
+- **文档同步**：ADR-0012 决策八（+ 影响范围 / 实施状态 / 备选方案 L / 复审条件）、
+  `02-plugin-api.md` § 8.1（四个随包插件 + 「为什么『只声明』也算插件」）与 § 9.1
+  （搜索路径默认只有 `plugins/` 一处；插件目录**不需要** `__init__.py`）、
+  `06-roadmap.md` 第 8 条、`DESIGN.md` 插件目录树、`plans/2026-09-16-specialized-study.md` § 9、
+  `guide/plugin-development.md`（随包插件数、`__init__.py` 真相、新 § 2.4.1、§ 11.1 第五类测试、
+  § 15 交付清单）、`guide/README.md`（「3 个示例」→ 4 个）
+- **指南里有一条说反了的硬约束**：「目录里有 `.py` 就必须同时有 `__init__.py`」，还引用了
+  「架构检查第 23 项」。而那一项扫的是 `find "$SRC"`（`SRC="src/alterego"`），
+  `plugins/` 根本不在范围里；内核 `_install_package()` 把 `__path__` 直接指向目录，
+  它的 docstring 就写着「不需要 `__init__.py`」。**一条文档断言可以和它自己引用的检查互相矛盾而活到今天**
+- **根 `README.md` 的插件示例是错的，而且错得跑不起来**：`id = "my_weather"` 少一个点
+  （清单正则只收 `<kind>.<名字>`）、`entry = "__init__:WeatherMoodStage"`（随包的写法是
+  `plugin.py` + `plugin:类名`）、配置写成顶层 `[config]`（**漏了 `plugin.` 前缀，
+  正是上面那个「整张顶层表被静默忽略」bug 的唯一实例**）、`ctx.emotion_delta`——
+  `TickContext` 上**从来没有过**这个字段。现在换成一段真的能跑的 capability 插件，
+  并且**真跑过一遍**（`discover` → `load_all` → `registry.get(Capability, ...)` → `execute`）
+  才写进去
+
 ### 变更
 
 - **`[channels.web]` 不再是 Web 界面的配置段，真实配置在顶层 `[web]`**。
@@ -918,8 +974,31 @@ alterego serve --no-web              # 只装插件、不开界面
   `01-architecture.md § 3` 曾给出 `exp(-0.05 × days) × (1 + log1p(recall_count))` ——
   单一衰减率，与同一份文档里「三种记忆半衰期不同」直接矛盾，且 `log1p` 会让
   回忆 1 次就翻倍（真实的复习效应是 `1 + 0.35 × recall_count`）
+- **数据集的「渲染」半边搬进 `domain/dataset_render.py`**（`dataset.py` 912 → 724 行）。
+  撞上 900 行上限的是**一句 README 说明**，而那句说明不是「样本怎么算」的事：
+  「哪些行能变成样本」（`dataset.py`）与「这批文件叫什么、脱了几处」（`dataset_render.py`）
+  是两个独立的改动理由，也是两个会分别过期的东西。搬过去的是 `render_manifest` /
+  `render_readme` / `_format_bytes` / 各格式的示例串，全是返回字符串的纯函数，
+  没有 IO。`spec_for` 与 `ExportedFile` 留在原地，所以两个函数的签名一字未改，
+  改的只有 import 路径（`sim/dataset.py`、`tests/test_domain_dataset.py`、
+  `domain/__init__.py` 的清单）
 
 ### 修复
+
+- **`DatasetSpec.upstream_ready` 是一句会过期的假话，而且它被印给了用户看**
+  （`domain/dataset.py`）。`reasoning` 与 `tooluse` 两类钉着 `upstream_ready=False`，
+  理由是「`sim/` 主体尚未实现」——而推演引擎早已落地，`sim/engine.py` 的 Persist
+  一环就会往 `tick_log` 与 `activity_log` 各写一行。因为 `sim/dataset.py` 的
+  `_skip_reason` 优先读这个标记，静默窗口里跑 `alterego dataset build --days 1`
+  得到的是「上游还没落地：这张表还没有写入者」，而真实原因是「你时间范围开小了」。
+  一句让人**接着等**的话，正确的做法是**改配置**。三类现全为 `True`，两个
+  `_UPSTREAM_PENDING` 文案与生成出来的 `README.md` 的「已知局限」一并改掉（那段文案
+  现在明确说：0 条≠上游没落地，三种空原因由 `_skip_reason` 分开）。
+  原先守着这个错值的测试叫 `test_tooluse_is_empty_today_and_that_is_honest`——
+  它断言 `upstream_ready is False`，等于把「一个已经过期的前提」写成了被保护的不变量。
+  换成 `test_every_dataset_has_a_writer_today`，并写明它是**提醒**而不是不变式：
+  哪天为新数据集把某个 `upstream_ready` 改回 `False`，这里会红，那时要同时改
+  `sim/dataset.py` 的文案与 ADR-0011
 
 - **测试之间共享 `logging` 全局状态**。`alterego serve` 会调 `setup_logging`，
   而它把 `alterego` 这个 logger 的 `propagate` 关掉；`caplog` 挂在 root 上，

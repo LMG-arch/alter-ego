@@ -2,7 +2,7 @@
 
 - **状态**：已接受
 - **实施状态**：已实现（`alterego study`、`domain/study.py`、`sim/study.py`、`cli_study.py`、
-  `kernel/config_study.py`、`prompts/study_topic.md`）
+  `kernel/config_study.py`、`prompts/study_topic.md`、`plugins/study/`）
 - **日期**：2026-09-16
 - **决策者**：LMG-arch
 - **相关**：[ADR-0006](0006-ship-implementation-choices-as-data.md)、
@@ -12,7 +12,7 @@
 - **影响范围**：`domain/study.py`、`domain/vault.py`（布局加一层）、`sim/study.py`、
   `sim/vault.py`（`write_note` 公开 + `VaultHome` 协议）、`cli_study.py`、`cli.py`、
   `kernel/config.py`、`kernel/config_study.py`、`templates/alterego.toml`、
-  `prompts/study_topic.md`、`scripts/check_architecture.sh`
+  `prompts/study_topic.md`、`plugins/study/`、`scripts/check_architecture.sh`
 
 ---
 
@@ -181,16 +181,39 @@ CLI 会明确说「不知道该学什么」，而不是随机挑一个方向—�
 
 新卫星模块只允许引用 `kernel/errors.py`（第 4 组红线：`kernel/` 不得引用任何上层模块）。
 
-### 八、入口是 CLI，不是插件
+### 八、业务逻辑不进插件，**但这个功能有插件**
 
-需求里写的是「插件」，但**实现成了第六个组装根**，没有 `plugins/study/`。
-理由是红线：一个插件要自己开数据库、自己读配置、自己调模型，
-而这正好撞上第 3 组（插件不得直接连数据库）与第 21 组（`capabilities/` 不得直连 LLM 端点）
-的红线精神——今天的内核没有给插件「一个已经装好的网关 + 一条只读的内容连接」。
+需求里写的是「插件」。落地时它其实是**两个问题**，而两个答案不一样：
+
+| 问题 | 答案 |
+| --- | --- |
+| 学习的**业务逻辑**该住进插件吗 | **不该**：它要读配置、要写库、要调模型 |
+| 这个**功能**该有一个插件吗 | **该**：`plugins/study/`，只声明、不含逻辑 |
+
+第一个问题的落法是**第六个组装根**：`domain/study.py`（纯函数：课程表、切词、打分）、
+`sim/study.py`（`StudyWorkbench` 与 `learn()` / `plan()` / `recall()`）、
+`cli_study.py`（把前两者接到命令行上）。内核今天没有给插件
+「一个已经装好的网关 + 一条只读的内容连接」，所以这三件事留在插件外面。
+
+第二个问题的落法是 `plugins/study/`（`capability.study`）。它与
+`capability.dataset_exporter` 是**同一种形状**——两者都只声明、都不含业务逻辑
+（训练数据集的取数／脱敏／落盘在 `sim/dataset.py`，由 `alterego dataset` 驱动）：
+
+- `kind = "capability"`、`enabled_by_default = false`；
+- `intent_types` 是**空集合**——推演循环不会挑中它，因为 `study next` 会花钱；
+- **一个配置项都不声明**：四个真正的旋钮（`field` / `rounds` / `recall_limit` / `min_score`）
+  住在 `[study]` 段里，插件只把它们**指出来**。抄一份进来就是同一件事的两个真源。
+
+> **这里踩过一次坑，写下来免得再踩。** 最初的措辞是「专项学习刻意没有对应的插件」，
+> 理由是「插件拿不到那些东西」——第一句话是对的，第二句话却不成立：
+> `dataset_exporter` 早就是活生生的反例。**「业务逻辑不能住进插件」不等于
+> 「这个功能不该有插件」。** 两句话被并成一句，结论就错了；
+> 拆开之后，两条红线一条都没碰。
 
 **「插件式」在这个项目里的真实含义是「能加而不必改内核」，而不是「必须叫插件」。**
 `StudyWorkbench` 是一个 `frozen` 数据类，`learn()` / `plan()` / `recall()` 是它的自由函数；
-将来内核提供了合适的扩展点，把它们包一层 `Plugin` 即可，**领域层一行都不用改**。
+将来内核提供了合适的扩展点，把它们包一层 `Plugin` 即可，**领域层一行都不用改**——
+`plugins/study/` 已经在那个位置上占好了位子。
 
 ## 后果
 
@@ -232,7 +255,8 @@ CLI 会明确说「不知道该学什么」，而不是随机挑一个方向—�
 | H · 另开一个「专业库」目录 | Obsidian 双链断成两半，专业笔记无法与被记住的人互相引用 |
 | I · 给 `[llm.routing]` 加一个 `study` 键 | 撞 900 行红线；且这次调用的形状与 `vault` 完全一致 |
 | J · 把 `[study]` 段塞进 `kernel/config.py` | 同上；先例是把卫星段放进 `config_values.py` |
-| K · 做成 `plugins/study/` | 插件拿不到「已装好的网关 + 只读内容连接」，会撞红线精神；见决策八 |
+| K · 把学习的**业务逻辑**搬进 `plugins/study/` | 插件只被允许 import 契约与内核门面，拿不到「已装好的存储连接」；见决策八 |
+| L · 连一个只声明的插件也不做 | 用户没法从 `alterego plugins list` 看出「这个实例会学习」；`dataset_exporter` 已是同一种先例，见决策八 |
 
 ## 依据
 
@@ -246,8 +270,8 @@ CLI 会明确说「不知道该学什么」，而不是随机挑一个方向—�
 
 ## 什么时候应该重新审视
 
-- **内核插件 API 提供了「已装好的网关 + 只读内容连接」**：那时决策八可以改成插件，
-  领域层不用动。
+- **内核插件 API 提供了「已装好的网关 + 只读内容连接」**：那时可以把业务逻辑也搬进
+  `plugins/study/`（它今天已经在，只是里面没有逻辑），领域层不用动。
 - **`kernel/config.py` 拆成多文件**：那时决策七的卫星模块可以并回去，
   `[llm.routing]` 也可以有自己的 `study` 键（决策六）。
 - **`min_score` 的门槛在真实使用里被频繁调**：说明打分公式本身需要改，

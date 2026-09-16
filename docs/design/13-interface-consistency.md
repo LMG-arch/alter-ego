@@ -366,21 +366,23 @@ storage/sqlite/               没有 PluginStateRepository ❌
 
 ## 7. 可执行的对照物
 
-`tests/test_interfaces_consistency.py`（26 个测试，`@pytest.mark.architecture`）
+`tests/test_interfaces_consistency.py`（27 个测试，`@pytest.mark.architecture`）
 是本文档里**能写成断言的**那一部分：
 
 | 测试 | 守住什么 |
 | --- | --- |
 | `test_module_all_covers_every_public_name[6]` | 每个 `interfaces/*.py` 的 `__all__` 覆盖它定义的每个公开名字 |
 | `test_every_exported_name_resolves[6]` | `__all__` 里每个名字真的存在（不是拼错的字符串） |
-| `test_module_all_has_no_duplicates[6]` | `__all__` 里没有重复名字 |
+| `test_module_all_is_sorted[6]` | `__all__` 里没有重复名字。**名字来自它曾经查排序的年代**，现在排序交给 `ruff` 的 `RUF022`（见下面「刻意不写的两条」），正文只查重复 |
 | `test_package_all_is_the_union_of_submodule_alls` | 包的 `__all__` 恰好等于六个子模块 `__all__` 的并集 |
+| `test_package_all_has_no_duplicates` | 包级 `__all__` 里没有重复名字 |
 | `test_interfaces_submodule_list_is_complete` | 新增 `interfaces/*.py` 忘了登记时红 |
 | `test_plugin_facade_exports_resolve` | `kernel/plugin.py` 门面导出的名字都能取到 |
 | `test_plugin_kinds_match_the_documented_eight` | `Literal` 与 `_KINDS` **同步**（只改一个等于没改——mypy 管不到运行时的 TOML） |
 | `test_config_value_types_match_the_documented_eight` | 同上，配置值类型 |
 | `test_manifest_known_keys_are_derived_from_the_dataclass` | 手抄清单写回去时立刻红 |
 | `test_unknown_manifest_key_is_rejected` | `enabledByDefault = false` 这类拼错当场报错 |
+| `test_plugins_only_depend_on_the_two_allowed_entries` | 随包插件只 import `alterego.interfaces.*` 与 `alterego.kernel.plugin`。**架构检查管不到这一半**：它的 `find` 只扫 `src/`，`plugins/` 下没有 `__init__.py`、也不参与分层依赖方向 |
 
 清单的**表级**校验在 `tests/test_kernel_loader.py`（§ 3.5 的回归测试）：
 
@@ -395,13 +397,15 @@ storage/sqlite/               没有 PluginStateRepository ❌
 **刻意不写的两条**：`__all__` 是否按字母序、是否有未使用的 import。
 前者是 `ruff` 的 `RUF022`，后者是 `F401`——它们才是权威。
 再写一遍只会制造「lint 说对、测试说错」的假红，然后教人 `noqa` 掉错误的那个。
+（`test_module_all_is_sorted[6]` 就是这条决定留下的痕迹：**名字还停在查排序的年代**，
+正文已经换成了查重复。）
 
 ---
 
 ## 8. 复现命令
 
 ```bash
-# 接口一致性（26 个测试）
+# 接口一致性（27 个测试）
 python -m pytest tests/test_interfaces_consistency.py -q
 
 # 状态机（4 个测试）

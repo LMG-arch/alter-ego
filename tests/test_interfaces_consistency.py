@@ -15,6 +15,8 @@
 3. ``kernel/plugin.py`` 这个门面导出的每个名字都真实存在，而且来源模块自己也声明了它。
 4. 字面量型枚举与文档逐字一致：``PluginKind`` 八类、``ConfigValueType`` 八种、
    清单允许的键 = ``PluginManifest`` 的字段减去发现过程填的那两个。
+5. 随包的插件只 import 上面那两个入口（``interfaces`` 与 ``kernel.plugin``）——
+   这条是**架构检查管不到**的那一半，见 ``test_plugins_only_depend_on_the_two_allowed_entries``。
 
 依据: docs/design/13-interface-consistency.md
 """
@@ -193,3 +195,65 @@ def test_unknown_manifest_key_is_rejected() -> None:
 
     assert caught.value.context["unknown"] == ["enabledByDefault"]
     assert "enabled_by_default" in caught.value.context["supported"]
+
+
+# ── 插件的 import 面 ──────────────────────────────────────────
+
+
+#: 插件唯一被允许依赖的两个入口：契约（``alterego.interfaces``）与插件门面
+#: （``alterego.kernel.plugin``）。两者都是**故意**做成薄的——它们不 import
+#: 具体存储、具体 LLM 客户端，也不 import 任何上层模块。
+PLUGIN_ALLOWED_PREFIXES = ("alterego.interfaces", "alterego.kernel.plugin")
+
+#: 随包插件所在目录。与 ``SRC`` 无关：架构检查只扫 ``src/alterego``。
+PLUGINS = SRC.parent.parent / "plugins"
+
+
+def _imported_alterego_modules(path: Path) -> set[str]:
+    """一个 .py 里 ``import alterego.*`` 与 ``from alterego.* import`` 的模块名。
+
+    用 ast 而不是正则：正则会把 docstring 里的 ``from alterego.sim import x``
+    也算成真的 import——而「照文档写类型注解」正是本文件存在的理由。
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            found.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            found.add(node.module)
+    return {name for name in found if name == "alterego" or name.startswith("alterego.")}
+
+
+def test_plugins_only_depend_on_the_two_allowed_entries() -> None:
+    """随包的插件必须只 import 契约与插件门面。
+
+    这条约束**架构检查管不到**：``scripts/check_architecture.sh`` 的 ``SRC``
+    是 ``src/alterego``，``plugins/`` 在它外面（那里只有「插件不得互相 import」
+    一项）。所以「插件别去 import ``alterego.sim``」得由这里守着。
+
+    它为什么值得一条测试：插件一旦 import 了 ``sim`` 或 ``storage``，就等于把自己
+    焊在内核的内部结构上——那些模块不在 ``__all__`` 的承诺范围内，可以随时改；
+    而插件的全部价值是「内核变了插件不用改」。失败方式也很难懂：
+    装到只装了 wheel 的机器上，报的是「缺一个你从没见过的模块」。
+    """
+    violations: list[str] = []
+    scanned = sorted(PLUGINS.glob("*/plugin.py"))
+    assert scanned, (
+        f"{PLUGINS} 下一个 plugin.py 都没有，这条测试会静默失效。"
+        "随包的插件是 git 追踪的，正常情况下一定存在；没有就说明路径写错了。"
+    )
+    for path in scanned:
+        for name in sorted(_imported_alterego_modules(path)):
+            if name == "alterego" or any(
+                name == prefix or name.startswith(f"{prefix}.")
+                for prefix in PLUGIN_ALLOWED_PREFIXES
+            ):
+                continue
+            violations.append(f"plugins/{path.parent.name}/plugin.py 导入了 {name}")
+
+    assert not violations, (
+        "插件只能 import alterego.interfaces.* 与 alterego.kernel.plugin：\n  "
+        + "\n  ".join(violations)
+        + "\n需要更多东西时，说明这段逻辑本该住在内核里，插件只负责声明。"
+    )

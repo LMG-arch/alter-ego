@@ -1,0 +1,40 @@
+# 专项学习插件清单
+#
+# 装它：把 plugins/study 拷到你的插件搜索路径下，然后在
+# config/alterego.toml 里加
+#     [plugins]
+#     enabled = ["capability.study"]
+#
+# 字段语义见 docs/design/02-plugin-api.md § 3.1。
+
+[plugin]
+id = "capability.study"
+version = "0.1.0"
+api_version = 1
+kind = "capability"
+entry = "plugin:Study"
+
+name = "专项学习"
+description = "按课程表一格一格补本行：声明这个实例会学什么、学到的东西写在哪。"
+authors = ["LMG-arch"]
+license = "MIT"
+tags = ["study", "curriculum", "vault", "capability"]
+
+enabled_by_default = false
+priority = 0
+auto_reload = true
+
+# ⚠️ 这个插件**没有 [plugin.config.*] 段**，是有意留白的，不是没写完。
+#
+# 唯一会改变学习行为的四个值都在 [study] 段里：
+#     field / rounds / recall_limit / min_score
+# `alterego study` 直接读那里，`templates/alterego.toml` 也已经带注释列好。
+# 在这里再抄一份，就是一份设置的**两个真源**：改插件这份不会改命令的行为，
+# 改命令那份又不会改插件打印的说明——两边都「看起来对」，而其中一个是谎话。
+# 同一件事 `cli_study.py` 的模块 docstring 已经为「库在哪」拒绝过一次。
+#
+# 你会看到 `alterego plugins config capability.study` 说「清单里没有声明任何
+# 配置项」——那就是它现在的真实状态，不是坏了。
+#
+# 什么时候该在这里补字段：等内核把插件实例传进组装根（`cli_study._workbench`），
+# 那时插件配置与 [study] 会合成**一个**真源，这个注释就该删掉。

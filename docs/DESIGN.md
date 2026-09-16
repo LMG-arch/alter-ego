@@ -1315,7 +1315,10 @@ alter-ego/
 │   ├── obsidian_vault/              # ✅ capability 插件：把整理结果写进 Obsidian 库
 │   │   ├── plugin.toml
 │   │   └── plugin.py
-│   └── dataset_exporter/            # ✅ capability 插件：声明「这个实例会导出训练集」
+│   ├── dataset_exporter/            # ✅ capability 插件：声明「这个实例会导出训练集」
+│   │   ├── plugin.toml
+│   │   └── plugin.py
+│   └── study/                       # ✅ capability 插件：声明「这个实例会专项学习」
 │       ├── plugin.toml
 │       └── plugin.py
 │

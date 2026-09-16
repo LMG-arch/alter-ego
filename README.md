@@ -337,51 +337,86 @@ flowchart LR
 
 ## 插件开发
 
-最小插件只需要一个文件夹和一个 TOML：
+最小插件是一个文件夹、一个清单、一个模块：
 
 ```
-plugins/my_weather/
+plugins/word_of_the_day/
 ├── plugin.toml
-└── __init__.py
+└── plugin.py
 ```
 
 ```toml
 # plugin.toml
 [plugin]
-id = "my_weather"
+id = "capability.word_of_the_day"      # 恰好一个点：<kind>.<名字>
 version = "0.1.0"
-api_version = 1
-kind = "stage"
-entry = "__init__:WeatherMoodStage"
-name = "天气影响心情"
-description = "下雨天让它心情低落一点"
+api_version = 1                        # 整数
+kind = "capability"
+entry = "plugin:WordOfTheDay"          # 模块路径相对插件根目录，不是插件 id
+name = "每日一词"
+description = "它想说点什么的时候，先想一个今天的词"
+enabled_by_default = false             # 等你点名，别自己跑起来
 
-[config]
-city = { type = "string", required = true, description = "城市名" }
-sensitivity = { type = "number", default = 0.3, min = 0, max = 1 }
+[plugin.config.topic]
+type = "string"
+default = "天气"
+description = "这个词从哪个话题里挑。"
 ```
 
 ```python
-# __init__.py
-from alterego.kernel.plugin import Plugin
-from alterego.sim.stage import Stage
+# plugin.py
+from __future__ import annotations
+
+from typing import Any
+
+from alterego.interfaces.simulation import Capability, CapabilityResult
+from alterego.kernel.plugin import Plugin, PluginContext
 
 
-class WeatherMoodStage(Plugin, Stage):
-    name = "weather_mood"
-    order = 25
-    depends_on = ("sense",)
+class WordOfTheDay(Plugin):
+    """一句「今天的词」。够小，也够真：它只碰插件能碰的东西。"""
 
-    async def run(self, ctx):
-        weather = await self._fetch_weather(ctx)
-        if weather == "rain":
-            ctx.emotion_delta["valence"] -= self.config.sensitivity
-            ctx.note("外面在下雨，有点提不起劲")
+    id: str = "capability.word_of_the_day"   # 必须与清单里的 id 一致
+
+    #: 这个能力能执行哪些意图。空集合 = 推演循环不会挑中它（随包的示例插件、
+    #: 专项学习插件都是空集合）。要真的被选中，在这里写意图名——比如
+    #: ``{"post_moment"}``，但那等于和随包的 ``capability.post`` 抢同一个意图。
+    intent_types: frozenset[str] = frozenset()
+
+    def on_load(self, ctx: PluginContext) -> None:
+        # 注册在 Capability 这个契约上，而不是自己的类上：别的插件靠
+        # 「我能干什么」找到你，而不是靠 import 你的类（那会破坏插件隔离）。
+        # 不要传 owner —— 归属自动记在本插件名下。
+        self._ctx = ctx
+        self._topic = str(ctx.config["topic"])
+        ctx.registry.register(Capability, self, name="word_of_the_day")
+        ctx.logger.info("每日一词已加载：topic=%s", self._topic)
+
+    async def execute(self, intent: Any, ctx: Any) -> CapabilityResult:
+        # ctx 是推演层的 TickContext，但插件不能 import sim/（分层红线），
+        # 所以只能标 Any。能用到的字段见 docs/design/04-simulation-loop.md。
+        return CapabilityResult(
+            ok=True,
+            summary=f"想了一个和「{self._topic}」有关的词",
+            artifacts={"topic": self._topic},
+        )
 ```
 
-重启后自动生效（或者直接 `alterego plugins reload my_weather`）。
+在 `config/alterego.toml` 里点名启用，重启后生效（或 `alterego plugins reload capability.word_of_the_day`）：
 
-完整的插件 API 参考与三个实战示例见 [`docs/design/02-plugin-api.md`](docs/design/02-plugin-api.md)。
+```toml
+[plugins]
+enabled = ["capability.word_of_the_day"]
+```
+
+**插件只能 import 两个入口**：`alterego.kernel.plugin`（内核门面）与
+`alterego.interfaces.*`（跨层契约）。这条约束有测试守着。
+
+> 📖 **写插件请照 [`docs/guide/plugin-development.md`](docs/guide/plugin-development.md) 做**——
+> 清单十八个键、九个钩子、六种「我提供什么」、错误对照表与交付清单都在里面，
+> 每一条都取自当时代码。随包可跑的实例见 `plugins/`（`example_plugin` 是模板，
+> `obsidian_vault` / `dataset_exporter` / `study` 是真实用途）。
+> 设计意图与八类插件的完整 API 见 [`docs/design/02-plugin-api.md`](docs/design/02-plugin-api.md)。
 
 ---
 

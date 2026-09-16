@@ -54,15 +54,17 @@ flowchart LR
 | G | 接入层 | CLI + Web |
 | H | 外部渠道 | 钉钉 / 企业微信 / 文件 |
 | I | NPC 社会网络与记忆增强 | `npc/` |
-| J | 多层模型路由与设置中心 | `kernel/settings.py`（**尚未实现**）、`[llm.providers/models/routing]`、设置页 |
+| J | 多层模型路由与设置中心 | **设置中心已落地**（`kernel/settings.py` + `settings_catalog_*.py` 五件套 + `alterego config`）；`[llm.providers/models/routing]` 与设置页**尚未实现** |
 | K | 可观测性 | 统计页 + 日志页 + `correlation_id` 闭环 |
 | L | 生图与形象一致性 | `interfaces/image.py`、`domain/media.py`、`image.*` 插件、相册页 |
 | M | 联网检索 | `interfaces/source.py`、`domain/untrusted.py`、`source.*` 插件、信息源页 |
 
 **每个阶段结束都必须**：测试通过 + 文档同步 + 提交 + 更新 CHANGELOG。
 
-> **当前进度（2026-09-16）**：阶段 A–C 已完成。阶段 D 的**存储层已落地**——
-> `storage/sqlite/` 下的 `connection.py` / `migrator.py` / `backend.py` 与四个迁移文件。
+> **当前进度（2026-09-16）**：阶段 A–C 已完成，E（LLM 层）、F（推演引擎）、
+> G（接入层）在这一天里也落了地。阶段 D 的**存储层已落地**——
+> `storage/sqlite/` 下的 `connection.py` / `migrator.py` / `backend.py` 与五个迁移文件
+> （`001_initial.sql` ~ `005_memory_consolidation.sql`）。
 > 领域层完成三条纵向切片：
 >
 > 1. **作息/情绪/记忆**——`domain/schedule.py`、`domain/emotion.py`、`domain/memory.py`（提交 `b5371ba`）。
@@ -73,7 +75,7 @@ flowchart LR
 >    外加 `alterego birthday {list,add,set}`。
 >    生日**不是**新机制：它是 `kind="personal"` 的节日，见 [12](12-calendar-and-conversation.md) § 17。
 >
-> 此后又落地了三条**命令组**。它们不属于阶段 D 的领域建模，做的是另一件事——
+> 此后又落地了五条**命令组**。它们不属于阶段 D 的领域建模，做的是另一件事——
 > 把已经写好、已经被测试覆盖的下层接口接到命令行上：
 >
 > 4. **数据库维护**——`alterego db {status,migrate,backup,restore}`（`cli_db.py`）。
@@ -84,7 +86,8 @@ flowchart LR
 >    `cli_vault.py`），把库里的日程与想法摊成一间 Obsidian 库，收集箱里的东西
 >    由它自己归类。见 [`plans/2026-09-16-obsidian-vault.md`](../plans/2026-09-16-obsidian-vault.md)。
 >    它的插件 `capability.obsidian_vault` 默认**关闭**且**不含业务逻辑**——
->    插件拿不到 `ctx.llm()`（v0.2.0 才有），而整理要调模型。
+>    插件只被允许 import 契约与内核门面，拿不到已装好的存储连接；
+>    而整理要读库、调模型、按目录白名单落笔，三样都在组装根那一边。
 > 7. **训练数据集**——`alterego dataset {build,list,paths,show}`（`sim/dataset.py`、
 >    `cli_dataset.py`），把对话、思考过程、工具调用整理成脱敏后的 JSONL，
 >    供本地模型微调。见 [`plans/2026-09-16-training-datasets.md`](../plans/2026-09-16-training-datasets.md)
@@ -99,16 +102,46 @@ flowchart LR
 >    与 [ADR-0012](../adr/0012-specialized-study-is-a-curriculum-not-a-prompt.md)。
 >    **它是第一个「不靠聊天也能自己变强」的机制**：课程表是算出来的，
 >    进度落在知识库里，而「学到没有」靠「下次能不能接上」验证。
+>    `capability.study` 同样默认关闭、同样**不含业务逻辑**——课程表、切词、打分、落笔
+>    全在 `domain/study.py` 与 `sim/study.py`，插件只声明「这个实例会学什么、
+>    学到的东西写在哪」，并把旋钮指回 `[study]` 段。见
+>    [ADR-0012](../adr/0012-specialized-study-is-a-curriculum-not-a-prompt.md) 决策八。
 >    ⚠️ **召回只做完了机制那半**：打分与渲染是纯函数（`study recall` 能当场验证），
->    「每轮对话自动塞进去」要等对话循环落地后才接得上。
+>    但推演循环里那个本该往外递话题的钩子（`TickContext.pending_topics`，`sim/context.py`）
+>    **至今没有任何阶段往里写过东西**——所以「每轮对话自动用到学过的东西」还是没接上。
 >
-> 至此共 2398 个测试，全局覆盖率 **96.45%**（更新于第 8 条）。
+> 与上面这些并列的还有一批**主体**工作
+> （[`plans/2026-09-16-main-body.md`](../plans/2026-09-16-main-body.md)）：
+> 它们不加新机制，只把已经写好、已经被测试覆盖的部分接到人能看见、能操作的位置上。
+> 五批——
 >
-> **领域层其余模块与 12 个 Repository 未开始**。阶段 E–M 均未开始。
+> 9. **对话主体**——`sim/` 的六阶段推演循环与 `alterego chat`（`cli_chat.py`）。
+> 10. **插件加载**——`alterego plugins {list,doctor,info,reload,reset}`（`cli_plugins.py`）。
+> 11. **设置**——设置中心五件套与 `alterego config {show,explain,get,set,schema}`（`cli_config.py`）。
+> 12. **Web UI**——`channels/web/` 与 `alterego serve`（`cli_serve.py`）。
+> 13. **接口一致性审计 + 插件开发指南**——[13](13-interface-consistency.md) 与
+>     [`guide/plugin-development.md`](../guide/plugin-development.md)。
+>
+> 至此共 3336 个测试，全局覆盖率 **96.07%**（kernel 97.05% / domain 98.48% / sim 96.42%，
+> 更新于第 13 条）。
+>
+> **领域层**：13 个模块已落地（`schedule` / `emotion` / `memory` / `calendar` /
+> `conversation` / `birthday` / `study` / `vault` / `knowledge` / `consolidation` /
+> `dataset` / `dataset_render` / `redact`），但 `interfaces/` 里仍只有六个契约——
+> 阶段 L/M 要的 `image.py` 与 `source.py` 还没写。`dataset_render` 是从
+> `dataset` 里拆出来的渲染半边（`dataset` 曾顶到 912 行，越过 900 行硬上限）。
+> **11 个 Repository Protocol 全部落地**：`storage/sqlite/` 下 11 个
+> `Sqlite*Repository`，外加一个实现 `interfaces/llm.py::UsageSink` 的
+> `SqliteUsageRepository`（它不叫 Repository，也不算在 11 个里）。
+> **阶段**：E（LLM 层）、F（推演引擎）、G（接入层，CLI + `channels/web/`）已落地；
+> H（钉钉 / 企业微信 / 文件渠道）未做；I（NPC）只有一个空的 `npc/__init__.py`；
+> J 只落了设置中心；K / L / M 未开始。
 >
 > 先做前两条切片的理由见 [`docs/plans/2026-09-15-domain-emotion-memory.md`](../plans/2026-09-15-domain-emotion-memory.md) § 1：
 > 只有情绪与记忆在文档里有**可执行的量化验收标准**（`strength_at` 验证表、`update_emotion` 四条规则），
-> 其余实体只有字段清单，等 Repository 到位再铺开成本更低。
+> 其余实体只有字段清单，当初的安排是「等 Repository 到位再铺开成本更低」。
+> ⚠️ **这个前提现在失效了**：11 个 Repository 已经到位，而其余实体**并没有**跟着铺开——
+> 它们为什么还停在字段清单上，本文档还没有答案。
 > 节日那条多了一个额外理由：它有需求里**点名的一句话**（「不要突然过渡到了节日」），
 > 而这句话可以写成一个测试（见 [12](12-calendar-and-conversation.md) § 6.4）。
 
@@ -742,3 +775,4 @@ def apply_novelty_penalty(memories: list[ScoredMemory], since: datetime) -> list
 | 2026-09-15 | v0.1.0 | 初版 | LMG-arch |
 | 2026-09-15 | v0.2.0 | 图片生成从 v0.5.0 提前到 v0.2.0，新增 v0.3.0「会自己找东西」；新增阶段 J–M；成本修正为 `2.0`/`40.0` 并补入生图与检索两条成本线（~$0.39/天）；存储补入 4 张新表与图片文件目录；新增风险 R17–R20 与 4 项监控指标 | LMG-arch |
 | 2026-09-16 | v0.3.2 | 阶段 D 补第 8 条已落地命令组「专项学习」（`alterego study`）；测试数与全局覆盖率改为实测值；[ADR-0012](../adr/0012-specialized-study-is-a-curriculum-not-a-prompt.md) | LMG-arch |
+| 2026-09-16 | v0.3.3 | 补记主体五批（对话主体 / 插件加载 / 设置 / Web UI / 接口一致性审计）为第 9–13 条，「至此」的测试数与覆盖率改为实测值（3336 / 96.07%）；「当前进度」横幅改成与落地情况相符（阶段 E/F/G 已落地、迁移文件五个、领域层 13 个模块、11 个 Repository 全部落地、H/I/J-part/K/L/M 的真实状态），并给「等 Repository 到位再铺开」这句已失效的前提打上 ⚠️；阶段 J 的「尚未实现」拆成「设置中心已落地、模型路由与设置页未实现」；专项学习召回的等待理由从「等对话循环落地」改为「`TickContext.pending_topics` 至今无人写入」 | LMG-arch |

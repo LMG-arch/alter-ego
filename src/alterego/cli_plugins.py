@@ -208,7 +208,7 @@ def _print_disabled_hint(result: DiscoveryResult, enabled: set[str]) -> None:
     _out(f'  enabled = ["{result.ids()[0]}"]')
     _out("")
     _out("没配 enabled 时，只有清单里 enabled_by_default = true 的插件会被加载；")
-    _out("随包的三个示例都是 false——示例不该在你没要求的时候自己跑起来。")
+    _out("随包的插件都是 false——插件不该在你没要求的时候自己跑起来。")
 
 
 def _print_plugins(result: DiscoveryResult, enabled: set[str]) -> None:

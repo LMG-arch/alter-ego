@@ -5,7 +5,7 @@
 > 以后会变成什么样）去看 [`docs/design/02-plugin-api.md`](../design/02-plugin-api.md)；
 > 两者矛盾时以本文档为准，并且**把矛盾报出来**（那说明有一边过时了）。
 >
-> 配套的可执行对照物：`tests/test_interfaces_consistency.py`（26 个测试）
+> 配套的可执行对照物：`tests/test_interfaces_consistency.py`（27 个测试）
 > 与 `plugins/example_plugin/`（可直接跑的最小插件）。
 
 | | |
@@ -73,8 +73,8 @@ enabled = ["capability.my_plugin"]
 ```
 
 `enabled` 里**没有**它时，只有清单里 `enabled_by_default = true` 的插件会加载。
-随包的三个示例都是 `false`——**示例不该在你没要求的时候自己跑起来**，
-你自己的插件也应该保持 `false`。
+随包的四个插件（`example` / `obsidian_vault` / `dataset_exporter` / `study`）都是 `false`——
+**插件不该在你没要求的时候自己跑起来**，你自己的插件也应该保持 `false`。
 
 ---
 
@@ -164,6 +164,34 @@ max_length = 40
 > ⚠️ **`object` 不支持 `schema`。** 写 `schema = {...}` 会报「v1 尚不支持嵌套的
 > object.schema」。嵌套结构请拆成多个平铺字段，或用 `type = "string"` 存 JSON 字符串。
 > （这与 [`02-plugin-api.md`](../design/02-plugin-api.md) § 3.2 的旧描述不同，以这里为准。）
+
+#### 2.4.1 什么时候**不该**有配置项
+
+**一个插件可以有零个 `[plugin.config.*]`，这不是没写完。** 随包的
+`capability.study`（专项学习）就是零个，与它同形的还有 `capability.dataset_exporter`。
+
+判断标准只有一条：**这个旋钮改变的是「插件自己的行为」吗？**
+
+| 情况 | 该不该声明在插件里 |
+| --- | --- |
+| 只有你的插件读它 | ✅ 声明在这儿 |
+| 内核或某条命令已经读它，你的插件只是「知道有这回事」 | ❌ **不要搬过来** |
+| 声明了但没人读 | ❌ 声明它等于对用户撒谎 |
+
+第二种必须有意识地躲开。举例：会改变专项学习行为的四个值
+（`field` / `rounds` / `recall_limit` / `min_score`）住在 `[study]` 段里，
+由 `alterego study` 直接读。在 `[plugin.config.*]` 里抄一份，
+就得到**同一件事的两个真源**：改插件这份不会改命令的行为，改命令那份又不会改
+插件打印的说明——两边都「看起来对」，而其中一个是谎话。
+
+代价要照实说：`alterego plugins config capability.study` 会说
+「清单里没有声明任何配置项」。**那就是它现在的真实状态**，
+所以请把它写进 `plugin.toml` 的注释与插件的 `README.md`，
+否则下一个读代码的人会以为你没写完。
+
+> 反过来：如果「插件不声明就没人能改它的行为」，那多半说明这件事本来
+> 就该在内核里有一个设置项（见 [`10-settings-center.md`](../design/10-settings-center.md)），
+> 而不是在插件里再存一份。
 
 ### 2.5 配置值的来源与优先级
 
@@ -582,11 +610,12 @@ search_paths = ["plugins", "~/.alterego/plugins"]
 
 **每个插件一个目录**，`plugin.toml` 直接放在目录里（不是它的子目录）。
 
-> ⚠️ **目录里有 `.py` 就必须同时有 `__init__.py`。**
-> 这是架构检查的第 23 项（`scripts/check_architecture.sh`）：任何含 `.py` 的目录
-> 都必须有 `__init__.py`，插件目录也算在内。
-> 它的实际影响是「插件内部的 `import helpers` 能不能找到自己的邻居」——
-> 缺了它报错会发生在 import 别的模块的时候，很难查。
+> **插件目录里不需要 `__init__.py`。** 架构检查里「含 `.py` 的目录必须有
+> `__init__.py`」那一项（`scripts/check_architecture.sh` 第 23 项）只扫
+> `src/alterego/`，**`plugins/` 不在范围里**——随包的四个插件目录都没有那个文件。
+> 内核用 `_install_package()` 把插件目录注册成 `alterego_plugins.<id>` 这个包，
+> `__path__` 直接指向目录本身，所以插件内部写 `import helpers` 照样找得到邻居。
+> 加一个 `__init__.py` 也不会出错（内核不执行它），只是没有必要。
 
 ### 9.2 pip 包（entry point）
 
@@ -669,7 +698,7 @@ def test_my_plugin_loads(tmp_path):
 `tests/test_kernel_manager.py` 里有四个可以直接抄的 helper：
 `install()`（写一个插件目录）、`make_config()`、`make_manager()`、`collect_events()`。
 
-### 11.1 值得写的四类测试
+### 11.1 值得写的五类测试
 
 | 测什么 | 怎么写 |
 | --- | --- |
@@ -677,6 +706,11 @@ def test_my_plugin_loads(tmp_path):
 | 服务注册了 | `registry.get(Capability, name="my_plugin")` 能取到 |
 | 钩子被调了 | `collect_events(bus)` 收 `tick.completed`，断言你的副作用 |
 | 状态机走对了 | 见 `tests/test_kernel_manager.py::TestStatusSteps` 的四个测试 |
+| 只依赖那两个入口 | `tests/test_interfaces_consistency.py::test_plugins_only_depend_on_the_two_allowed_entries`——它扫 `plugins/*/plugin.py` 的 AST，把违规的 import 点名列出来 |
+
+最后一条**不用你自己写**：它是仓级的，随包插件与你的插件一起被扫。
+你只要知道它存在、以及它为什么存在——插件 import 了 `alterego.sim` 就等
+没有把自己焊在内核内部结构上，而插件的全部价值是「内核变了插件不用改」。
 
 ### 11.2 两个容易踩的坑
 
@@ -753,10 +787,11 @@ alterego config explain <配置键>          # 「它是什么、改了会怎样
 - [ ] `enabled_by_default = false`（除非你确实想让它默认跑）
 - [ ] 每个 `[plugin.config.*]` 都有 `description`
 - [ ] 密钥类字段标了 `secret = true`
+- [ ] **如果真的一个配置项都不需要**，在 `plugin.toml` 的注释与 `README.md` 里写明「这是有意的」（见 § 2.4.1）
+- [ ] 只 import 了 `alterego.interfaces.*` 与 `alterego.kernel.plugin`（见 § 11.1）
 - [ ] `on_stop` 幂等
 - [ ] 订阅的事件都有实际处理逻辑
 - [ ] 跨重启要留的东西**没有**放在 `ctx.state`（见 § 8）
-- [ ] 目录里有 `__init__.py`
 - [ ] `alterego plugins doctor` 全绿
 - [ ] 有测试覆盖「装得上 / 注册了 / 钩子被调了」
 

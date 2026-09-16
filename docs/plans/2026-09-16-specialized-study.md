@@ -247,7 +247,7 @@ alterego study {next,plan,recall,status}
 
 | 不做 | 为什么 |
 | --- | --- |
-| 做成 `plugins/study/` | 插件拿不到「已装好的网关 + 只读内容连接」，会撞红线（ADR-0012 决策八） |
+| 把业务逻辑做成 `plugins/study/` | 插件只被允许 import 契约与内核门面，拿不到「已装好的存储连接」（ADR-0012 决策八） |
 | 常驻调度器到点自动学 | `sim/` 主体还没跑起来；现在由 `alterego study next` 触发 |
 | 自动把召回塞进每一轮对话 | 调用点在 `sim/` 的对话流程里，本批次只把 `recall()` 这个机制备好 |
 | 每个领域独立的子目录 | 文件名已经带领域名；多一层目录只会让 Obsidian 的图更难读 |
@@ -311,6 +311,6 @@ python -m pytest tests/test_domain_study.py tests/test_sim_study.py tests/test_c
 | 计划 | 实际 | 为什么改 |
 | --- | --- | --- |
 | 用 `_STOPWORDS` 挡虚词（第一版打算靠 `min_score`） | **两个都做，但主责是虚词表** | 一开始决定「保持粗行为 + 用门槛」并有测试钉住；写完测试发现门槛拦不住它——`什么` 撞的是**标题**（3.0 分），比门槛高。于是补上虚词表，并把那条测试反过来说 |
-| `capability.study` 插件 | 第六个组装根 `cli_study.py` | 详见 ADR-0012 决策八 |
+| `capability.study` 插件 | 第六个组装根 `cli_study.py`，**外加一个只声明的 `plugins/study/`** | 这是两件事：业务逻辑不能住进插件（红线），但这个功能该有一条自己的清单项——详见 ADR-0012 决策八 |
 | `[study]` 段放进 `kernel/config.py` | 卫星模块 `kernel/config_study.py` | `config.py` 898 行，红线是 900 |
 | `rounds` 表示轮数 | 表示**格数** | 一次学一格才叫「随着时间推移」；名字留下了疤，写进了 `config_study.py` 的 docstring |

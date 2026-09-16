@@ -45,14 +45,15 @@
 | 2 | **不用全局 `random`**（用 `ctx.rng`） | 行为不可重现 | 红线组 3 |
 | 3 | **LLM 调用必经 `ctx.llm()`** | 成本漏报、预算失效 | 红线组 7 |
 | 4 | **不自行构造 logging handler** | 密钥脱敏失效 | 红线组 5 |
-| 5 | **新增配置项必须写中文 docstring 说明「改了会怎样」** | 用户看到无说明的开关 | ⚠️ 暂无自动化（见下） |
+| 5 | **新增配置项必须写中文 docstring 说明「改了会怎样」** | 用户看到无说明的开关 | `tests/test_settings_metadata.py`（见下） |
 
-> ⚠️ 第 5 条目前**只能靠人守**。完整的展示元数据机制（`Setting(description=..., effect=...)`
-> + `tests/test_settings_metadata.py`）是 v0.2.0 的设置中心，**尚未实现**——
-> [`docs/design/10-settings-center.md`](docs/design/10-settings-center.md)，
+> ✅ 第 5 条**现在有人守了**。完整的展示元数据机制（`Setting(description=..., effect=...)`
+> + `tests/test_settings_metadata.py`，26 个测试函数 / 35 个用例）已在设置中心里落地——
+> [`docs/design/10-settings-center.md`](docs/design/10-settings-center.md)、
 > [ADR-0010](docs/adr/0010-every-setting-carries-display-metadata.md)。
-> 今天能自动化的只有「模板覆盖了每个键」（`tests/test_kernel_config.py`）。
-> 按照上面那条元规则，**这一条现在还不算规则**——把机制做出来它才算。
+> 两道自动化门禁：模板覆盖每个键（`tests/test_kernel_config.py`）与元数据齐全
+> （`tests/test_settings_metadata.py`）。
+> 按照下面那条元规则，**这一条已经从「靠人记」升级成了真正的规则**。
 
 ### 一条元规则
 
@@ -342,14 +343,16 @@ feat(plugin)!: 插件清单必填 api_version
 这四个数由 [`scripts/check_coverage.py`](scripts/check_coverage.py) 按包核对，跑在 CI 的测试作业里。
 coverage 自带的 `--cov-fail-under` 只能表达一个全局下限，所以复用同一次 `--cov-report=json` 的产物自己算。
 
-### 强制测试：设置元数据（**v0.2.0 · 尚未实现**）
+### 强制测试：设置元数据（**已落地 · `tests/test_settings_metadata.py`**）
 
 **每个配置项都必须能向用户说清楚「是什么」与「改了会怎样」。**
 
-⚠️ **下面这三条断言、以及它们所在的 `tests/test_settings_metadata.py`，现在都不存在。**
-列出它们是 v0.2.0 的目标形态（[`10-settings-center.md`](docs/design/10-settings-center.md)），
-不是可以照着跑的门禁。在机制落地之前，新增配置项的强制要求只有
-「中文 docstring + `templates/alterego.toml` 里有一行带注释的默认值」。
+下面三条断言（以及同文件里另外 23 个）**已经跑在门禁里**：26 个测试函数 /
+35 个用例，落在 `tests/test_settings_metadata.py`。机制本身见
+[`10-settings-center.md`](docs/design/10-settings-center.md) 与
+[ADR-0010](docs/adr/0010-every-setting-carries-display-metadata.md)。
+除这三条之外，还有一条值得单独提醒：**元数据里的 `default` 必须与配置类的默认值逐字一致**
+（`Path("data")` 而不是 `"data"`），否则 `test_every_default_matches_the_dataclass` 会红。
 
 ```python
 def test_every_config_field_has_metadata() -> None:
@@ -559,8 +562,9 @@ pytest 版存在的理由是：bash 脚本在 Windows 上不一定可用，而�
 - [ ] 新功能有测试；bug 修复有复现测试
 - [ ] `python scripts/check_coverage.py` 通过
 - [ ] **相关设计文档已同步更新**
-- [ ] **新增配置项已补中文 docstring，并在 `templates/alterego.toml` 里补了带注释的默认值**
-      （展示元数据机制属 v0.2.0，尚未实现）
+- [ ] **新增配置项已补中文 docstring、已在 `templates/alterego.toml` 里补了带注释的默认值，
+      并已在 `kernel/settings_catalog_*.py` 里注册展示元数据**
+      （`tests/test_settings_metadata.py` 与 `tests/test_kernel_config.py` 会查）
 - [ ] **新增可观测记录已带 `correlation_id`**
 - [ ] `CHANGELOG.md` 的 `[Unreleased]` 已更新
 - [ ] 提交信息符合 Conventional Commits

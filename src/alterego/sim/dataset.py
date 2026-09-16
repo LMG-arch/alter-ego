@@ -54,11 +54,10 @@ from alterego.domain.dataset import (
     build_reasoning_samples,
     build_tooluse_samples,
     redact_samples,
-    render_manifest,
-    render_readme,
     render_sample,
     to_jsonl,
 )
+from alterego.domain.dataset_render import render_manifest, render_readme
 from alterego.domain.redact import RedactionRule, build_rules, digest
 from alterego.interfaces.repository import DatasetSourceRepository, PersonaRecord
 
@@ -107,7 +106,12 @@ _NO_SAMPLES: Final[str] = "取到 {rows} 行，但一行都没拼成样本——
 _NO_CHOSEN_INTENT: Final[str] = (
     "取到 {rows} 条行为，但没有一条挂在记下了「选中意图」的 tick 上——工具调用的「请求」拼不出来"
 )
-_UPSTREAM_PENDING: Final[str] = "上游还没落地：推演引擎不写入 tick_log，这一类必然是空的"
+_UPSTREAM_PENDING: Final[str] = "上游还没落地：这张表还没有写入者，这一类必然是空的"
+"""给 ``upstream_ready=False`` 的数据集用。
+
+2026-09-16 三类数据集全为 ``True``，所以这句话**今天不会出现在任何一次导出里**。
+留着是因为字段本身是给阶段 L/M（图像、信息源）那一类新数据集设计的。
+"""
 
 
 # ── 装配 ────────────────────────────────────────────────────

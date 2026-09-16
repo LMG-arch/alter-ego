@@ -332,7 +332,7 @@ SETTINGS: Final[tuple[Setting, ...]] = (
         kind=SettingKind.LIST,
         default=(Path("plugins"),),
         group="插件",
-        effect="去掉 plugins 这一项之后随包的三个示例插件全部消失，alterego plugins list 会说一个都没找到。",
+        effect="去掉 plugins 这一项之后随包的插件全部消失，alterego plugins list 会说一个都没发现。",
         requires_restart=True,
     ),
     Setting(

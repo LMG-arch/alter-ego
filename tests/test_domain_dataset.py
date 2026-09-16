@@ -33,12 +33,11 @@ from alterego.domain.dataset import (
     build_reasoning_samples,
     build_tooluse_samples,
     merge_adjacent,
-    render_manifest,
-    render_readme,
     render_sample,
     spec_for,
     to_jsonl,
 )
+from alterego.domain.dataset_render import render_manifest, render_readme
 
 
 def _message(
@@ -275,13 +274,25 @@ def test_tooluse_requires_a_result() -> None:
     """没有描述、没有内心的行为行导不出东西。"""
     blank = _activity("a1", description="", inner_voice="", location="")
     assert build_tooluse_samples([blank]) == []
-
-
-def test_tooluse_is_empty_today_and_that_is_honest() -> None:
-    """上游没实现之前，这个数据集必须是 0 条，不能有假数据。"""
-    spec = next(item for item in DATASET_SPECS if item.name == "tooluse")
-    assert spec.upstream_ready is False
     assert build_tooluse_samples([]) == []
+
+
+def test_every_dataset_has_a_writer_today() -> None:
+    """三类源表的写入者都已实现，所以不该再用「上游还没落地」解释空结果。
+
+    这是一道**提醒**，不是不变式：哪天为新数据集把某个 ``upstream_ready``
+    改回 ``False``，这里会红——那时要同时去改 ``sim/dataset.py`` 的
+    ``_UPSTREAM_PENDING`` 文案与 ``docs/adr/0011-*.md``，而不是只改这里。
+
+    之前这条断言写的是反的（``tooluse`` 为 ``False``，理由「``sim/`` 尚未实现」），
+    在推演引擎落地之后没人回改，于是 CLI 会把「你时间范围开小了」统报成
+    「上游还没落地」。
+    """
+    assert {spec.name: spec.upstream_ready for spec in DATASET_SPECS} == {
+        "conversation": True,
+        "reasoning": True,
+        "tooluse": True,
+    }
 
 
 def test_specs_cover_exactly_the_three_datasets() -> None:

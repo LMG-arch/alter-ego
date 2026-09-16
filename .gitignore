@@ -161,6 +161,7 @@ plugins/*/
 !plugins/example_*/
 !plugins/obsidian_vault/
 !plugins/dataset_exporter/
+!plugins/study/
 
 # 临时文件
 tmp/
