@@ -31,6 +31,7 @@ from alterego.interfaces.repository import (
     ScheduleRecord,
     SocialPostRecord,
     SourceRecord,
+    UsageTotal,
 )
 
 
@@ -46,6 +47,7 @@ __all__ = [
     "post_view",
     "schedule_view",
     "source_view",
+    "usage_total_view",
 ]
 
 
@@ -173,6 +175,29 @@ def budget_view(usage: BudgetUsage) -> dict[str, Any]:
         "circuit_until": _iso(usage.circuit_until),
         "last_message_at": _iso(usage.last_message_at),
         "last_post_at": _iso(usage.last_post_at),
+    }
+
+
+def usage_total_view(total: UsageTotal) -> dict[str, Any]:
+    """一格 token 用量（按天 / 按用途 / 按模型分好的那一格）。
+
+    **没有金额字段，一行都没有。** 账本里的 ``cost_usd`` 恒为 0——本项目还没有
+    价目表（见 ``SqliteUsageRepository`` 的类文档）。把它序列化成 ``0.0``
+    再让前端乘上一个猜出来的单价，就是设计文档里点名的那个错误：
+    「未配置单价时显示「—」而不是「$0.00」」。要加金额，先有价目表。
+
+    ``total_tokens`` 由服务端算好给出，不让前端拿两个字段相加：
+    它是接口的一部分（``LLMUsage.total_tokens`` 也是这么定义的），
+    在前端再算一次等于把口径复制到第二个地方。
+    """
+    return {
+        "key": total.key,
+        "calls": total.calls,
+        "failed": total.failed,
+        "succeeded": total.calls - total.failed,
+        "prompt_tokens": total.prompt_tokens,
+        "completion_tokens": total.completion_tokens,
+        "total_tokens": total.total_tokens,
     }
 
 

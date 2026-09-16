@@ -1,6 +1,6 @@
 # 05 · 接入层与外部渠道
 
-> 上级文档：[DESIGN.md](../DESIGN.md) · 版本 v0.1.0
+> 上级文档：[DESIGN.md](../DESIGN.md) · 版本 v0.1.5
 > 本文档描述用户如何与 Agent 交互：本地 Web 界面、CLI、以及各类 IM 渠道。面向集成开发者。
 
 ---
@@ -367,7 +367,7 @@ page_size = 50                               # 每页默认条数的基准
 ⚠️ `auth_password` **只写引用，不写明文**。这份配置会进 git，写明文等于
 把家门钥匙提交进版本库——那是一次撤销不了的泄漏。
 
-**实现状态（v0.1.2）**：这一节下面的 API 表是**设计目标**，下面这张表才是**现在能用的**。
+**实现状态（v0.1.5）**：这一节下面的 API 表是**设计目标**，下面这张表才是**现在能用的**。
 两者不一致时以这张表为准。
 
 | 已经能用 | 说明 |
@@ -380,6 +380,7 @@ page_size = 50                               # 每页默认条数的基准
 | `GET /api/status` · `GET /api/emotion?days=` | 当前状态与情绪 |
 | `GET /api/thoughts?limit=&days=` · `GET /api/memory?limit=&offset=&kind=` | 内心与记忆 |
 | `GET /api/stats?days=` · `GET /api/budget?day=` · `GET /api/sources?limit=&offset=` | 统计、预算、信息源 |
+| `GET /api/stats/tokens?days=&group=day\|purpose\|model` | token 消耗（窗口默认 1 天，分组默认用途） |
 | `GET /api/settings/schema` · `GET /api/settings` · `POST /api/settings` | 全部设置 |
 | `GET /api/plugins` · `POST /api/plugins/{id}/reload` | 插件列表与重载 |
 
@@ -391,10 +392,10 @@ page_size = 50                               # 每页默认条数的基准
 | `/api/logs*`、`/api/trace/{id}` | 观测通道还没接进 Web |
 | `/api/album*`、`/api/media/{id}` | 相册（形象系统）未落地 |
 | `/api/sources/dropped` · `/api/sources/interests` | 信息源只有「留存的」这一个视图 |
-| `/api/stats/tokens` · `/api/stats/projection` · `/api/settings/reset` | 聚合视图与重置尚未实现 |
+| `/api/stats/projection` · `/api/settings/reset` | 聚合视图与重置尚未实现 |
 | 关系网 / 相册 / 日志 三个标签 | 上面这些路由没有，标签也就没做（13 个设计标签里落了 10 个） |
 
-**三条与设计稿不同的约定**（写在这里，免得下次照着设计稿改回去）：
+**四条与设计稿不同的约定**（写在这里，免得下次照着设计稿改回去）：
 
 1. **分页回 `has_more`，不回 `total`。** 仓储只有 `list_recent(limit=)`，
    数出来的「总数」其实是「这次取了几条」——用户会看到「共 30 条」翻一页变
@@ -407,6 +408,12 @@ page_size = 50                               # 每页默认条数的基准
 3. **方向词两套并存，不要互相翻译。** `MessageRecord.direction` 是
    `"inbound"` / `"outbound"`；`Channel.direction` 是 `frozenset({"in", "out"})`。
    HTTP 层按前一套说话。
+4. **`/api/stats/tokens` 与 `/api/stats` 各自带一个窗口。** 前者默认 1 天，
+   后者固定 30 天：`/api/stats` 是「打开页面第一眼」的那一屏，它的数字可以被
+   `truncated` 截断；token 那一页要解释账单，所以它**在 SQL 里真的分组**，
+   数出来的是准的。两者共用一个 `days` 参数反而会让「总览」也跟着变。
+   这一页还刻意**没有金额字段**——`cost_usd` 恒为 0（没有价目表），
+   给出 `0.0` 只会被画成 `$0.00`，而那是这一页唯一会主动误导的写法。
 
 **API 设计**（设计目标，未全做；现状见上表）：
 
@@ -427,7 +434,7 @@ page_size = 50                               # 每页默认条数的基准
 | `GET` | `/api/thoughts?limit=` | **内心想法**（含被拦截的意图） |
 | `GET` | `/api/tick/{tick_id}` | 某次 tick 的完整解释 |
 | `GET` | `/api/stats` | 统计与成本（总览） |
-| `GET` | `/api/stats/tokens?days=1&group=day|purpose|model` | **Token 与成本聚合**（读 `v_cost_daily`） |
+| `GET` | `/api/stats/tokens?days=1&group=day|purpose|model` | **Token 消耗聚合**（读 `llm_usage`，**不是** `v_cost_daily`——那个视图没有 token 列） |
 | `GET` | `/api/stats/projection` | 按当前速率的外推预测 |
 | `GET` | `/api/budget` | 当前预算占用与降级状态（含徽章文案） |
 | `GET` | `/api/logs?level=&q=&correlation_id=&before=&limit=` | 日志历史查询 |
@@ -1906,6 +1913,7 @@ v2 新增渠道**不应影响 v1 用户**：
 | 日期 | 版本 | 变更 | 作者 |
 | --- | --- | --- | --- |
 | 2026-09-15 | v0.1.0 | 初版 | LMG-arch |
+| 2026-09-16 | v0.1.5 | § 3.3 实现 `/api/stats/tokens`（`?days=&group=`，默认 1 天 / 按用途），把它从「设计里有、现在还没有」挪进可用表，并补第 4 条与设计稿不同的约定：两个统计口各带一个窗口、这一页刻意没有金额字段；API 表的取数口从 `v_cost_daily` 改成 `llm_usage`（那个视图没有 token 列） | LMG-arch |
 | 2026-09-16 | v0.1.4 | § 3.3 补「现在」的口径：这一层取时间必经 `WebDeps.now` / `WebDeps.today`（读 `core.timezone`），不得用进程时区——本地与配置恰好同区所以看不出问题，换台 UTC 的机器就差一天 | LMG-arch |
 | 2026-09-16 | v0.1.3 | § 7.4 新增「桌面窗口：同一个界面，换一层壳」——记下「为什么是 `--app=` 而不是自己画一个窗口」以及 `serve.listening` 这条广播的必要性 | LMG-arch |
 | 2026-09-16 | v0.1.2 | Web 渠道落地：配置段从 `[channels.web]` 挪到顶层 `[web]`（`kernel/config_web.py`）；§ 3.3 补「实现状态」与三条与设计稿不同的约定（`has_more` / `PageLimit` / 两套方向词）；§ 7.1 换成真实的开场白；§ 7.2 的 `auth_mode`/`auth_token` 改成 `auth`/`auth_password`，去掉不存在的 `ALTEREGO_ALLOW_INSECURE` 后门 | LMG-arch |

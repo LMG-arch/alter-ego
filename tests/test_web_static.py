@@ -226,3 +226,51 @@ def test_a_secret_row_is_checked_before_the_not_editable_branch() -> None:
     assert secret_at < nested_at, (
         f"{JS.name} 里密钥行落在了「不是标量」那条分支后面，密钥行会被当成嵌套的表显示"
     )
+
+
+# ── token 消耗：统计页 ───────────────────────────────────────────
+#
+# 这一块只做两件接口测不到的事：确认页面真的去读了那个接口，以及确认它
+# **没有**把账本里恒为 0 的 ``cost_usd`` 画成一个金额。后者是这一页唯一
+# 会主动误导的写法——``$0.00`` 看起来像「不花钱」。
+
+_TOKEN_API = "/api/stats/tokens"
+_DOLLAR_AMOUNT = re.compile(r"\$\s?\d")
+
+
+def test_the_stats_page_reads_the_token_endpoint() -> None:
+    js = _read(JS)
+
+    assert _TOKEN_API in js, f"{JS.name} 没有调 {_TOKEN_API}——统计页上不会出现任何 token 数字"
+    assert "data-tokens" in js, f"{JS.name} 里没有切换窗口/分组的把手，用户只能看默认那一档"
+
+
+def test_the_token_block_never_invents_money() -> None:
+    """账本里的 ``cost_usd`` 恒为 0（还没有价目表），所以这一页一个金额都没有。
+
+    「未配置单价时显示『—』而不是『$0.00』」是设计文档里的原话，而它唯一
+    会破的地方就是前端——接口那一侧压根没有金额字段可给。
+    """
+    js = _read(JS)
+
+    assert not _DOLLAR_AMOUNT.search(js), (
+        f"{JS.name} 里出现了形如 $0.00 的金额——账本里记的是 0，画出来像「不花钱」"
+    )
+    assert "cost_usd" not in js, (
+        f"{JS.name} 去读了 cost_usd——那一列在本项目里恒为 0，读它只会读出误会"
+    )
+
+
+def test_the_token_window_and_group_survive_a_reload() -> None:
+    """两个选择器把值写回地址栏，刷新之后还是刚才看的那一屏。
+
+    只存在内存里的症状是：用户切到「按模型」看完，按一下 F5 弹回默认值，
+    而他刚才看到的那些数**看起来**是假的。
+    """
+    js = _read(JS)
+
+    assert re.search(r"data-tokens\b", js), f"{JS.name} 里没有 data-tokens 把手"
+    assert "hookStats" in js, f"{JS.name} 渲染统计页之后没有挂任何事件，选择器点不动"
+    assert re.search(r"history\.replaceState\(", js), (
+        f"{JS.name} 不把选择写回地址栏——刷新一下就会弹回默认值"
+    )

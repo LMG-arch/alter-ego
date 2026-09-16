@@ -80,6 +80,7 @@ from alterego.storage.sqlite import (
     SqliteSourceRepository,
     SqliteStorageBackend,
     SqliteTickLogRepository,
+    SqliteUsageRepository,
 )
 
 
@@ -290,6 +291,11 @@ def _deps(
         schedules=SqliteScheduleRepository(conn),
         tick_logs=SqliteTickLogRepository(conn),
         sources=SqliteSourceRepository(conn),
+        # 统计页要的 token 账本。写的那一端在引擎里（网关自己造一个
+        # ``UsageSink``），这里是**只读口**：``totals()`` 只查不写，
+        # 所以构造时绑的 persona_id 与不绑 tick_id 都不影响它——
+        # 读的时候 persona_id 由路由传（见 ``SqliteUsageRepository.totals``）。
+        usages=SqliteUsageRepository(conn, persona_id=persona.id),
     )
 
 

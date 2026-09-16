@@ -138,10 +138,15 @@ grep -rn 'provide_channel\|provide_capability\|provide_llm' src/
 漏在 `__all__` 外面，等于逼插件作者去翻源码才能写对类型注解。
 
 同时把 `interfaces/__init__.py` 改为**全部转发**：六个子模块的公开名字一个不漏
-（44 个，channels 7 + common 1 + llm 6 + repository 20 + simulation 9 + storage 1）。
+（47 个，channels 7 + common 1 + llm 6 + repository 23 + simulation 9 + storage 1）。
 「部分转发」比「完全不转发」更坏——`from alterego.interfaces import PersonaRecord`
 报 `ImportError` 的人会以为是自己写错了，而正确的结论只是「这个包没导它」。
 要么全导，要么一个都不导。
+
+> 数字从 44 涨到 47 是在统计页 token 消耗那次：`repository.py` 新增了
+> `UsageGroup` / `UsageRepository` / `UsageTotal`。门面漏加这三个名字时
+> `tests/test_interfaces_consistency.py::test_package_all_is_the_union_of_submodule_alls`
+> 立刻变红——这正是这一节把它写成一条断言的价值。
 
 ### 3.2 拒绝拼错的清单键（#22）
 

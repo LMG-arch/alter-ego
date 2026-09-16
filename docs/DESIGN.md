@@ -1271,7 +1271,9 @@ alter-ego/
 │   │       ├── connection.py        # ✅ 连接、PRAGMA、事务、完整性检查、备份
 │   │       ├── migrator.py          # ✅ 发现/校验/应用迁移，事务边界与版本记账归它
 │   │       ├── backend.py           # ✅ StorageBackend 契约实现 + 版本兼容检查
-│   │       ├── repositories.py      # ✅ 仓储 Protocol 的 SQLite 实现
+│   │       ├── repositories.py      # ✅ 仓储 Protocol 的 SQLite 实现（主体）
+│   │       ├── engine_repositories.py  # ✅ 从上面拆出的推演引擎仓储（900 行上限）
+│   │       ├── usage_repository.py  # ✅ 从上面拆出的用量账本（900 行上限）
 │   │       ├── migrations/          # ✅ 极完整的 schema 都在这里（001_initial.sql … 005_memory_consolidation.sql）
 │   │       └── repo/                # 拆分后的按表仓储（尚未拆分，现在是上面那个 repositories.py）
 │   │           ├── persona_repo.py

@@ -1,4 +1,4 @@
-"""SQLite 仓储实现：记忆、行为日志、用量账本、人设、日程、搜集到的信息、训练数据集的源。
+"""SQLite 仓储实现：记忆、行为日志、人设、日程、搜集到的信息、训练数据集的源。
 
 **这里只做「一行 ↔ 一个对象」**：SQL、JSON 序列化、往返映射都在这里；
 业务规则（重要度怎么衰减、什么时候该拦下一条主动消息）在 `domain/` 与 `sim/`
@@ -21,10 +21,16 @@
 它返回的是 ``domain.dataset`` 的行，而不是 ``interfaces.repository`` 的
 ``*Record``——理由写在那边的契约文档里。
 
-最后一段（会话 / 预算 / 推演日志 / 动态）是**推演引擎专用的写口**，2026-09-16 加上，
-同月拆去 :mod:`alterego.storage.sqlite.engine_repositories`——那一边的模块文档解释了
-为什么按「谁在写」而不是「哪张表」切。拆分同时也把这个文件从 1133 行拉回
-``AGENTS.md`` § 5 规定的 900 行以内。
+**这个文件只放「读的人会用的仓储」。** 换出去的两块各有一条自己的分界线：
+
+- 推演引擎专用的写口（会话 / 预算 / 推演日志 / 动态）在
+  :mod:`alterego.storage.sqlite.engine_repositories`，那边按「**谁在写**」分；
+- 用量账本（``llm_usage`` 的两个方向）在
+  :mod:`alterego.storage.sqlite.usage_repository`。它既不是只读也不是引擎专用，
+  但它是唯一**一个类管读写两边**的仓储，单独放着更好找。
+
+三次拆分都是同一个理由：``AGENTS.md`` § 5 的 900 行上限。先例见那边的模块文档——
+「按体量拆」不是手法，而是「一个文件里塞了不止一个职责」的征兆。
 
 依据: docs/design/03-data-model.md § 7、docs/plans/2026-09-16-main-body.md § 4
 """
@@ -33,14 +39,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import uuid
 from collections.abc import Iterator, Sequence
 from datetime import UTC, date, datetime
 from typing import Any, cast
 
 from alterego.domain.dataset import ActivityRow, MessageRow, TickRow
 from alterego.domain.memory import Memory, MemoryKind, MemorySource
-from alterego.interfaces.llm import LLMUsage
 from alterego.interfaces.repository import (
     ActivityRecord,
     PersonaRecord,
@@ -58,7 +62,6 @@ __all__ = [
     "SqlitePersonaRepository",
     "SqliteScheduleRepository",
     "SqliteSourceRepository",
-    "SqliteUsageRepository",
 ]
 
 
@@ -92,14 +95,6 @@ INSERT INTO activity_log (
     detail_json, location, outbound, outbound_ref, suppressed_intent,
     suppress_reason, inner_voice, duration_minutes, tick_id, started_at, ended_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-"""
-
-_LLM_USAGE_INSERT = """
-INSERT INTO llm_usage (
-    id, persona_id, tick_id, purpose, tier, provider_id, model,
-    prompt_tokens, completion_tokens, total_tokens, latency_ms,
-    cost_usd, cache_hit, retry_count, success, error, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 
@@ -423,64 +418,6 @@ class SqliteActivityRepository:
         """
         for record in records:
             self._conn.execute(_ACTIVITY_INSERT, _activity_params(record))
-
-
-# ── 用量账本 ────────────────────────────────────────────────
-
-
-class SqliteUsageRepository:
-    """把 :class:`~alterego.interfaces.llm.LLMUsage` 写进 ``llm_usage``。
-
-    结构上满足 :class:`~alterego.interfaces.llm.UsageSink`，所以网关不需要
-    认识这个类名，也不必 import 存储层。
-
-    ``persona_id`` 与 ``tick_id`` 在**构造时**绑定，因为一次 tick 造一个 sink，
-    而 ``record()`` 的签名里没有位置放它们。
-
-    ``cost_usd`` 目前恒为 0：本项目还没有价目表，记一个猜出来的数字比记 0
-    更糟——猜的数字会被当真。
-    """
-
-    __slots__ = ("_conn", "_persona_id", "_tick_id")
-
-    def __init__(
-        self, conn: SqliteConnection, *, persona_id: str, tick_id: str | None = None
-    ) -> None:
-        self._conn = conn
-        self._persona_id = persona_id
-        self._tick_id = tick_id
-
-    def record(self, usage: LLMUsage) -> None:
-        self.record_many([usage])
-
-    def record_many(self, usages: list[LLMUsage]) -> None:
-        if not usages:
-            return
-        self._conn.raw.executemany(
-            _LLM_USAGE_INSERT,
-            [self._params(usage) for usage in usages],
-        )
-
-    def _params(self, usage: LLMUsage) -> tuple[Any, ...]:
-        return (
-            uuid.uuid4().hex,
-            self._persona_id,
-            self._tick_id,
-            usage.purpose,
-            usage.tier,
-            usage.provider_id,
-            usage.model,
-            int(usage.prompt_tokens),
-            int(usage.completion_tokens),
-            int(usage.total_tokens),
-            int(usage.latency_ms),
-            0.0,  # cost_usd：见类文档
-            0,  # cache_hit：本批次还没有缓存层
-            int(usage.retry_count),
-            1 if usage.success else 0,
-            usage.error,
-            _format_dt(usage.at) if usage.at is not None else _now_iso(),
-        )
 
 
 # ── 人设 ────────────────────────────────────────────────────

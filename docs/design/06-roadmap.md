@@ -129,8 +129,8 @@ flowchart LR
 >     插件读不到，所以 `cli_serve` 在端口真的绑上之后广播 `serve.listening`。
 >     见 [`guide/plugin-development.md`](../guide/plugin-development.md) § 2.4.2。
 >
-> 至此共 3423 个测试，全局覆盖率 **96.04%**（kernel 97.05% / domain 98.48% / sim 96.42%，
-> 更新于第 14 条）。
+> 至此共 3517 个测试（2 个跳过），全局覆盖率 **96.07%**（kernel 97.08% /
+> domain 98.48% / sim 96.42%，更新于第 14 条之后的统计页 token 切片）。
 >
 > **领域层**：13 个模块已落地（`schedule` / `emotion` / `memory` / `calendar` /
 > `conversation` / `birthday` / `study` / `vault` / `knowledge` / `consolidation` /
@@ -140,6 +140,12 @@ flowchart LR
 > **11 个 Repository Protocol 全部落地**：`storage/sqlite/` 下 11 个
 > `Sqlite*Repository`，外加一个实现 `interfaces/llm.py::UsageSink` 的
 > `SqliteUsageRepository`（它不叫 Repository，也不算在 11 个里）。
+> 它现在住在自己的模块 `storage/sqlite/usage_repository.py`——`repositories.py` 一度
+> 涨到 917 行、越过 900 行硬上限，于是按 `engine_repositories.py` 的先例拆了出来。
+> 三个卫星模块（`engine_repositories` / `usage_repository` / 未来的按表拆分）
+> 共用同一个理由，**不是**为了并行。
+> **统计页的 token 消耗已经落地**（`GET /api/stats/tokens`，读 `llm_usage`）：
+> 阶段 J/K 的「可观测性」里，这是第一块真的能看的东西。
 > **阶段**：E（LLM 层）、F（推演引擎）、G（接入层，CLI + `channels/web/`）已落地；
 > H（钉钉 / 企业微信 / 文件渠道）未做；I（NPC）只有一个空的 `npc/__init__.py`；
 > J 只落了设置中心；K / L / M 未开始。
@@ -779,6 +785,7 @@ def apply_novelty_penalty(memories: list[ScoredMemory], since: datetime) -> list
 
 | 日期 | 版本 | 变更 | 作者 |
 | --- | --- | --- | --- |
+| 2026-09-16 | v0.3.4 | 补记统计页 token 消耗切片：`GET /api/stats/tokens` 落地（读 `llm_usage`）；`SqliteUsageRepository` 随 `repositories.py` 触及 900 行上限而拆进 `storage/sqlite/usage_repository.py`；「至此」的测试数与覆盖率改为实测值（3517 / 96.07%） | LMG-arch |
 | 2026-09-15 | v0.1.0 | 初版 | LMG-arch |
 | 2026-09-15 | v0.2.0 | 图片生成从 v0.5.0 提前到 v0.2.0，新增 v0.3.0「会自己找东西」；新增阶段 J–M；成本修正为 `2.0`/`40.0` 并补入生图与检索两条成本线（~$0.39/天）；存储补入 4 张新表与图片文件目录；新增风险 R17–R20 与 4 项监控指标 | LMG-arch |
 | 2026-09-16 | v0.3.2 | 阶段 D 补第 8 条已落地命令组「专项学习」（`alterego study`）；测试数与全局覆盖率改为实测值；[ADR-0012](../adr/0012-specialized-study-is-a-curriculum-not-a-prompt.md) | LMG-arch |

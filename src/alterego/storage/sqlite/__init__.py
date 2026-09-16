@@ -41,8 +41,8 @@ from alterego.storage.sqlite.repositories import (
     SqlitePersonaRepository,
     SqliteScheduleRepository,
     SqliteSourceRepository,
-    SqliteUsageRepository,
 )
+from alterego.storage.sqlite.usage_repository import SqliteUsageRepository
 
 
 __all__ = [

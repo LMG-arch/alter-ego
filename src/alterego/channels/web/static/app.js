@@ -69,6 +69,13 @@ function table(headers, rows) {
   return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
+function grouped(value) {
+  // token 是七位数起步的，不分千位读不出数量级。它只影响显示，
+  // 所以拿不到数字时把原值原样吐回去，而不是显示一个 NaN。
+  const n = Number(value);
+  return Number.isFinite(n) ? n.toLocaleString("zh-CN") : String(value ?? "");
+}
+
 /* ── 请求 ─────────────────────────────────────────────── */
 
 class ApiError extends Error {
@@ -310,8 +317,28 @@ views.memory = async function () {
   );
 };
 
+/* token 消耗那一块的窗口与分组。
+
+这两组取值是**白名单**，不是「随便传个值」。服务端那一边 ``days`` 有 1..365
+的约束、``group`` 是三个字面量之一，传错都答 422；而 422 会让整页变成一张
+「没读到」的卡片——用户只是动了一下地址栏，不该因此丢掉整页。所以先在这里
+滤一遍，滤不掉的落回默认值；滤得掉但服务端还不认识的（比如以后新加的分组）
+仍然由服务端说了算。 */
+const TOKEN_DAYS = ["1", "7", "30"];
+const TOKEN_GROUPS = ["purpose", "model", "day"];
+const TOKEN_GROUP_LABELS = { purpose: "用途", model: "模型", day: "日期" };
+
 views.stats = async function () {
+  const params = new URLSearchParams(location.search);
+  const days = TOKEN_DAYS.includes(params.get("days")) ? params.get("days") : TOKEN_DAYS[0];
+  const group = TOKEN_GROUPS.includes(params.get("group")) ? params.get("group") : TOKEN_GROUPS[0];
+
   const data = await api("/api/stats?days=30");
+  // token 那一块**单独 catch**：它答 503（没记账本）时，上面那六个数是从别的
+  // 仓储读出来的、一个都没少。让整页一起变成「没读到」，等于把还能看的数
+  // 一起扔掉——而这一页的用法是「一眼看它过得怎么样」，不是只看 token。
+  const usage = await api(`/api/stats/tokens?days=${days}&group=${group}`).catch((error) => error);
+
   const kinds = Object.entries(data.memory_kinds || {})
     .map(([kind, count]) => `${esc(kind)} ${esc(count)}`)
     .join(" · ");
@@ -330,9 +357,69 @@ views.stats = async function () {
       ? `<p class="muted">这次统计只扫了前若干条记录，数字是下限而不是全量。</p>`
       : "") +
     `<p class="muted">这些都是窗口内的数，不是总量——仓储层没有 count()，` +
-    `所以「一共多少」目前答不出来。</p>`
+    `所以「一共多少」目前答不出来。</p>` +
+    `<h2>token 消耗</h2>` +
+    tokenBlock(usage, days, group)
   );
 };
+
+function tokenBlock(usage, days, group) {
+  if (usage instanceof Error) return fail(usage);
+
+  const pickers =
+    `<select data-tokens="days">` +
+    TOKEN_DAYS.map(
+      (value) =>
+        `<option value="${attr(value)}"${value === days ? " selected" : ""}>近 ${esc(value)} 天</option>`
+    ).join("") +
+    `</select>` +
+    `<select data-tokens="group">` +
+    TOKEN_GROUPS.map(
+      (value) =>
+        `<option value="${attr(value)}"${value === group ? " selected" : ""}>按${esc(TOKEN_GROUP_LABELS[value])}</option>`
+    ).join("") +
+    `</select>`;
+
+  const totals = usage.totals || {};
+  const rows = (usage.groups || []).map((item) => [
+    // 模型名可能是空的：某次调用没定下模型就失败了。空着的那一栏要说明
+    // 是空，而不是让一格空白看起来像渲染错位。
+    item.key ? esc(item.key) : `<span class="muted">未记</span>`,
+    `<span class="num">${esc(grouped(item.calls))}</span>`,
+    `<span class="num">${esc(grouped(item.prompt_tokens))}</span>`,
+    `<span class="num">${esc(grouped(item.completion_tokens))}</span>`,
+    `<span class="num">${esc(grouped(item.total_tokens))}</span>`,
+    item.failed ? `<span class="tag bad">${esc(item.failed)}</span>` : `<span class="muted">—</span>`,
+  ]);
+  if (rows.length) {
+    rows.push([
+      `<strong>合计</strong>`,
+      `<span class="num">${esc(grouped(totals.calls))}</span>`,
+      `<span class="num">${esc(grouped(totals.prompt_tokens))}</span>`,
+      `<span class="num">${esc(grouped(totals.completion_tokens))}</span>`,
+      `<span class="num">${esc(grouped(totals.total_tokens))}</span>`,
+      `<span class="num">${esc(grouped(totals.failed))}</span>`,
+    ]);
+  }
+
+  return card(
+    `<p class="muted">账本里${esc(when(usage.since))}之后的每一次模型调用一行。</p>` +
+    pickers +
+    (rows.length
+      ? table(
+          [TOKEN_GROUP_LABELS[group], "次数", "输入", "输出", "合计", "失败"],
+          rows
+        )
+      : `<p class="muted">这段时间没有调用记录。</p>`) +
+    (usage.truncated
+      ? `<p class="muted">分组太多，上面只列了前几组，合计仍按全部算。</p>`
+      : "") +
+    `<p class="muted">失败的调用也算在里面：重试三次才成的那一次，钱是照花的。` +
+    `「失败」单独一列，所以「贵」和「一直在重试」能分开看。</p>` +
+    `<p class="muted">金额：—（还没有价目表，账本里记的是 0；` +
+    `把那个 0 画成「0 元」会让人以为它不花钱）。</p>`
+  );
+}
 
 views.sources = async function () {
   const data = await api("/api/sources?limit=40");
@@ -646,6 +733,7 @@ async function render() {
   if (state.tab === "feed") hookFeed();
   if (state.tab === "settings") hookSettings();
   if (state.tab === "memory") hookKind();
+  if (state.tab === "stats") hookStats();
 }
 
 function hookFeed() {
@@ -690,6 +778,20 @@ function hookKind() {
     history.replaceState(null, "", location.pathname + query);
     render();
   });
+}
+
+function hookStats() {
+  // 两个选择器都只做一件事：把选中的值写进地址栏，然后重画。
+  // 写进地址栏而不是只存在内存里，是因为刷新一下就该还是刚才看的那一屏——
+  // 「按模型看」看到一半按 F5 弹回默认值，会让人以为刚才那个是假的。
+  for (const picker of view().querySelectorAll("[data-tokens]")) {
+    picker.addEventListener("change", () => {
+      const params = new URLSearchParams(location.search);
+      params.set(picker.dataset.tokens, picker.value);
+      history.replaceState(null, "", `${location.pathname}?${params.toString()}`);
+      render();
+    });
+  }
 }
 
 function hookSettings() {

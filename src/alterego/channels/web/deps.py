@@ -37,6 +37,7 @@ from alterego.interfaces.repository import (
     SocialPostRepository,
     SourceRepository,
     TickLogRepository,
+    UsageRepository,
 )
 from alterego.kernel.clock import resolve_timezone
 from alterego.kernel.config import Config
@@ -86,6 +87,9 @@ class WebDeps:
     schedules: ScheduleRepository | None = None
     tick_logs: TickLogRepository | None = None
     sources: SourceRepository | None = None
+    #: token 用量账本的**只读**口。写的那一端在引擎里（网关的 ``UsageSink``），
+    #: 统计页只读它。没有这个袋口时 ``/api/stats/tokens`` 答 503。
+    usages: UsageRepository | None = None
 
     @property
     def web(self) -> Any:

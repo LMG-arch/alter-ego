@@ -45,7 +45,10 @@
 - **Token 消耗统计页面**。`log_entry`（26）表 + 两个视图 `v_cost_daily`（LLM 与生图合并计量）
   与 `v_trace`（5 路 UNION，把一次推演串成完整链路）。新增 `GET /api/stats/tokens`、
   `/api/stats/projection`、`/api/budget`、`/api/trace/{correlation_id}`。
-  统计页必须显示三件事：今日进度条、外推预测、**降级状态徽章**
+  统计页必须显示三件事：今日进度条、外推预测、**降级状态徽章**。
+  ⚠️ 其中 **`GET /api/stats/tokens` 已经落地**（见下面「统计页：LLM 词元消耗」）；
+  它读的是 `llm_usage` 表本身，**没有**用上这里的 `log_entry` / `v_cost_daily`，
+  也不显示进度条与降级徽章——那些仍然只是设计
 - **日志页面**。双写（文件轮转 14 天 / 数据库 WARNING+ 90 天 / SSE 实时不落库）；
   `GET /api/logs`、`/api/logs/stream`（SSE）、`/api/logs/export` 与
   `POST /api/logs/level`（**运行期调级别必须带 `for` 时长**，超时自动回落，
@@ -970,6 +973,47 @@ alterego serve --no-web              # 只装插件、不开界面
   功能，且没有任何报错，只是点不动）、展开与否必须读 `state.collapsed` 并把每次开合
   记回去（写死 `open` 是「刷新就弹开」，只读不写是「那个集合永远是空的」）
 - **文档同步**：`10-settings-center.md` 新增 § 7.4 与变更记录一行
+
+**统计页：LLM 词元消耗（已实现）**
+
+统计页原来只画「用量概览」四个数字，看不到**它到底烧了多少词元**。这一批补上：
+
+```bash
+curl 'http://127.0.0.1:8765/api/stats/tokens?days=7&group=purpose'
+# {"days":7,"group":"purpose","since":"...","until":"...",
+#  "totals":{"calls":42,"failed":3,"succeeded":39,"prompt_tokens":...,
+#            "completion_tokens":...,"total_tokens":...},
+#  "groups":[{"key":"chat_reply","calls":...}],"truncated":false}
+```
+
+- **`GET /api/stats/tokens?days=&group=`**，`days` 取 1..365（默认 **1**），
+  `group` 取 `day` / `purpose` / `model`（默认 `purpose`）。分组做在 SQL 里——
+  `llm_usage` 是**一次调用一行**，一个月的量早过了「全取回来在 Python 里数」的价钱
+- **取数口是 `llm_usage`，不是 `v_cost_daily`**。那个视图是给金额用的，
+  它**没有 token 列**；`03-data-model.md` 早就写过「视图是取数口，不是报表」，
+  这一版按那句话落地
+- **失败的尝试照算，但单独给一个字段**。一次被限流、重试三次才成的调用确实花了三倍的钱，
+  而账本对每一次**尝试**记一行；滤掉失败行会让这一页比账单好看，而它的作用恰恰是解释账单。
+  `failed` 计进 `calls`，`succeeded = calls - failed`
+- **一个金额字段都不给**。`$0.00` 是个谎话：`llm_usage.cost_usd` 默认 0，且价目表尚未落地。
+  `09-observability.md` § 2.2 要的是「未配置单价时显示『—』」，所以接口连 `cost_usd`
+  都不返回，前端也就没有机会把它画成金额
+- **没做预算进度条**。`llm.budget.max_tokens_per_day` 按**虚拟日**重置，而这里是滚动窗口——
+  两者相除会得到一个看着像进度条、其实分子分母不是一回事的东西
+- **筛组之后 `totals` 仍然数的是整个窗口**。`MAX_USAGE_GROUPS = 200` 只截「列出来的组」，
+  不截「窗口里花了多少」；顺序写错会让这一页在组数超限时悄悄少报一笔，
+  而它长得和正常输出一模一样（`truncated: true` 是唯一线索）
+- 新增 **3 个**接口层测试（`test_web_views.py` 的 `TestUsageTotalView`）、
+  **9 个**路由测试与 **11 个** SQL 测试（`test_storage_repositories.py::TestUsageTotals`，
+  真 sqlite、真表）、**3 个**前端结构测试（`test_web_static.py`，
+  其中一条专门断言 `app.js` 里**不存在** `$<数字>` 这种字符串）
+- 两个门在落地时变红，都按规矩修了而不是改门：
+  ①`repositories.py` 涨到 **917 行**（超 900 硬上限）→ 拆出卫星模块
+  `storage/sqlite/usage_repository.py`（162 行），`repositories.py` 回到 785 行；
+  ②`alterego.interfaces.__all__` 少了 `UsageGroup` / `UsageRepository` / `UsageTotal`
+  三个名字 → 补齐门面
+- **文档同步**：`05-channels.md` § 3.3（工作 API 表、与设计稿不同的第四条约定、变更记录）、
+  `09-observability.md` § 2.7（新增「实现状态」小节与四条口径）
 
 ### 变更
 

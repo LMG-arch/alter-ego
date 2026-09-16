@@ -545,3 +545,193 @@ class TestUsageRepository:
         usages.record_many([])
 
         assert backend.connection.scalar("SELECT COUNT(*) FROM llm_usage") == 0
+
+
+# ────────────────────────────────────────────────────────────
+# 用量账本的只读聚合
+# ────────────────────────────────────────────────────────────
+#
+# 统计页要的是「这一段时间烧了多少」，而不是「哪一次烧了多少」。两者用的是
+# 同一张表，但一个是行、一个是格。这一组守的是那些**加起来没有意义**的东西
+# 没被加起来（延迟、错误），以及那些**必须加起来**的东西没被漏掉（失败的那几次）。
+
+
+def _at(repo: SqliteUsageRepository, minutes: int, **overrides: Any) -> None:
+    """在 ``T0 + minutes`` 记一笔。
+
+    **时间必须显式给。** 不传 ``at`` 时账本会记「现在」，而「现在」是跑测试的
+    那一秒——窗口断言就没法写了。
+    """
+    repo.record(_usage(at=T0 + timedelta(minutes=minutes), **overrides))
+
+
+class TestUsageTotals:
+    def test_it_sums_by_purpose(self, usages: SqliteUsageRepository) -> None:
+        _at(usages, 0, purpose="memory", prompt_tokens=120, completion_tokens=30)
+        _at(usages, 5, purpose="memory", prompt_tokens=80, completion_tokens=20)
+        _at(usages, 10, purpose="decision", prompt_tokens=500, completion_tokens=900)
+
+        totals = usages.totals(PERSONA, since=T0, until=T0 + timedelta(hours=1))
+
+        # 花得多的排前面：这一页最常见的用法是「看看钱花在哪了」。
+        assert [t.key for t in totals] == ["decision", "memory"]
+        assert totals[0].calls == 1
+        assert totals[0].prompt_tokens == 500
+        assert totals[0].completion_tokens == 900
+        assert totals[0].total_tokens == 1400
+        assert totals[1].calls == 2
+        assert totals[1].total_tokens == 250
+
+    def test_the_failed_attempts_are_counted_and_counted_separately(
+        self, usages: SqliteUsageRepository
+    ) -> None:
+        """重试三次才成的那一次，钱是照花的。
+
+        把它们滤掉会让这一页比账单好看——而这一页的用处恰恰是解释账单。
+        同时要**分开**给出失败次数，否则「贵」和「一直在重试」混成一个数。
+        """
+        _at(usages, 0, success=True)
+        _at(usages, 1, success=False, error="llm_rate_limit: 限流")
+        _at(usages, 2, success=False, error="llm_timeout: 超时", retry_count=2)
+
+        totals = usages.totals(PERSONA, since=T0, until=T0 + timedelta(hours=1))
+
+        assert len(totals) == 1
+        assert totals[0].calls == 3
+        assert totals[0].failed == 2
+        assert totals[0].total_tokens == 450
+
+    def test_an_empty_ledger_answers_nothing_instead_of_zero(
+        self, usages: SqliteUsageRepository
+    ) -> None:
+        """没记过账时回空表，而不是回一格全 0 的。
+
+        ``GROUP BY`` 在没有行时本来就不产生分组，这里只是把它钉住：
+        补一格「全 0」的话，前端就再也分不清「没有调用」与「有调用但都没花 token」。
+        """
+        assert usages.totals(PERSONA, since=T0, until=T0 + timedelta(hours=1)) == []
+
+    def test_it_only_counts_this_persona(
+        self, usages: SqliteUsageRepository, backend: SqliteStorageBackend
+    ) -> None:
+        _at(usages, 0, purpose="memory")
+        # 另一个人设的一行。账本按 persona 分开，漏了 WHERE 的症状是
+        # 「换个人设看，数字没变」——那比报错难发现得多。
+        # 先建人设再记账：这一列有外键，而外键是开的。
+        backend.connection.execute(
+            "INSERT INTO persona (id, name, persona_json, created_at, updated_at)"
+            " VALUES (?, ?, '{}', ?, ?)",
+            ("p2", "另一个人", _iso(T0), _iso(T0)),
+        )
+        other = SqliteUsageRepository(backend.connection, persona_id="p2")
+        other.record(_usage(at=T0, prompt_tokens=9999, completion_tokens=0))
+
+        totals = usages.totals(PERSONA, since=T0, until=T0 + timedelta(hours=1))
+
+        assert [t.key for t in totals] == ["memory"]
+        assert totals[0].total_tokens == 150
+
+    def test_the_persona_comes_from_the_caller_not_the_constructor(
+        self, backend: SqliteStorageBackend
+    ) -> None:
+        """构造时绑的那个 persona 只管写，读的时候以调用方给的为准。
+
+        一条「只在写的时候对」的规则很容易被读的时候顺手复用，于是统计页
+        永远只看得见一个人设——所以这条行为要显式钉住，而不是留给人猜。
+        """
+        writer = SqliteUsageRepository(backend.connection, persona_id=PERSONA)
+        writer.record(_usage(at=T0))
+        # 读的那一端构造时绑的是另一个人，而它一次都不该用得上这个值。
+        reader = SqliteUsageRepository(backend.connection, persona_id="someone-else")
+
+        assert reader.totals(PERSONA, since=T0, until=T0 + timedelta(hours=1))
+
+    def test_the_window_is_half_open(self, usages: SqliteUsageRepository) -> None:
+        """``[since, until)``：相邻两个窗口接起来不重不漏。
+
+        这是 ``activity_log`` 那边早就定下的口径，两边不一致时，
+        「按天看」和「按周看」的合计会对不上，而两页都显示得理直气壮。
+        """
+        _at(usages, -1)  # 窗口之前
+        _at(usages, 0)  # 正好在 since 上
+        _at(usages, 59)
+        _at(usages, 60)  # 正好在 until 上
+
+        totals = usages.totals(PERSONA, since=T0, until=T0 + timedelta(minutes=60))
+
+        assert len(totals) == 1
+        assert totals[0].calls == 2
+
+    def test_a_day_is_the_day_it_was_written_on(self, usages: SqliteUsageRepository) -> None:
+        """按天分组用的是写下来那天，不是 UTC 的那天。
+
+        ``created_at`` 是带时区偏移的串。SQLite 的 ``date()`` 会先把它换算成 UTC，
+        于是东八区凌晨的调用会被算进**前一天**——而这个测试里的时间
+        （本地 07:00，UTC 前一天的 23:00）正好跨过那条界线：
+        ``date()`` 说 09-14，写下来那天是 09-15。
+        """
+        early = datetime(2026, 9, 15, 7, 0, tzinfo=TZ)
+        usages.record(_usage(at=early))
+
+        totals = usages.totals(
+            PERSONA, since=early - timedelta(hours=1), until=early + timedelta(hours=1), group="day"
+        )
+
+        assert [t.key for t in totals] == ["2026-09-15"]
+
+    def test_days_are_in_time_order_not_size_order(self, usages: SqliteUsageRepository) -> None:
+        """按天要能顺着读，所以是升序；按用途/模型才是大的在前。"""
+        _at(usages, 0, prompt_tokens=10, completion_tokens=0)
+        _at(usages, 60 * 24, prompt_tokens=9999, completion_tokens=0)
+        _at(usages, 60 * 48, prompt_tokens=5, completion_tokens=0)
+        window = {"since": T0, "until": T0 + timedelta(days=3)}
+
+        by_day = usages.totals(PERSONA, group="day", **window)
+        by_purpose = usages.totals(PERSONA, group="purpose", **window)
+
+        assert [t.key for t in by_day] == ["2026-09-15", "2026-09-16", "2026-09-17"]
+        assert [t.key for t in by_purpose] == ["memory"]  # 同一个用途，只有一格
+
+    def test_equal_totals_are_broken_by_name(self, usages: SqliteUsageRepository) -> None:
+        """同量时的行序不能交给 SQLite 自己定（P6）。
+
+        不定序的症状不是报错，是「刷新一下表格的行就换了位置」。
+        """
+        _at(usages, 0, purpose="npc")
+        _at(usages, 1, purpose="decision")
+        _at(usages, 2, purpose="memory")
+
+        totals = usages.totals(PERSONA, since=T0, until=T0 + timedelta(hours=1))
+
+        assert [t.key for t in totals] == ["decision", "memory", "npc"]
+
+    def test_it_can_group_by_model(self, usages: SqliteUsageRepository) -> None:
+        _at(usages, 0, model="gpt-4o-mini")
+        _at(usages, 1, model="gpt-4o-mini")
+        _at(usages, 2, model="qwen-max")
+
+        totals = usages.totals(PERSONA, since=T0, until=T0 + timedelta(hours=1), group="model")
+
+        assert [t.key for t in totals] == ["gpt-4o-mini", "qwen-max"]
+        assert totals[1].calls == 1
+
+    def test_a_missing_model_comes_back_as_an_empty_key(
+        self, usages: SqliteUsageRepository
+    ) -> None:
+        """没定下模型就失败的那次也要有一格，否则它会从合计里悄悄消失。
+
+        空串而不是 ``None``：这不是「没有这一列」，是「这一列的值是空的」。
+        """
+        _at(usages, 0, model="")
+
+        totals = usages.totals(PERSONA, since=T0, until=T0 + timedelta(hours=1), group="model")
+
+        assert [t.key for t in totals] == [""]
+
+    def test_an_unknown_group_is_refused(self, usages: SqliteUsageRepository) -> None:
+        """分组名会拼进 SQL，所以它只能是白名单里的三个。
+
+        静默回落成「按用途分组」比报错糟：统计页会安静地答一个不是它被问的问题。
+        """
+        with pytest.raises(ValueError, match="不认识的用量分组"):
+            usages.totals(PERSONA, since=T0, until=T0, group="tier")  # type: ignore[arg-type]

@@ -22,6 +22,7 @@ from alterego.channels.web.views import (
     post_view,
     schedule_view,
     source_view,
+    usage_total_view,
 )
 from alterego.domain.emotion import Emotion
 from alterego.domain.memory import Memory
@@ -35,6 +36,7 @@ from alterego.interfaces.repository import (
     ScheduleRecord,
     SocialPostRecord,
     SourceRecord,
+    UsageTotal,
 )
 from alterego.kernel.clock import resolve_timezone
 
@@ -87,6 +89,44 @@ class TestMessageView:
     def test_the_tick_id_does_not_leave_the_building(self) -> None:
         """``tick_id`` 是推演的内部坐标，页面上没有任何地方会用到它。"""
         assert "tick_id" not in message_view(_message())
+
+
+class TestUsageTotalView:
+    def test_the_total_is_added_up_on_the_server(self) -> None:
+        """输入 + 输出由服务端算好，不让前端拿两个字段相加。
+
+        ``LLMUsage.total_tokens`` 也是这么定义的（一个 property）。前端再算一遍
+        等于把口径复制到第二个地方，而两个地方分叉的那一天没人会收到通知。
+        """
+        view = usage_total_view(
+            UsageTotal(key="decision", calls=3, failed=1, prompt_tokens=900, completion_tokens=100)
+        )
+
+        assert view["total_tokens"] == 1000
+        assert view["prompt_tokens"] == 900
+        assert view["completion_tokens"] == 100
+
+    def test_succeeded_is_the_part_that_worked(self) -> None:
+        """前端要画「一共 3 次，成功 2 次」，所以两个数都得在。
+
+        只给 ``calls`` 与 ``failed`` 也对，但那一减法会写在模板字符串里，
+        而模板字符串里的算术是没人测的那一种。
+        """
+        view = usage_total_view(UsageTotal(key="memory", calls=3, failed=1))
+
+        assert view["succeeded"] == 2
+
+    def test_no_money_field_leaves_the_building(self) -> None:
+        """账本里的 ``cost_usd`` 恒为 0，所以视图里一个金额字段都没有。
+
+        「还没配价目表」的诚实写法是「—」，而给出 ``0.0`` 的话前端只能把它
+        画成 ``$0.00``——那是这一页唯一会**主动误导**的写法：它看起来像
+        「不花钱」。要加金额，先有价目表。
+        """
+        view = usage_total_view(UsageTotal(key="memory", calls=1))
+
+        assert "cost_usd" not in view
+        assert "cost" not in view
 
 
 class TestOtherViews:

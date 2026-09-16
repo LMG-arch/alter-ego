@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 
 if TYPE_CHECKING:
@@ -50,6 +50,9 @@ __all__ = [
     "SourceRepository",
     "TickLogDraft",
     "TickLogRepository",
+    "UsageGroup",
+    "UsageRepository",
+    "UsageTotal",
 ]
 
 
@@ -635,6 +638,93 @@ class BudgetRepository(Protocol):
 
     def save(self, persona_id: str, usage: BudgetUsage) -> None:
         """整条覆盖。``(persona_id, day)`` 是主键，所以这是一次 UPSERT。"""
+        ...
+
+
+#: 用量按什么分组。三选一，不给第四个：
+#:
+#: - ``day``     —— 「哪天用得多」，趋势；
+#: - ``purpose`` —— 「钱花在哪了」，最常用的那一栏；
+#: - ``model``   —— 「换模型到底便宜了多少」，验证分层路由有没有生效。
+#:
+#: 它同时是**接口约束**与**HTTP 参数**：``channels/web`` 直接把它当查询参数
+#: 的类型，于是不认识的取值在 FastAPI 那一层就被拒掉（422），
+#: 而不是变成一条拼进 SQL 的字符串。SQL 里能放进 ``GROUP BY`` 的东西
+#: 必须是白名单，而 ``Literal`` 就是那个白名单。
+UsageGroup = Literal["day", "purpose", "model"]
+
+
+@dataclass(frozen=True, slots=True)
+class UsageTotal:
+    """一段窗口里、按一个维度分好的一格用量。
+
+    **它不是 ``llm_usage`` 的一行。** 一行回答「这一次调用花了多少」，
+    它回答「这段时间里，这个用途（/模型/日子）一共花了多少」。所以它没有
+    ``tier`` / ``latency_ms`` / ``error`` —— 那些是单次调用的属性，
+    加起来没有意义（延迟相加得不到「平均延迟」，那是另一个问题）。
+
+    ``total_tokens`` 是算出来的而不是存下来的：库里那一列本来就是
+    ``prompt + completion``（见 :attr:`alterego.interfaces.llm.LLMUsage.total_tokens`），
+    两处各算一遍迟早会分叉。
+    """
+
+    #: 分组值：日期（``2026-09-16``）、用途（``decision``）或模型名。
+    #: 模型名可能为空串——路由没定模型时就是空，前端负责把它画成「—」。
+    key: str
+    #: 这一段里一共调了几次（**含失败的那几次**，账本对每一次尝试都记一条）。
+    calls: int = 0
+    #: 其中失败的次数。``calls - failed`` 就是成功次数。
+    failed: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+    @property
+    def total_tokens(self) -> int:
+        """输入 + 输出。"""
+        return self.prompt_tokens + self.completion_tokens
+
+
+class UsageRepository(Protocol):
+    """``llm_usage`` 的只读聚合。
+
+    写的那一端是 :class:`~alterego.interfaces.llm.UsageSink`（网关只认识那个形状），
+    而统计页要的是这个形状。两者分开是因为**方向不同、生命周期也不同**：
+    写端一次 tick 造一个，读端是「这一整段窗口里花了多少」。
+
+    **聚合落在 SQL 里，不在这一层。** ``/api/stats`` 那一页现有的做法是把行
+    拉回内存再数（仓储没有 ``count()``，见 ``routes/stats.py`` 的模块文档），
+    那是因为它数的是几十上百条。``llm_usage`` 是**每次调用一行**：一天跑下来
+    就是几百上千行，一个月上万行，而这一页默认看 30 天——把行搬进 Python
+    只为求三个和，是这张表唯一会真正长起来的地方。
+    """
+
+    def totals(
+        self,
+        persona_id: str,
+        *,
+        since: datetime,
+        until: datetime,
+        group: UsageGroup = "purpose",
+    ) -> list[UsageTotal]:
+        """窗口内按 ``group`` 分组的用量。
+
+        Args:
+            persona_id: 哪个人设。预算与账本都是**按 persona 算**的。
+            since: 窗口起点（含）。
+            until: 窗口终点（不含）。半开区间，与 ``activity_log`` 的区间查询一致：
+                相邻两个窗口接起来不重不漏。
+            group: 见 :data:`UsageGroup`。
+
+        Returns:
+            分组结果。``day`` 按日期升序（趋势从左到右读），
+            ``purpose`` / ``model`` 按用量从大到小（最花钱的排在最上面）。
+            同量时按键名排序——**顺序不确定的迭代是 P6 禁止的**，
+            而它在这里的症状是「刷新一下表格的行就换了位置」。
+
+        Raises:
+            ValueError: ``group`` 不在 :data:`UsageGroup` 里。它不是「没数据」，
+                而是调用方写错了——静默回落成按用途分组会让统计页安静地答错。
+        """
         ...
 
 

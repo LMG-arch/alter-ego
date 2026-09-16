@@ -70,6 +70,9 @@ from alterego.interfaces.repository import (
     SourceRepository,
     TickLogDraft,
     TickLogRepository,
+    UsageGroup,
+    UsageRepository,
+    UsageTotal,
 )
 from alterego.interfaces.simulation import (
     Capability,
@@ -129,5 +132,8 @@ __all__ = [
     "TickLogDraft",
     "TickLogRepository",
     "Tool",
+    "UsageGroup",
+    "UsageRepository",
     "UsageSink",
+    "UsageTotal",
 ]

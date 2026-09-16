@@ -46,6 +46,7 @@ from alterego.interfaces.repository import (
     PersonaRecord,
     SocialPostRecord,
     SourceRecord,
+    UsageTotal,
 )
 from alterego.kernel.clock import resolve_timezone
 from alterego.kernel.config import Config
@@ -208,6 +209,34 @@ class _FakeSources:
         self, persona_id: str, *, since: datetime, limit: int = 100
     ) -> list[SourceRecord]:
         return self.records[:limit]
+
+
+class _FakeUsages:
+    """用量账本的读口。
+
+    它把**问到的窗口与分组**记下来，而不只是回一堆数：这一页最容易错的
+    不是加法，是「算的是哪一段」。分组名不对时它按真仓储的行为报
+    :class:`ValueError`——真仓储拿白名单查表，查不到就是调用方写错了。
+    """
+
+    def __init__(self, groups: list[UsageTotal] | None = None) -> None:
+        self.groups = list(groups or [])
+        self.asked: list[tuple[datetime, datetime, str]] = []
+        self.personas: list[str] = []
+
+    def totals(
+        self,
+        persona_id: str,
+        *,
+        since: datetime,
+        until: datetime,
+        group: str = "purpose",
+    ) -> list[UsageTotal]:
+        if group not in {"day", "purpose", "model"}:
+            raise ValueError(f"不认识的用量分组：{group!r}")
+        self.personas.append(persona_id)
+        self.asked.append((since, until, group))
+        return self.groups
 
 
 class _Discovery:
@@ -861,6 +890,160 @@ async def test_the_budget_day_is_today_in_your_configured_zone(tmp_path: Path) -
     assert deps.now.utcoffset() == timedelta(hours=9)
     assert store.asked == [deps.today]
     assert body["day"] == deps.today.isoformat()
+
+
+# ── token 消耗 ────────────────────────────────────────────────────────
+#
+# 这一块的用法是「现在烧得快不快」，所以默认窗口是 1 天而不是 /api/stats 那 30 天：
+# 一次失控会被 30 天的总量平掉，而那正是最该被看见的东西。
+
+
+async def test_the_token_page_totals_what_it_grouped(tmp_path: Path) -> None:
+    usages = _FakeUsages(
+        [
+            UsageTotal(key="decision", calls=4, failed=1, prompt_tokens=900, completion_tokens=100),
+            UsageTotal(key="reply", calls=2, prompt_tokens=1_000, completion_tokens=500),
+        ]
+    )
+    deps = _deps(_config(tmp_path), usages=usages, persona_id="p1")
+    async with _client(deps) as client:
+        body = (await client.get("/api/stats/tokens")).json()
+
+    assert body["totals"] == {
+        "calls": 6,
+        "failed": 1,
+        "succeeded": 5,
+        "prompt_tokens": 1900,
+        "completion_tokens": 600,
+        "total_tokens": 2500,
+    }
+    assert [group["key"] for group in body["groups"]] == ["decision", "reply"]
+    assert body["groups"][0]["total_tokens"] == 1000
+    # 合计由分组相加得出，不是另查一次——两处各算一遍的结果迟早会分叉。
+    assert body["totals"]["total_tokens"] == sum(group["total_tokens"] for group in body["groups"])
+    assert usages.personas == ["p1"]
+
+
+async def test_the_token_window_is_a_rolling_one_ending_now(tmp_path: Path) -> None:
+    """窗口是 ``now - days`` 到 ``now``，与 ``/api/stats`` 同一个口径。
+
+    两个口径混着用（比如「今天」按虚拟日算、窗口按滚动算）时，页面上会出现
+    一个既不是「今天」也不是「最近 24 小时」的区段，而它没有任何标记。
+    """
+    usages = _FakeUsages()
+    deps = _deps(_config(tmp_path), usages=usages, persona_id="p1")
+    async with _client(deps) as client:
+        body = (await client.get("/api/stats/tokens", params={"days": 7})).json()
+
+    since, until, group = usages.asked[0]
+    # 不能写 ``until == deps.now``：``deps.now`` 每读一次都是新的，
+    # 那样比的是两次调用之间隔了几微秒，而不是口径。
+    assert until <= deps.now < until + timedelta(seconds=30)
+    assert until - since == timedelta(days=7)
+    assert group == "purpose"
+    assert body["window_days"] == 7
+    assert body["group"] == "purpose"
+    assert body["since"] == since.isoformat()
+
+
+async def test_the_token_page_passes_the_group_through_to_the_store(tmp_path: Path) -> None:
+    usages = _FakeUsages()
+    deps = _deps(_config(tmp_path), usages=usages, persona_id="p1")
+    async with _client(deps) as client:
+        response = await client.get("/api/stats/tokens", params={"group": "model"})
+
+    assert response.status_code == 200
+    assert usages.asked[0][2] == "model"
+    assert response.json()["group"] == "model"
+
+
+async def test_an_unknown_token_group_is_refused_before_the_store_sees_it(
+    tmp_path: Path,
+) -> None:
+    """分组名拼进 SQL，所以它只能是白名单里的三个。
+
+    在路由这一层就被 422 拦下（``UsageGroup`` 是 ``Literal``），
+    意味着那个字符串**永远不会**出现在 SQL 里——这是那个 ``Literal``
+    存在的理由，不只是给文档看的。
+    """
+    usages = _FakeUsages()
+    deps = _deps(_config(tmp_path), usages=usages, persona_id="p1")
+    async with _client(deps) as client:
+        response = await client.get(
+            "/api/stats/tokens", params={"group": "purpose); DROP TABLE llm_usage;--"}
+        )
+
+    assert response.status_code == 422
+    assert usages.asked == []
+
+
+async def test_token_days_out_of_range_is_refused(tmp_path: Path) -> None:
+    usages = _FakeUsages()
+    deps = _deps(_config(tmp_path), usages=usages, persona_id="p1")
+    async with _client(deps) as client:
+        response = await client.get("/api/stats/tokens", params={"days": 400})
+
+    assert response.status_code == 422
+
+
+async def test_the_token_page_without_a_ledger_is_503(tmp_path: Path) -> None:
+    async with _client(_deps(_config(tmp_path))) as client:
+        assert (await client.get("/api/stats/tokens")).status_code == 503
+
+
+async def test_no_persona_means_no_tokens_and_no_query(tmp_path: Path) -> None:
+    """还没建人设时不该去查库，也不该 404。
+
+    账本是按 persona 记的，所以「没有人设」与「人设没花过 token」是两个
+    不同的答案，但它们在页面上长得一样（都是 0）。这一页给出零而**不查库**：
+    查一次注定为空的表只是把同一件事做两遍。
+    """
+    usages = _FakeUsages([UsageTotal(key="decision", calls=1, prompt_tokens=10)])
+    deps = _deps(_config(tmp_path), usages=usages)
+    async with _client(deps) as client:
+        body = (await client.get("/api/stats/tokens")).json()
+
+    assert body["totals"]["total_tokens"] == 0
+    assert body["groups"] == []
+    assert usages.asked == []
+
+
+async def test_the_token_page_admits_when_it_cut_the_groups(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from alterego.channels.web.routes import stats as stats_module
+
+    monkeypatch.setattr(stats_module, "MAX_USAGE_GROUPS", 1)
+    usages = _FakeUsages(
+        [
+            UsageTotal(key="a", calls=1, prompt_tokens=10),
+            UsageTotal(key="b", calls=1, prompt_tokens=20),
+        ]
+    )
+    deps = _deps(_config(tmp_path), usages=usages, persona_id="p1")
+    async with _client(deps) as client:
+        body = (await client.get("/api/stats/tokens")).json()
+
+    assert body["truncated"] is True
+    assert [group["key"] for group in body["groups"]] == ["a"]
+    # 截的是**列出来的组**，不是合计：合计要说不清口径，那还不如不截。
+    assert body["totals"]["total_tokens"] == 30
+
+
+async def test_the_token_window_follows_the_configured_zone(tmp_path: Path) -> None:
+    """``at`` / ``since`` 用的是配置时区的现在，不是这台机器的现在。
+
+    只断言偏移，不断言那一秒——``deps.now`` 每读一次都是新的，
+    拿它跟响应里的时刻比相等，比的其实是两次调用之间有没有跨过一微秒。
+    """
+    usages = _FakeUsages()
+    deps = _deps(_config_in(tmp_path, "Asia/Tokyo"), usages=usages, persona_id="p1")
+    async with _client(deps) as client:
+        body = (await client.get("/api/stats/tokens")).json()
+
+    assert deps.now.utcoffset() == timedelta(hours=9)
+    assert body["at"].endswith("+09:00")
+    assert body["since"].endswith("+09:00")
 
 
 async def test_sources_shows_the_kept_ones_newest_first(tmp_path: Path) -> None:
