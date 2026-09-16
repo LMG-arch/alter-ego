@@ -240,7 +240,7 @@ check_forbidden_excluding \
     "sqlite 实现只被组装根与存储层引用" \
     "from alterego\.storage\.sqlite|import alterego\.storage\.sqlite" \
     "$SRC" \
-    "cli(_db|_dataset|_memory|_vault)?\.py:|/storage/" \
+    "cli(_db|_dataset|_memory|_study|_vault)?\.py:|/storage/" \
     "除 cli.py / cli_db.py / cli_dataset.py / cli_memory.py / cli_vault.py（组装根）与 storage/ 之外，一律通过 StorageBackend Protocol 访问。想要具体实现，让组装根构造好再传进来。"
 
 check_forbidden \

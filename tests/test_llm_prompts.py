@@ -236,7 +236,7 @@ class TestPromptLibrary:
 
 
 # ────────────────────────────────────────────────────────────
-# 随包的那八个模板
+# 随包的那九个模板
 # ────────────────────────────────────────────────────────────
 
 
@@ -252,7 +252,7 @@ class TestShippedTemplates:
         assert PROMPTS_DIR.is_dir()
         assert (PROMPTS_DIR / "memory_consolidate.md").is_file()
 
-    def test_there_are_eight_of_them(self) -> None:
+    def test_there_are_nine_of_them(self) -> None:
         """数量写死是有意的：加了模板要顺手在这里加一条，不然没人会注意到。"""
         assert PromptLibrary().names() == (
             "chat_reply",
@@ -262,6 +262,7 @@ class TestShippedTemplates:
             "persona_generate",
             "post_compose",
             "reach_out",
+            "study_topic",
             "vault_organize",
         )
 

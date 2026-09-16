@@ -978,7 +978,7 @@ AlterEgo v0.1.0
 
 > **图例**：✅ = 已有代码、能跑；没有标记的 = **设计意图，尚未实现**。
 > 真源是 `alterego --help`（现在只有 `calendar` / `birthday` / `dataset` / `db` /
-> `memory` / `vault` 六组）。照着没标记的那个敲，`argparse` 会报 `invalid choice`。
+> `memory` / `study` / `vault` 七组）。照着没标记的那个敲，`argparse` 会报 `invalid choice`。
 > **漏标一个已实现的命令**是文档 bug（P7），发现就补 ✅。
 
 ```
@@ -1058,6 +1058,19 @@ alterego
 │                           三种形状：chat / sharegpt / alpaca。
 │                           落地信息与六条设计决定见
 │                           plans/2026-09-16-training-datasets.md 与 adr/0011
+│
+├── study                   每个子命令都接 --persona NAME               ✅（整组）
+│   ├── status             学到哪了、库里有什么（不花钱、不要密钥）
+│   ├── plan [--rounds N]  接下来 N 格是哪几个题面（不花钱）
+│   ├── recall "<一句话>"   给一句话，看它会翻出哪几篇（带命中的词）
+│   └── next [--rounds N] [--dry-run]
+│                           真学一格：问模型 → 解析笔记 → 写进库 → 记进度
+│
+│                           一个方向五格：是什么 / 怎么做 / 容易踩的坑 /
+│                           和什么容易混 / 我还不服的。`--rounds` 是**格数
+│                           不是轮数**。三个不花钱的命令不需要任何密钥。
+│                           落地信息与八条设计决定见
+│                           plans/2026-09-16-specialized-study.md 与 adr/0012
 │
 ├── vault                   每个子命令都接 --vault DIR / --persona NAME    ✅（整组）
 │   ├── init                搭骨架：目录、.obsidian/、索引页
@@ -1271,7 +1284,8 @@ LLM 消耗   今日 $1.12 / $2.00
   30-读到的    0 篇
   40-记得的事  0 篇
   50-见过的人  0 篇
-索引      6 个
+  60-专业      0 篇
+索引      7 个
 收集箱    0 篇
 问题      0 处
 ```
@@ -1370,26 +1384,29 @@ LLM 消耗   今日 $1.12 / $2.00
 
 **为什么这么拆**：`cli.py`（参数树 + calendar/birthday）→
 `cli_io.py`（输出助手）→ `cli_db.py` / `cli_memory.py` / `cli_vault.py` /
-`cli_dataset.py`（四个命令组，各自是**组装根**）。
+`cli_dataset.py` / `cli_study.py`（五个命令组，各自是**组装根**）。
 切分的直接原因是 `AGENTS.md` § 5 的「单文件 ≤ 900 行」——`cli.py` 一度是 937 行。
 不是因为「一个文件干太多事」，而是因为**加一个命令组就会再撞一次上限**。
 第一次拆分（`cli_db.py`）划下的边界后来被直接用上了：`cli_memory.py` /
-`cli_vault.py` / `cli_dataset.py` 都是新开文件，`cli.py` 没有再涨回去。
+`cli_vault.py` / `cli_dataset.py` / `cli_study.py` 都是新开文件，`cli.py` 没有再涨回去。
 
-**组装根**：整个程序里只有这五个文件（`cli.py` / `cli_db.py` / `cli_memory.py` /
-`cli_vault.py` / `cli_dataset.py`）知道「存储用的是 SQLite」，
+**组装根**：整个程序里只有这六个文件（`cli.py` / `cli_db.py` / `cli_memory.py` /
+`cli_vault.py` / `cli_dataset.py` / `cli_study.py`）知道「存储用的是 SQLite」，
 其余代码一律只认 `StorageBackend` Protocol。
 `scripts/check_architecture.sh` 第 3 组红线覆盖整个 `src/` 来钉住它，
-例外写在脚本的注释里（那串 `cli(_db|_dataset|_memory|_vault)?\.py:` 就是它）
+例外写在脚本的注释里（那串 `cli(_db|_dataset|_memory|_study|_vault)?\.py:` 就是它）
 ——**例外要出现在能看见的地方，才叫例外**。
 
-五个组装根大小不一，但形状是同一个：**自己开库、自己拿供应商、自己关掉**。
-后两个各多一层限制，而且是同一条：
+六个组装根大小不一，但形状是同一个：**自己开库、自己拿供应商、自己关掉**。
+后三个各多一层限制，而且是同一条：
 `cli_vault.py` 的内容连接是**只读**的，因为知识库是数据库的下游；
-`cli_dataset.py` 四个命令的连接**全都是只读**的，因为训练集也是数据库的下游。
+`cli_dataset.py` 四个命令的连接**全都是只读**的，因为训练集也是数据库的下游；
+`cli_study.py` 的内容连接**同样只读**，因为专业笔记也是写进知识库，
+而这个命令唯一改的是知识库里的进度文件。
 知识库唯一需要写库的事是「花钱要记账」（那个例外就在 `cli_vault.py` 里），
 而导出数据集**一分钱都不花**——它是纯读 + 纯算 + 写文件，
-所以它连那条例外都不需要。
+所以它连那条例外都不需要。`cli_study.py` 也只有 `next` 花钱，
+而且它**先把方向认出来再建供应商**：认不出来就不该要密钥。
 
 
 ---

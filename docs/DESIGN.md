@@ -273,6 +273,7 @@ v1 采用**单进程多线程**模型：
 | `world.py` | 世界设定、NPC 档案、社交网络拓扑 |
 | `post.py` | 动态内容模型 |
 | `conversation.py` | 会话与消息模型、回复时机、主动话题、复读检测 | ✅ 已实现（对话节奏部分），见 [12](design/12-calendar-and-conversation.md) § 10 |
+| `study.py` | 专项学习：认方向、排课程表、切词与虚词表、按分数召回（**课程表是算出来的，不是提示词**） | ✅ 已实现，见 [ADR-0012](adr/0012-specialized-study-is-a-curriculum-not-a-prompt.md) |
 
 领域层是**纯函数式**的：给定输入状态与事件，输出新状态。所有随机性来自传入的 `Random` 实例（`decide_reply` / `should_open_topic` 收到的 `roll` 就是这个约定的体现）。这让领域逻辑可以被单元测试完全覆盖，无需数据库或 LLM。
 
@@ -1025,6 +1026,12 @@ formats = ["chat"]                   # chat | sharegpt | alpaca，可多选
 redact_terms = []                    # 内置八条规则之外额外要摘掉的字面量
 lookback_days = 30                   # 往回看多少天
 
+[study]                              # 专项学习：它自己一格一格把本行补起来
+field = ""                           # 学什么方向。留空时从人设的 occupation 认；认不出来就不学
+rounds = 1                           # 一次学几「格」（不是轮数，一轮 = 五格）
+recall_limit = 3                     # 聊天时最多翻出几篇专业笔记
+min_score = 2.0                      # 够多少分才算「这次聊到专业了」
+
 [plugins]
 enabled = [
   "llm.openai_compatible",
@@ -1130,7 +1137,7 @@ alter-ego/
 │   ├── adr/                         # 架构决策记录
 │   │   ├── README.md                # 索引：新增 ADR 必须在这里补一行
 │   │   ├── 0000-template.md
-│   │   └── 0001…0011                # 机制/语言/存储/渠道/降级/选型即数据/归属视图/定妆照/不可信输入/元数据强制/训练集派生且脱敏
+│   │   └── 0001…0012                # 机制/语言/存储/渠道/降级/选型即数据/归属视图/定妆照/不可信输入/元数据强制/训练集派生且脱敏/专项学习是课程表
 │   ├── plans/                       # ✅ 每个批次的落地计划（记录历史，不做实时维护）
 │   └── guide/                       # 用户手册
 │       ├── getting-started.md
@@ -1148,9 +1155,11 @@ alter-ego/
 │   ├── cli_memory.py                # ✅ alterego memory；组装根：自己开库、自己拿供应商
 │   ├── cli_vault.py                 # ✅ alterego vault；组装根：库是数据库的下游，只读打开
 │   ├── cli_dataset.py               # ✅ alterego dataset；组装根：训练集也是下游，四个命令全只读
+│   ├── cli_study.py                 # ✅ alterego study；组装根：三个不花钱的命令不要密钥
 │   ├── kernel/                      # 内核：零业务逻辑
 │   │   ├── config.py                # ✅ 配置加载与校验
 │   │   ├── config_values.py         # ✅ 配置值的类型构造
+│   │   ├── config_study.py          # ✅ `[study]` 段：进卫星模块是因为 config.py 已经顶到 900 行红线
 │   │   ├── settings.py              # Setting / Choice 元数据与渲染所需的单一真源
 │   │   ├── bus.py
 │   │   ├── registry.py
@@ -1185,6 +1194,7 @@ alter-ego/
 │   │   ├── conversation.py          # ✅ 已实现：回复时机、主动话题、复读检测（对话节奏部分）
 │   │   ├── redact.py                # ✅ 已实现：八条内置脱敏规则、NUL 哨兵替换、规则指纹
 │   │   ├── dataset.py               # ✅ 已实现：三类训练样本的拼装与三种形状的渲染
+│   │   ├── study.py                 # ✅ 已实现：认方向 / 排课程表 / 按分数召回（切词与虚词表在这里）
 │   │   ├── media.py                 # build_portrait_prompt()：一致性骨架的唯一入口
 │   │   ├── untrusted.py             # INJECTION_PATTERNS 与外部内容包裹
 │   │   ├── persona.py
@@ -1201,6 +1211,7 @@ alter-ego/
 │   │   ├── consolidation.py         # ✅ 已实现：记忆巩固（唯一已接线的 purpose: memory）
 │   │   ├── vault.py                 # ✅ 已实现：知识库整理（purpose: vault）
 │   │   ├── dataset.py               # ✅ 已实现：取数 → 拼样本 → 脱敏 → 落盘（purpose: 无，不调模型）
+│   │   ├── study.py                 # ✅ 已实现：问一格 → 解析笔记 → 写进知识库 → 记进度（purpose: vault）
 │   │   ├── engine.py
 │   │   ├── budget.py
 │   │   ├── narrator.py
@@ -1266,6 +1277,7 @@ alter-ego/
 │   │   ├── emotion_update.md        # ✅ 情绪评估（purpose: emotion）——模板已备，尚未接线
 │   │   ├── memory_consolidate.md    # ✅ 记忆巩固（purpose: memory）
 │   │   ├── vault_organize.md        # ✅ 知识库整理（purpose: vault）
+│   │   ├── study_topic.md           # ✅ 学一格（purpose: vault —— 形状与整理知识库是同一种）
 │   │   ├── post_compose.md          # ✅ 发动态（purpose: expression / reflection 的一部分）
 │   │   ├── chat_reply.md            # ✅ 回复用户
 │   │   ├── reach_out.md             # ✅ 主动联系
@@ -1309,6 +1321,9 @@ alter-ego/
 │   ├── test_kernel_*.py             # ✅ 内核单元测试
 │   ├── test_architecture.py         # ✅ 用 ast 机械校验分层红线
 │   ├── test_settings_metadata.py    # 强制每个配置项都有标注与「改了会怎样」（见 10-settings-center.md，尚未实现）
+│   ├── test_domain_study.py         # ✅ 认方向 / 课程表 / 切词与虚词表 / 打分与召回 / 进度续接
+│   ├── test_sim_study.py            # ✅ 学一格 → 写笔记 → 记进度 → 下次接得上
+│   ├── test_cli_study.py            # ✅ 四个命令的退出码与输出（不花钱的路径不要密钥）
 │   ├── golden/                      # ✅ 固定随机种子的黄金用例（P6 可复现）
 │   └── fixtures/                    # ✅ 共享测试数据
 │
@@ -1469,4 +1484,4 @@ PR 模板中包含勾选清单，未勾选不予合并。
 | 2026-09-15 | v0.2.1 | § 13 目录树标注 `domain/` 三个已实现模块；§ 3 领域层草图对齐实现：`strength_at` 公式以 [04](design/04-simulation-loop.md) § 7.2 为准（按 kind 分半衰期）、`ScheduleBlock` 字段名以 DDL 为准、`update_emotion` 增补 `block` 参数、`Emotion.label` 词表改为开放 | LMG-arch |
 | 2026-09-15 | v0.2.2 | 新增分册 [12](design/12-calendar-and-conversation.md)（节日日历与对话节奏）；§ 5.2 领域层表补入 `calendar.py` 并标注实现状态；§ 7.5 作息与 § 7.6 世界接入节日上下文；节日**不**进 `world.events`（提前几天就知道是它特有的性质） | LMG-arch |
 | 2026-09-15 | v0.3.0 | [12](design/12-calendar-and-conversation.md) 新增 § 17 生日：生日 = `personal` 类的节日，不另开平行模型；数据住 `data/birthdays.toml`（你自己的数据，不进版本库）；新增 `domain/birthday.py`、`domain/_toml.py` 与 `birthdays/` 读取器；`day_kind()` 改为只按 `days_off` 判定「谁占哪一天」；§ 5.2 领域层表补入 `birthday.py` 与 `_toml.py` | LMG-arch |
-| 2026-09-16 | v0.3.1 | § 12.1 增 `[dataset]` 段；§ 13 目录树补 `cli_dataset.py` / `domain/redact.py` / `domain/dataset.py` / `sim/dataset.py` / `plugins/dataset_exporter/`；§ 13 子目录 `adr/` 改为 `0001…0011`；[05](design/05-channels.md) § 8.1 命令树补 `dataset` 组、§ 8.3 组装根四→**五**；新增 [ADR-0011](adr/0011-training-datasets-are-derived-and-redacted.md) | LMG-arch |
+| 2026-09-16 | v0.3.2 | § 12.1 增 `[study]` 段；§ 13 目录树补 `cli_study.py` / `kernel/config_study.py` / `domain/study.py` / `sim/study.py` / `prompts/study_topic.md` 与三个测试文件；§ 13 子目录 `adr/` 改为 `0001…0012`；`domain/vault.py` 布局中间插一层 `60-专业`；[05](design/05-channels.md) § 8.1 命令树补 `study` 组、§ 8.3 组装根五→**六**；新增 [ADR-0012](adr/0012-specialized-study-is-a-curriculum-not-a-prompt.md) | LMG-arch |

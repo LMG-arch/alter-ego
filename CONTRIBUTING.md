@@ -114,8 +114,9 @@ alter-ego/
 ├── src/alterego/
 │   ├── kernel/          # 内核：配置、总线、注册表、插件、时钟、调度、错误
 │   ├── domain/          # 领域：纯函数业务逻辑（人设/情绪/记忆/关系/日程...）
-│   │   └── ...          #   schedule / emotion / memory / calendar / conversation
-│   │                    #   / birthday 已实现；_toml.py 是两个加载器共用的取值助手
+│   │   └── ...          #   不要在这里数模块名——数一次就会漏一次。
+│   │                    #   完整清单与实现状态见 docs/DESIGN.md § 5.2，
+│   │                    #   那条表是唯一出处；_toml.py 是两个加载器共用的取值助手
 │   ├── holidays/        # 随包节日数据（2026.toml）+ 唯一的读盘入口
 │   │                    #   数据在这里、规则在 domain/calendar.py，因为领域层不做 IO
 │   ├── birthdays/       # 生日记录的唯一 IO（data/birthdays.toml）

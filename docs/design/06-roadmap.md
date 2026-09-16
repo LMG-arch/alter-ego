@@ -91,8 +91,18 @@ flowchart LR
 >    与 [ADR-0011](../adr/0011-training-datasets-are-derived-and-redacted.md)。
 >    **这一条一个模型调用都没有**，所以它连用量账本都不需要；
 >    `capability.dataset_exporter` 同样默认关闭、同样不含业务逻辑。
+> 8. **专项学习**——`alterego study {next,plan,recall,status}`（`domain/study.py`、
+>    `sim/study.py`、`cli_study.py`），按人设的职业认领一个方向，
+>    每次学一格写一篇笔记进同一间 Obsidian 库（`60-专业/`），
+>    并按打分把相关笔记翻出来。
+>    见 [`plans/2026-09-16-specialized-study.md`](../plans/2026-09-16-specialized-study.md)
+>    与 [ADR-0012](../adr/0012-specialized-study-is-a-curriculum-not-a-prompt.md)。
+>    **它是第一个「不靠聊天也能自己变强」的机制**：课程表是算出来的，
+>    进度落在知识库里，而「学到没有」靠「下次能不能接上」验证。
+>    ⚠️ **召回只做完了机制那半**：打分与渲染是纯函数（`study recall` 能当场验证），
+>    「每轮对话自动塞进去」要等对话循环落地后才接得上。
 >
-> 至此共 2127 个测试，全局覆盖率 **96.27%**。
+> 至此共 2398 个测试，全局覆盖率 **96.45%**（更新于第 8 条）。
 >
 > **领域层其余模块与 12 个 Repository 未开始**。阶段 E–M 均未开始。
 >
@@ -724,3 +734,4 @@ def apply_novelty_penalty(memories: list[ScoredMemory], since: datetime) -> list
 | --- | --- | --- | --- |
 | 2026-09-15 | v0.1.0 | 初版 | LMG-arch |
 | 2026-09-15 | v0.2.0 | 图片生成从 v0.5.0 提前到 v0.2.0，新增 v0.3.0「会自己找东西」；新增阶段 J–M；成本修正为 `2.0`/`40.0` 并补入生图与检索两条成本线（~$0.39/天）；存储补入 4 张新表与图片文件目录；新增风险 R17–R20 与 4 项监控指标 | LMG-arch |
+| 2026-09-16 | v0.3.2 | 阶段 D 补第 8 条已落地命令组「专项学习」（`alterego study`）；测试数与全局覆盖率改为实测值；[ADR-0012](../adr/0012-specialized-study-is-a-curriculum-not-a-prompt.md) | LMG-arch |

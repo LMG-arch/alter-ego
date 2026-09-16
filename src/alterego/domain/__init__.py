@@ -23,6 +23,7 @@ from alterego.domain import (
     memory,
     redact,
     schedule,
+    study,
     vault,
 )
 
@@ -38,5 +39,6 @@ __all__ = [
     "memory",
     "redact",
     "schedule",
+    "study",
     "vault",
 ]

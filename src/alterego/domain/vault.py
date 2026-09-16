@@ -52,6 +52,7 @@ __all__ = [
     "FOLDERS",
     "FOLDER_INBOX",
     "FOLDER_INDEX",
+    "FOLDER_STUDY",
     "STATE_FILENAME",
     "TYPES",
     "OrganizeDecision",
@@ -73,6 +74,7 @@ FOLDER_THOUGHTS: Final[str] = "20-想法"
 FOLDER_SOURCES: Final[str] = "30-读到的"
 FOLDER_MEMORIES: Final[str] = "40-记得的事"
 FOLDER_PEOPLE: Final[str] = "50-见过的人"
+FOLDER_STUDY: Final[str] = "60-专业"
 FOLDER_INBOX: Final[str] = "99-收集箱"
 
 FOLDERS: Final[tuple[str, ...]] = (
@@ -82,6 +84,7 @@ FOLDERS: Final[tuple[str, ...]] = (
     FOLDER_SOURCES,
     FOLDER_MEMORIES,
     FOLDER_PEOPLE,
+    FOLDER_STUDY,
     FOLDER_INBOX,
 )
 """库里的全部目录，**顺序即显示顺序**。
@@ -97,8 +100,14 @@ CONTENT_FOLDERS: Final[tuple[str, ...]] = (
     FOLDER_SOURCES,
     FOLDER_MEMORIES,
     FOLDER_PEOPLE,
+    FOLDER_STUDY,
 )
-"""角色可以把收集箱里的东西放进去的目录。索引与收集箱不在其中。"""
+"""角色可以把收集箱里的东西放进去的目录。索引与收集箱不在其中。
+
+``60-专业`` 在其中，但它**主要不是靠整理长出来的**——它是
+``alterego study`` 自己写进去的。放进这张表是为了让它和别的目录
+走同一套规矩：有索引页、会被查坏链、会被点名「没进索引」。
+"""
 
 TYPES: Final[dict[str, str]] = {
     FOLDER_SCHEDULE: "日程",
@@ -106,6 +115,7 @@ TYPES: Final[dict[str, str]] = {
     FOLDER_SOURCES: "读到的",
     FOLDER_MEMORIES: "记得的事",
     FOLDER_PEOPLE: "见过的人",
+    FOLDER_STUDY: "专业",
     FOLDER_INBOX: "待整理",
     FOLDER_INDEX: "索引",
 }

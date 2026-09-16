@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Final, Literal, cast, get_args
 
 from alterego.kernel.clock import resolve_timezone
+from alterego.kernel.config_study import StudyConfig
 from alterego.kernel.config_values import build_section, type_hints
 from alterego.kernel.errors import ConfigError
 from alterego.kernel.logging import get_logger
@@ -556,6 +557,7 @@ class Config:
     storage: StorageConfig = field(default_factory=StorageConfig)
     retention: RetentionConfig = field(default_factory=RetentionConfig)
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
+    study: StudyConfig = field(default_factory=StudyConfig)
     plugins: PluginsConfig = field(default_factory=PluginsConfig)
     web: WebConfig = field(default_factory=WebConfig)
     #: 实际读到的配置文件；全部使用内置默认值时为 ``None``。

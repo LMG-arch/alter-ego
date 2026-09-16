@@ -665,6 +665,15 @@ optional = ["channel.web"]
 >
 > **三个插件都是 `enabled_by_default = false`。** 插件不许替用户做决定——
 > 尤其是 `dataset_exporter` 这种会把对话写成文件的。
+>
+> **专项学习（`alterego study`）刻意没有对应的插件。** 它长得像一条
+> `capability.study`——有状态、有配置、有自己的命令——但它要做的事
+> 一件都离不开内核：写知识库笔记要跨目录白名单，召回要用内核自己的切词，
+> 记进度要接下一次命令。插件拿不到这些东西（第 3/4 组红线），
+> 硬做成插件只会把它自己劈成两半。**判断标准不是「长得像不像」，
+> 而是「拆出去之后两边是不是都还得认识同一个内核数据结构」**——
+> 是，就不该拆。理由与八个备选方案见
+> [ADR-0012](../adr/0012-specialized-study-is-a-curriculum-not-a-prompt.md) 决策八。
 
 ### 8.2 解析流程
 
@@ -1499,3 +1508,4 @@ from alterego.kernel.registry import ServiceRegistry
 | --- | --- | --- | --- |
 | 2026-09-15 | v0.1.0 | 初版，api_version = 1 | LMG-arch |
 | 2026-09-15 | v0.1.1 | 修正接口包位置（`alterego/interfaces/`）；§ 5 补充 `ctx.bus` / `ctx.registry` 的归属视图（[ADR-0007](../adr/0007-auto-owning-plugin-context-views.md)） | LMG-arch |
+| 2026-09-16 | v0.1.2 | § 8.1 补一条「为什么专项学习不做成插件」：判断标准是「拆出去之后两边是不是都还得认识同一个内核数据结构」，并指向 [ADR-0012](../adr/0012-specialized-study-is-a-curriculum-not-a-prompt.md) 决策八 | LMG-arch |

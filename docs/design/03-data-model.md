@@ -976,7 +976,7 @@ inner_voice       = '刚看到那个独立游戏的视频，好想跟他说一�
 | `schedule_block.category` | `sleep`, `work`, `meal`, `commute`, `leisure`, `social`, `chore`, `other` |
 | `activity_log.category` | `internal`, `social`, `outbound` |
 | `tick_log.status` | `ok`, `partial`, `failed`, `interrupted`, `skipped` |
-| `llm_usage.purpose` | **今天实际会落库的七个**：`decision`, `expression`, `reflection`, `memory`, `npc`, `persona`, `vault`。另有四个规划中的用途（`emotion` / `image_prompt` / `research_query` / `research_summarize`）**连配置键都还没有**，写进 `[llm.routing]` 会被未知键检测点名——权威清单见 [`07-model-routing-and-media.md § 2.4`](07-model-routing-and-media.md#24-用途purpose清单) |
+| `llm_usage.purpose` | **今天实际会落库的七个**：`decision`, `expression`, `reflection`, `memory`, `npc`, `persona`, `vault`。另有四个规划中的用途（`emotion` / `image_prompt` / `research_query` / `research_summarize`）**连配置键都还没有**，写进 `[llm.routing]` 会被未知键检测点名——权威清单见 [`07-model-routing-and-media.md § 2.4`](07-model-routing-and-media.md#24-用途purpose清单)。`vault` 这一条**有第二个调用方**：`alterego study next`（学一格）与整理知识库是同一个形状的调用（给材料、要 JSON、低温度），见 [`05-channels.md § 8.1`](05-channels.md#81-命令总览) |
 | `llm_usage.tier` | `strong`, `cheap`, `custom` |
 | `post_interaction.kind` | `like`, `comment` |
 | `persona_version.change_type` | `init`, `manual_edit`, `llm_refine`, `evolution` |

@@ -140,7 +140,7 @@ purpose 是**代码里**的概念（每次 LLM 调用都必须声明它），rou
 | `reflection` | 反思阶段 | cheap | 🔌 仅配置键 | 概括状态、归纳记忆 |
 | `emotion` | 反思阶段 | cheap | ⏳ 未实现 | 情绪更新（结构化输出）。**当前不走 LLM**：`domain/emotion.py::update_emotion` 是纯函数（规则驱动，可复现），`prompts/emotion_update.md` 已备好但尚未接线 |
 | `memory` | 记忆巩固 | cheap | ✅ 已接线 | 归纳 episodic → semantic（`sim/consolidation.py`） |
-| `vault` | 知识库整理 | cheap | ✅ 已接线 | 把收集箱里的笔记归位、起名、互链（`sim/vault.py`，见下） |
+| `vault` | 知识库整理、学一格 | cheap | ✅ 已接线 | 两个调用方同一形状：整理时把收集箱里的笔记归位、起名、互链（`sim/vault.py`）；学习时按题面写一篇专业笔记（`sim/study.py`）。两边都是「给材料 + 要 JSON + 低温度」，所以不另开一个 purpose
 | `npc` | NPC 推演 | cheap | 🔌 仅配置键 | 80% 走规则，剩下 20% 才调用 |
 | `persona` | 人设生成 | strong | 🔌 仅配置键 | 一次性，质量重要 |
 | **`image_prompt`** | 生图前 | strong | ⏳ 未实现 | 把「想拍什么」翻译成生图提示词的四个槽位（见 § 5.3） |
@@ -655,3 +655,4 @@ max_images_per_day = 20
 | 2026-09-15 | v0.1.0 | 初稿：三层配置模型、`image` 插件类型、三层一致性机制与 80% 验收阈值、`media_usage` 与 `v_cost_daily` | LMG-arch |
 | 2026-09-15 | v0.4.0 | 补记**已落地**的两层形状：`[llm.providers.<名字>]` + `[llm.routing]`（值落在档位或供应商名上）；`memory` 用途同时服务 `distill` 与 `consolidate`；网关的重试退避与「每次尝试都记账」；`core.user_name` | LMG-arch |
 | 2026-09-16 | v0.4.0 | 补第 9 个**已实现**的用途 `vault`（Obsidian 知识库整理）。它是第一个让模型去动**外部可见产物**的用途，因此除了给用途键，还把「目录合法 / 标题非空 / 那一篇真在收集箱里」做成了逐条校验 | LMG-arch |
+| 2026-09-16 | v0.4.1 | § 2.4 的 `vault` 行补上第二个调用方（`alterego study next` 学一格）；不新增 purpose，理由是形状相同 | LMG-arch |

@@ -647,3 +647,94 @@ def test_an_absolute_export_dir_is_kept_verbatim(tmp_path: Path) -> None:
     )
 
     assert config.dataset.export_dir == tmp_path / "out"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  [study] —— 专项学习
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_study_defaults_learn_one_step_at_a_time() -> None:
+    """默认一次只学一格。
+
+    一次学完整个方向，就把「我一个星期前还不懂这个」这件事抹掉了，
+    而那正是这个功能唯一能证明自己的东西。
+    """
+    config = Config.load(path=None, env={})
+
+    assert config.study.field == ""
+    assert config.study.rounds == 1
+    assert config.study.recall_limit == 3
+    assert config.study.min_score == 2.0
+
+
+def test_a_blank_field_is_not_an_error() -> None:
+    """方向留空是**有意义**的：意思是从人设的 ``occupation`` 里认。
+
+    认不出来时由命令直接说「不知道该学什么」，而不是在内核里就拦下来——
+    内核不知道人设里写了什么，也不知道命令行在干什么。
+    """
+    config = Config.load(path=None, env={}, overrides={"study": {"field": "  "}})
+
+    assert config.study.field.strip() == ""
+
+
+@pytest.mark.parametrize("bad_key", ["rounds", "recall_limit"])
+@pytest.mark.parametrize("bad", [0, -1])
+def test_a_non_positive_study_count_is_rejected(bad_key: str, bad: int) -> None:
+    """``rounds = 0`` 会让 ``study next`` 什么都不学却报告成功。
+
+    这比报错更糟：用户以为它学了，其实一格都没动，而且进度文件也没变，
+    于是下次跑还是同一个结果——静默的空转。
+    """
+    with pytest.raises(ConfigError) as caught:
+        Config.load(path=None, env={}, overrides={"study": {bad_key: bad}})
+
+    assert caught.value.context["key"] == bad_key
+    assert caught.value.context["value"] == bad
+
+
+@pytest.mark.parametrize("bad_key", ["rounds", "recall_limit"])
+def test_a_boolean_study_count_is_rejected(bad_key: str) -> None:
+    """``rounds = true`` 不是「学一轮」的意思。
+
+    Python 里 ``True`` 就是 ``1``，不特判的话它会被静默接受，
+    而用户看到的是「学到了」，实际上什么差别都看不出来。
+    """
+    with pytest.raises(ConfigError) as caught:
+        Config.load(path=None, env={}, overrides={"study": {bad_key: True}})
+
+    assert caught.value.context["key"] == bad_key
+
+
+def test_a_negative_score_threshold_is_rejected() -> None:
+    """门槛是分数，分数没有负的。
+
+    负数不会报错得那么明显：它比 0 还松，等于「随便什么都算命中」，
+    于是每轮对话都被塞进一大堆不相干的专业笔记。
+    """
+    with pytest.raises(ConfigError) as caught:
+        Config.load(path=None, env={}, overrides={"study": {"min_score": -1.0}})
+
+    assert caught.value.context["key"] == "min_score"
+    # 报「不能为负」的同时必须给出替代做法，否则用户只会把它填成 0——
+    # 而那比不调用更糟。
+    assert "recall_limit" in caught.value.context["hint"]
+
+
+def test_a_zero_score_threshold_is_allowed() -> None:
+    """0 是合法的：它是「把门槛关掉」，不是错误配置。
+
+    拦住它只会让用户去写一个 0.000001，那更说不清。
+    """
+    config = Config.load(path=None, env={}, overrides={"study": {"min_score": 0}})
+
+    assert config.study.min_score == 0
+
+
+def test_study_config_is_frozen() -> None:
+    """配置对象创建后不可改——改了它，下一次读配置的人看到的是另一份值。"""
+    config = Config.load(path=None, env={})
+
+    with pytest.raises(FrozenInstanceError):
+        config.study.rounds = 5  # type: ignore[misc]

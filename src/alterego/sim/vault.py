@@ -51,7 +51,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from alterego.domain.knowledge import Note, note_from_text, slugify
 from alterego.domain.memory import Memory
@@ -89,12 +89,14 @@ __all__ = [
     "BuildReport",
     "OrganizeReport",
     "SyncReport",
+    "VaultHome",
     "VaultWorkbench",
     "build",
     "init_vault",
     "organize",
     "scan",
     "sync",
+    "write_note",
 ]
 
 
@@ -170,6 +172,28 @@ _CORE_PLUGINS: Final[list[str]] = [
 
 
 # ── 装配 ────────────────────────────────────────────────────
+
+
+class VaultHome(Protocol):
+    """重建索引真正需要的三样东西。
+
+    :func:`build` 只用到 ``persona.name``、``root`` 和 ``logger``——
+    既不开数据库也不调模型。把它收敛到这三样之后，``sim/study.py``
+    写完专业笔记也能顺手重建索引，而不必假装自己拿着全部仓储。
+
+    三个成员写成 ``@property`` 而不是普通标注：实现方是
+    ``frozen=True`` 的数据类，字段是只读的，写成可写标注 mypy 会拒绝——
+    这个协议描述的是「能读到什么」，本来也不该承诺「能改」。
+    """
+
+    @property
+    def persona(self) -> PersonaRecord: ...
+
+    @property
+    def root(self) -> Path: ...
+
+    @property
+    def logger(self) -> logging.Logger: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,7 +286,7 @@ def _inbox_name(title: str, key: str) -> str:
     return f"{slugify(title)}-{key[:8]}"
 
 
-def _write(root: Path, note: Note) -> Path:
+def write_note(root: Path, note: Note) -> Path:
     """原子地写一篇笔记，返回落盘路径。
 
     先写 ``.md.tmp`` 再 ``replace``。半截文件比没有文件更糟：Obsidian 会
@@ -271,6 +295,10 @@ def _write(root: Path, note: Note) -> Path:
     显式写 ``newline="\\n"``：Windows 上默认会把 ``\\n`` 变成 ``\\r\\n``，
     而仓库的 ``core.autocrlf=false``——一旦写进去，每篇笔记在 git 里都成了
     「整个文件都变了」。
+
+    公开而不再是 ``_write``，因为 ``sim/study.py`` 也要写笔记
+    （``60-专业`` 那批）。那两条性质——原子、不碰换行符——正是
+    「复制一份」最容易漏掉的东西，所以宁可共用。
     """
     path = root / note.path
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -525,16 +553,18 @@ def init_vault(work: VaultWorkbench, *, now: datetime) -> tuple[Path, ...]:
             created.append(path)
 
     root_note = _root_index(work, (), now=now)
-    created.append(_write(work.root, root_note))
+    created.append(write_note(work.root, root_note))
     created.extend(
-        _write(work.root, build_folder_index(folder, created=now, notes=(), parent=root_note.stem))
+        write_note(
+            work.root, build_folder_index(folder, created=now, notes=(), parent=root_note.stem)
+        )
         for folder in CONTENT_FOLDERS
     )
     work.logger.info("知识库已就位", extra={"root": str(work.root)})
     return tuple(created)
 
 
-def _root_index(work: VaultWorkbench, notes: Sequence[Note], *, now: datetime) -> Note:
+def _root_index(work: VaultHome, notes: Sequence[Note], *, now: datetime) -> Note:
     """总索引页。库的开场白写在它的开头。"""
     intro = f"我是 {work.persona.name}。这里记我的日程、看到的东西、想到的事。"
     return build_root_index(
@@ -588,18 +618,18 @@ def sync(work: VaultWorkbench, *, now: datetime, lookback_days: int = _LOOKBACK_
             activities=[row for row in activities if _local_date(row.started_at, tz) == day],
             thoughts=on_day,
         )
-        _write(work.root, note)
+        write_note(work.root, note)
         written += 1
 
     inbox_written = 0
     for note in [*thought_notes.values()]:
-        _write(work.root, note)
+        write_note(work.root, note)
         inbox_written += 1
     for record in sources:
-        _write(work.root, render_source(record, created=record.fetched_at, tz=tz))
+        write_note(work.root, render_source(record, created=record.fetched_at, tz=tz))
         inbox_written += 1
     for memory in memories:
-        _write(work.root, render_memory(memory, created=memory.occurred_at, tz=tz))
+        write_note(work.root, render_memory(memory, created=memory.occurred_at, tz=tz))
         inbox_written += 1
 
     inbox = (
@@ -625,7 +655,7 @@ def sync(work: VaultWorkbench, *, now: datetime, lookback_days: int = _LOOKBACK_
     )
 
 
-def build(work: VaultWorkbench, *, now: datetime) -> BuildReport:
+def build(work: VaultHome, *, now: datetime) -> BuildReport:
     """按实际文件重算所有索引页，然后校验四条不变量。
 
     索引是**派生**的，不是记着的——扫描目录在前、生成索引在后，所以
@@ -645,7 +675,7 @@ def build(work: VaultWorkbench, *, now: datetime) -> BuildReport:
         for folder in CONTENT_FOLDERS
     )
     for note in fresh:
-        _write(work.root, note)
+        write_note(work.root, note)
 
     after = scan(work.root, now=now, logger=work.logger)
     issues = validate(after)
@@ -735,7 +765,7 @@ async def organize(work: VaultWorkbench, *, now: datetime, dry_run: bool = False
             created=source.created,
             body=source.body,
         )
-        _write(work.root, note)
+        write_note(work.root, note)
         taken.add(note.path)
         obsolete = work.root / source.path
         if obsolete.is_file() and source.path != note.path:

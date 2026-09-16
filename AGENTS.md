@@ -103,7 +103,7 @@ bash scripts/check_architecture.sh
 
 | 约束 | 值 | 为什么 |
 | --- | --- | --- |
-| 单文件行数 | **≤ 900** | 超过就拆（`kernel/config.py` 已 825，最接近上限） |
+| 单文件行数 | **≤ 900** | 超过就拆。`kernel/config.py` 已**顶到 900**（零余量），再加配置段请开卫星模块，先例是 `kernel/config_study.py` 与 `kernel/config_values.py` |
 | 行长 | ≤ 100 | formatter 处理 |
 | 类型注解 | 全部 | `mypy strict = true` |
 | 必需依赖 | **只有两个**：`pydantic`、`httpx` | P5。新增必需依赖需写 ADR |
