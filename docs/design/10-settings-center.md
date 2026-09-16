@@ -1,15 +1,16 @@
 # 10 · 设置中心
 
-> 上级文档：[DESIGN.md](../DESIGN.md) · 版本 v0.1.0
+> 上级文档：[DESIGN.md](../DESIGN.md) · 版本 v0.1.2
 > 本文档描述「所有配置都能在 UI 里设置、且每个设置都有标注」的设计。
 
-> ⚠️ **本文档描述的是 v0.2.0 的规划，代码尚不存在（截至 2026-09-16）。**
-> 文中出现的 `kernel/settings.py`、`SETTING_METADATA`、`Setting` / `SettingKind` / `Choice`
-> 和 `tests/test_settings_metadata.py` **全部还没有写** —— 照着写会 `ImportError`。
+> ✅ **本文档描述的机制已经落地（v0.1.2，2026-09-16）。**
+> 文中出现的文件名与符号名**就是代码里的名字**，可以直接照着写：
+> `kernel/settings.py`（`Setting` / `SettingKind` / `Choice` / `infer_setting`）、
+> `kernel/settings_catalog.py` + `settings_catalog_{agent,model,infra}.py`（95 条元数据 / 17 个段）、
+> `kernel/settings_write.py`（文本级改写与原子写）、`cli_config.py`（`alterego config`）、
+> `tests/test_settings_metadata.py`（三条强制标注的断言）。
 > 依据：[`ADR-0010`](../adr/0010-every-setting-carries-display-metadata.md)。
-> 在此之前，强制项只有两条（见 [`AGENTS.md`](../../AGENTS.md) § 7）：
-> 每个配置字段写中文 docstring 说清「改了会发生什么」，并在 `templates/alterego.toml` 里
-> 留一行带注释的默认值。
+> 本文档的 § 7「页面结构」还是规划：Web 设置页属于批次 C，`alterego config` 已经是实物。
 
 ---
 
@@ -450,3 +451,4 @@ confirm_diff = true
 | --- | --- | --- | --- |
 | 2026-09-15 | v0.1.0 | 初稿：`Setting` 元数据与 `effect` 字段、三条元数据来源、元数据强制测试、原子写入与热生效分级、设置页 11 个分组 | LMG-arch |
 | 2026-09-16 | v0.1.1 | § 7 分组表补「学习」（`[study]` 四个键）；新增 § 7.3：`rounds` 数的是**格**不是轮，字段名写错了就要在界面上补对，且 `field` 留空是有意义的 | LMG-arch |
+| 2026-09-16 | v0.1.2 | **机制落地**：`kernel/settings.py`（`Setting` / `Choice` / `SettingKind` / `infer_setting`）、`settings_catalog{,_agent,_model,_infra}.py`（95 条元数据 / 17 个段）、`settings_write.py`（文本级改写 + 原子写 + 写前用同一个校验器加载一遍）、`cli_config.py`（`alterego config {show,explain,get,set,schema}`）、`test_settings_metadata.py`（三条强制标注断言）；`[settings]` 段写进 `templates/alterego.toml`。§ 7 的 Web 页仍属批次 C | LMG-arch |

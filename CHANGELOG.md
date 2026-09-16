@@ -705,6 +705,72 @@ alterego plugins reset <PLUGIN_ID>    # 解除熔断
   手写的 `plugin.toml` 少了 `api_version`，于是测「导入就炸」的用例其实在测
   「清单非法」。合成清单必须**先合法**，再去测想测的那件事
 
+**主体四块 · 第二批之二：设置中心（`alterego config`）**
+
+计划见 `docs/plans/2026-09-16-main-body.md` § 4 批次 B。这一批把
+`docs/design/10-settings-center.md` 与 `ADR-0010` 从设计变成了代码：**一份元数据，
+两种渲染**（命令行与将来的设置页读的是同一份 `Setting`），第一次能回答
+「这个 `3` 是什么、改了会怎样」：
+
+```bash
+alterego config show                      # 按分组列全部设置项（键 / 值 / 是什么 / 改了会怎样）
+alterego config show 预算                  # 只看一组
+alterego config explain llm.routing.decision
+alterego config get llm.routing.decision
+alterego config set llm.routing.decision cheap --dry-run
+alterego config schema --json             # 机器可读清单，供补全脚本与 Web 设置页使用
+```
+
+- **`kernel/settings.py`** —— `Setting` / `Choice` / `SettingKind` / `infer_setting`。
+  `SettingKind` 的取值刻意与 `plugin.toml` 的 `type` 写法一致（`bool` / `int` /
+  `enum` / `secret` / `duration` …），界面上不会出现两套类型名。
+  `infer_setting()` 是**保底**：没写元数据的字段也能从类型推断出控件，
+  但会被标成「未标注」——能显示不等于有人为它写过那句话
+- **`kernel/settings_catalog{,_agent,_model,_infra}.py`** —— 95 条元数据 / 17 个配置段。
+  拆四个文件是按「谁会在同一份 diff 里改动」分的：人设与推演的调参、
+  模型与预算、基础设施
+- **`kernel/settings_write.py`** —— 文本级 TOML 改写，不是「解析成 dict 再写回去」。
+  理由是这个文件**同时是用户的手写笔记**：注释、空行、对齐、跨行数组都得原样留着。
+  `patch_text()` 是纯函数，测试可以直接喂一段带注释的 TOML 进去比字符串
+- **写盘之前用「加载时同一个校验器」读一遍将要落盘的内容**。
+  元数据只拦一眼就不对的（类型、范围、枚举、`${VAR}`），跨字段的约束
+  （如「紧急上限不能低于普通上限」）只有真加载一次才发现。校验不过就删临时文件，
+  原文件一个字节都不动——**写坏了要能怪到某个具体的改动上**
+- **改一个键只改一行，且不吞注释**。`patch_text()` 认得同一个键的三种等价写法
+  （`[llm.routing]` 里的 `decision`、`[llm]` 里的 `routing.decision`、
+  根表里的 `llm.routing.decision`）。漏认任一种都会**补出第二个同名键**，
+  于是文件下次启动直接报 TOML 非法。但只在**这个键的祖先表**里找，
+  不全文找短名：`[a]` 与 `[b]` 都有 `timeout` 时，全文找会把 b 的那一行改掉——
+  那是一次静默的错写，比补一行重复键更糟
+- **密钥与「整段表」在渲染层就被拒绝**。`alterego.toml` 是要提交进 git 的，
+  写进去的密钥会进版本库，所以报错文案里直接给的是「用 `${VAR_NAME}` 引用」；
+  而 `llm.providers` 这种整段表根本没有「一个值」可以填，报错比静默写坏好
+- **`[settings]` 段开了一个卫星模块**（`kernel/config_settings.py`）。
+  `kernel/config.py` 顶在 900 行上限，一个字的余量都没有——先例是
+  `config_study.py` 与 `config_values.py`
+- **`cli_config.py`（第九个组装根）**。五个子命令，只有 `set` 会改文件，
+  这一点写在主 parser 的 description 里（有测试钉着）。`schema` 刻意**不读配置文件**：
+  它回答的是「有哪些设置」，不是「你设成了什么」，所以「当前值」一律是 `None`
+  而不是悄悄用默认值顶上
+- **`_lookup` 对段名与键名分得很清**。`alterego config get llm` 拿到的是一个段，
+  段本身没有值——它回的是「这是一个配置段，不是设置项」并指路 `config show llm`，
+  而不是「没有这个配置段」
+- **`templates/alterego.toml` 补 `[settings]` 四个键**。权威模板与配置类必须同时改，
+  否则 `alterego init` 生成的文件里会少一段，而 `config show` 会显示成默认值——
+  「模板是权威参考」这句话就失效了
+- 测试新增 **144 个**（`test_settings_metadata.py` / `test_settings_write.py` /
+  `test_cli_config.py`）。覆盖率：`settings_write.py` 98.0% / `settings.py` 97.5% /
+  `settings_catalog.py` 95.9% / 三个元数据模块与 `config_settings.py` 100% /
+  `cli_config.py` 94.3%；全仓 96.3%，kernel 97.1%
+- 元数据测试只钉**三件事**：每个配置字段都有元数据、`effect` 是一句完整的话
+  （≥ 8 字且不含「可能 / 大概 / 也许」）、枚举的每个选项都写了后果。
+  多加一条断言看起来更严谨，实际是把「写下那句话」变成「凑够字数」
+- 修掉三处**测试自己的假设错**（都是「我以为的配置，不是配置里的配置」）：
+  `daily_message_limit` **只有下限没有上限**（测上界要用 `web.port`）；
+  `log_level` 的元数据是**枚举**，于是 `render_value` 先拦住了它，
+  永远测不到「加载校验拦住」（改用跨字段的 `daily_message_limit`）；
+  `core.data_dir` 的 `requires_restart` 是 **True** 而不是 False
+
 ### 变更
 
 - **迁移文件从此只管 DDL**。四个 `.sql` 里没有任何 `PRAGMA` 头、没有 `IF NOT EXISTS`、

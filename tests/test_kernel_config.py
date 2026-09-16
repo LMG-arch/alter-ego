@@ -544,20 +544,23 @@ def test_authoritative_template_loads_real_values() -> None:
 
 
 def test_the_format_names_are_a_mirror_of_the_domain() -> None:
-    """``_DATASET_FORMATS`` 必须与 ``domain.dataset.FORMATS`` 一模一样。
+    """``DATASET_FORMATS`` 必须与 ``domain.dataset.FORMATS`` 一模一样。
 
     内核不能 import domain（第 4 条红线：内核不引用任何上层模块），
     所以这份名单在内核里被抄了一遍。抄件与原件对不上时，症状是
     「配置填得出、内核也放行，但导出到一半才说没这种形状」——
     一个只有真跑一次才看得见的错。把两边钉在一起，改一边就红。
+
+    它住在 ``config_values.py`` 而不是 ``config.py``：后者顶在 900/900
+    （``scripts/check_architecture.sh`` 第 23 项），一个字的余量都没有。
     """
     from alterego.domain import dataset as domain_dataset
-    from alterego.kernel.config import _DATASET_FORMATS
+    from alterego.kernel.config_values import DATASET_FORMATS
 
-    assert frozenset(domain_dataset.FORMATS) == _DATASET_FORMATS
+    assert frozenset(domain_dataset.FORMATS) == DATASET_FORMATS
     # 顺序也要一致：README 用 formats[0] 当主形状，命令行的 choices
     # 也是按这个顺序展示的。
-    assert tuple(sorted(_DATASET_FORMATS)) == tuple(sorted(domain_dataset.FORMATS))
+    assert tuple(sorted(DATASET_FORMATS)) == tuple(sorted(domain_dataset.FORMATS))
 
 
 def test_dataset_defaults_are_conservative() -> None:

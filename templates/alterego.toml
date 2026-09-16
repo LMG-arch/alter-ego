@@ -325,6 +325,26 @@ sse_keepalive_seconds = 20          # SSE 心跳间隔，防中间层断开连�
 sse_max_connections = 20            # 同时连接上限
 page_size = 50                      # 列表页每页条数
 
+# ───────────────────────────────────────────────────────────────────────────
+#  [settings]  设置中心自己
+#
+#  这一节与「它像不像人」无关，只决定你在设置页 / `alterego config` 里
+#  看到什么、改的时候有没有退路。每一项的说明与影响写在元数据里：
+#  kernel/settings_catalog_*.py，展示命令是 `alterego config explain <键>`。
+# ───────────────────────────────────────────────────────────────────────────
+[settings]
+show_advanced = false               # 设置页是否默认展开「高级」分组
+                                    # 收起但不藏起来：想直接改 TOML 的人
+                                    # 也该有一个带校验的编辑器可用
+auto_backup = true                  # 改配置前留一份 alterego.toml.bak
+                                    # 配置写坏的代价是启动失败，而那时
+                                    # 多半已经忘了自己刚改过什么
+show_unannotated = true             # 是否显示手写但内核不认识的「未标注」键
+                                    # 关掉界面更干净，但会被误认成「配置丢了」
+confirm_diff = true                 # 保存前先给你看一遍差异
+                                    # data_dir 这类项一旦写错就让 Agent
+                                    # 找不到已有数据，值得先看一眼
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  密钥（不要写在这里！）
 #
@@ -347,9 +367,10 @@ page_size = 50                      # 列表页每页条数
 #
 #  为什么这里只写注释、不写区块：
 #    本文件是「所有配置项的权威参考」，同时也是 alterego init 的**输入**。
-#    如果现在就把 [media] / [sources] / [settings] 写成真区块，
+#    如果现在就把 [media] / [sources] 写成真区块，
 #    生成出来的配置文件会包含内核还不认识的键（与内核测试相矛盾）。
 #    所以：**发布实现与取消注释必须是同一次提交**。
+#    （[settings] 已经这样做过一次：实现与本节同时落地。）
 #
 #  完整写法（与本节同步维护）：docs/DESIGN.md § 12.1
 #    形象与生图      docs/design/07-model-routing-and-media.md
@@ -365,7 +386,7 @@ page_size = 50                      # 列表页每页条数
 #    [budget]            由 [llm.budget] 更名，新增 max_images_per_day 与 [budget.per_purpose]
 #    [media] / [media.selfie] / [media.providers.*]
 #    [sources] / [sources.search] / [sources.fetch]
-#    [log] / [observability] / [stats] / [settings]
+#    [log] / [observability] / [stats]
 #    [retention]         新增 log_keep_days / media_keep_days /
 #                        media_private_keep_days / source_item_keep_days
 # ═══════════════════════════════════════════════════════════════════════════

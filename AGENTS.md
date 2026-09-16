@@ -58,13 +58,16 @@ logging.FileHandler(...)  # → 用 ctx.logger，脱敏与轮转由内核负责
 # ✗ 禁止：新增配置项不带说明
 # → 至少要有中文 docstring 说清楚「改了会发生什么」，并在 templates/alterego.toml 里补一行
 #   带注释的默认值（tests/test_kernel_config.py::test_authoritative_template_covers_every_key 会查）
+# → 还要在 kernel/settings_catalog_*.py 里补一条展示元数据（tests/test_settings_metadata.py 会查）
 ```
 
-> ⚠️ **设置项展示元数据的完整版（`Setting(description=..., effect=...)` + `SETTING_METADATA` +
-> `tests/test_settings_metadata.py`）尚未实现**，它是 v0.2.0 的设置中心
-> （[`docs/design/10-settings-center.md`](docs/design/10-settings-center.md)，
-> [ADR-0010](docs/adr/0010-every-setting-carries-display-metadata.md)）。
-> 上面第 5 条给的是**今天就能守**的版本。机制落地后那两句会换回 CI 断言。
+> ✅ **设置项展示元数据已落地（v0.1.2）。** `Setting(description=..., effect=...)`、
+> `SettingKind` / `Choice`、`SETTING_METADATA`（95 条 / 17 个段）与
+> `tests/test_settings_metadata.py` 都在代码里，骨架是 `kernel/settings.py`、
+> `kernel/settings_catalog.py`，命令行入口是 `alterego config`（`cli_config.py`）。
+> 写新配置项的完整姿势见 [`docs/design/10-settings-center.md`](docs/design/10-settings-center.md)。
+> ✅ **展示命令**：`alterego config explain <键>` 回答「它是什么、改了会怎样、现在是多少」。
+> 依据：[ADR-0010](docs/adr/0010-every-setting-carries-display-metadata.md)。
 
 **自行验证**：
 
@@ -133,16 +136,50 @@ coverage 自带的 `--cov-fail-under` 只能表达一个全局下限，所以复
 
 ## 7. 新增配置项的正确姿势
 
-**今天（v0.1.x）必须做的是这三步**：
+**今天（v0.1.2）必须做的是这四步**：
 
 1. 配置 `dataclass` 加字段，字段下面写**中文 docstring** 说清「改了会发生什么」。
 2. 在 `templates/alterego.toml` 里补一行带注释的默认值——`test_authoritative_template_covers_every_key`
    会核对模板与配置类一一对应，缺了直接红。
 3. 如果是新增**段**，还要在 `kernel/config.py` 的 `Config` 上挂好；嵌套的 dataclass 段
    会被 `_split_known` 递归检查，写错键名会被告警点名（见 `07-model-routing-and-media.md` § 3.1.1）。
+   ⚠️ `kernel/config.py` 顶在 900 行，新段请开卫星模块（先例：`kernel/config_study.py`、
+   `kernel/config_settings.py`）。
+4. 在 `kernel/settings_catalog_*.py` 里注册展示元数据——`test_settings_metadata.py`
+   会核对「每个配置字段都有元数据」「`effect` 说的是一句完整的话」「每个枚举选项都写了后果」。
 
-**下面这段「展示元数据」是 v0.2.0 的目标形态，现在写会 ImportError**（`SETTING_METADATA`、
-`Setting`、`SettingKind` 都还不存在），列出它是为了让机制落地时不用重新设计：
+**展示元数据的写法**（`SETTING_METADATA` / `Setting` / `SettingKind` 都已存在）：
+
+```python
+# 1. 配置 dataclass 加字段
+@dataclass(frozen=True)
+class MediaSelfieConfig:
+    daily_limit: int = 3
+    """每天最多主动拍几张自拍。"""
+
+# 2. 注册展示元数据（缺了 test_settings_metadata.py 会挂）
+SETTING_METADATA[MediaSelfieConfig] = {
+    "daily_limit": Setting(
+        key="media.selfie.daily_limit",
+        label="每天最多主动拍几张自拍",
+        description="它自己决定想拍照时，一天最多拍几张。",
+        kind=SettingKind.INT,
+        default=3,
+        minimum=0,
+        maximum=20,
+        unit="张",
+        effect="调高后相册增长更快、生图费用同比上升；调到 0 等于关掉主动拍照，它仍可被要求拍照。",
+        group="形象",
+        requires_restart=False,
+    ),
+}
+```
+
+**三条约定**（`tests/test_settings_metadata.py` 逐条守着）：
+
+- `effect` 必须是一句完整的话，不许写「可能有变化」这种什么都没说的句子；
+- 枚举的每个 `Choice` 都要写 `consequence`（选了它会发生什么），而不只是 `label`；
+- 元数据里的 `default` 必须与配置类里的默认值**逐字一致**（`Path("data")` 而不是 `"data"`）。
 
 ```python
 # 1. 配置 dataclass 加字段

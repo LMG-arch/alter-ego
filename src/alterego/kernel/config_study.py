@@ -1,6 +1,6 @@
 """``[study]`` —— 专项学习的配置。
 
-**为什么这个段不在 ``kernel/config.py`` 里。** 那个文件已经 898 行，而上限是
+**为什么这个段不在 ``kernel/config.py`` 里。** 那个文件顶在 900 行，而上限是
 900（`scripts/check_architecture.sh` 的第 23 项）。再加一个配置类进去，
 不是「稍微超一点」，是把自己定的红线划掉了——而那条红线的意义恰恰在于
 **它是硬的**：一旦允许「就这一次」，下一个 900 行就会变成 1200 行。
@@ -10,8 +10,10 @@ import 进来挂到 :class:`~alterego.kernel.config.Config` 上。
 ``kernel/config_values.py`` 早就是这个形状了——它只装转换规则，
 这里装一个段的字段。
 
-⚠️ **``config.py`` 现在是 900/900，一个字的余量都没有。**
-下一个配置段要么先从这里挪走一段，要么另开一个卫星模块。
+⚠️ **``config.py`` 贴着上限，没有余量。**
+下一个配置段要么先从这里挪走一段，要么另开一个卫星模块
+（先例：``kernel/config_values.py``、``kernel/config_study.py``、
+``kernel/config_settings.py``）。
 """
 
 from __future__ import annotations

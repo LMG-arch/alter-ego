@@ -29,11 +29,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from datetime import time
 from pathlib import Path
-from typing import Any, Final, Literal, cast, get_args
+from typing import Any, Literal, cast, get_args
 
 from alterego.kernel.clock import resolve_timezone
+from alterego.kernel.config_settings import SettingsConfig
 from alterego.kernel.config_study import StudyConfig
-from alterego.kernel.config_values import build_section, type_hints
+from alterego.kernel.config_values import DATASET_FORMATS, build_section, type_hints
 from alterego.kernel.errors import ConfigError
 from alterego.kernel.logging import get_logger
 
@@ -53,6 +54,7 @@ __all__ = [
     "PluginsConfig",
     "RetentionConfig",
     "RoutingConfig",
+    "SettingsConfig",
     "SimulationConfig",
     "StorageConfig",
     "WebConfig",
@@ -405,14 +407,9 @@ class RetentionConfig:
         _require_positive("activity_log_keep_days", self.activity_log_keep_days)
 
 
-#: ``domain.dataset.FORMATS`` 的镜像。
-#:
-#: 内核不能 import ``domain``（第 4 条架构红线），所以这里必须重复一遍。
-#: 重复是要付代价的，所以 `tests/test_kernel_config.py` 里有一条断言把两边钉在一起——
-#: 在 ``domain`` 那边加形状而忘了改这里，测试会红，而不是等到用户配了才发现。
-_DATASET_FORMATS: Final[frozenset[str]] = frozenset({"chat", "sharegpt", "alpaca"})
-
-
+#: ``domain.dataset.FORMATS`` 的镜像，住在 ``config_values.py``：
+#: 本文件顶在 900/900（``scripts/check_architecture.sh`` 第 23 项），一个字的余量都没有。
+#: 用法见 :class:`DatasetConfig` 的 ``__post_init__``。
 @dataclass(frozen=True)
 class DatasetConfig:
     """``[dataset]`` —— 训练数据集的导出。
@@ -466,12 +463,12 @@ class DatasetConfig:
                 "formats 不能为空",
                 hint="至少选一个：chat / sharegpt / alpaca",
             )
-        unknown = sorted(set(self.formats) - _DATASET_FORMATS)
+        unknown = sorted(set(self.formats) - DATASET_FORMATS)
         if unknown:
             raise ConfigError(
                 "formats 里有不认识的形状",
                 unknown=unknown,
-                supported=sorted(_DATASET_FORMATS),
+                supported=sorted(DATASET_FORMATS),
             )
         if any(not term.strip() for term in self.redact_terms):
             # 静默忽略一条用户明确要求的脱敏词 = 隐私事故。这里必须响。
@@ -560,6 +557,7 @@ class Config:
     study: StudyConfig = field(default_factory=StudyConfig)
     plugins: PluginsConfig = field(default_factory=PluginsConfig)
     web: WebConfig = field(default_factory=WebConfig)
+    settings: SettingsConfig = field(default_factory=SettingsConfig)
     #: 实际读到的配置文件；全部使用内置默认值时为 ``None``。
     source: Path | None = None
     #: 配置文件里存在但内核不认识的键，用点分路径表示（``"llm.routing.decisionn"``）。

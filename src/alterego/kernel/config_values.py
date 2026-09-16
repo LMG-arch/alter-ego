@@ -9,6 +9,12 @@
 
 :func:`type_hints` 也被 ``config.py`` 用来判断「一个段能不能往里递归」，
 所以它是对外公开的——两处都要解析注解字符串，没必要各缓存一份。
+
+**为什么 ``DATASET_FORMATS`` 在这里。** ``config.py`` 顶在 900/900，
+一个字的余量都没有（``scripts/check_architecture.sh`` 第 23 项）。
+「某个键的合法取值有哪些」本来就是配置值的事，而这个常量只被
+:class:`~alterego.kernel.config.DatasetConfig` 的 ``__post_init__`` 用，
+所以它跟着搬——不是被塞进一个不相关的地方。
 """
 
 from __future__ import annotations
@@ -18,12 +24,20 @@ from dataclasses import fields, is_dataclass
 from datetime import time
 from pathlib import Path
 from types import UnionType
-from typing import Any, Literal, get_args, get_origin, get_type_hints
+from typing import Any, Final, Literal, get_args, get_origin, get_type_hints
 
 from alterego.kernel.errors import ConfigError
 
 
-__all__ = ["build_section", "type_hints"]
+__all__ = ["DATASET_FORMATS", "build_section", "type_hints"]
+
+
+#: ``domain.dataset.FORMATS`` 的镜像。
+#:
+#: 内核不能 import ``domain``（第 4 条架构红线），所以这里必须重复一遍。
+#: 重复是要付代价的，所以 `tests/test_kernel_config.py` 里有一条断言把两边钉在一起——
+#: 在 ``domain`` 那边加形状而忘了改这里，测试会红，而不是等到用户配了才发现。
+DATASET_FORMATS: Final[frozenset[str]] = frozenset({"chat", "sharegpt", "alpaca"})
 
 
 def build_section(cls: type[Any], data: Mapping[str, Any]) -> Any:
