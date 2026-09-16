@@ -226,16 +226,21 @@ check_forbidden \
 #   cli_db.py   同一件事的延伸：`alterego db` 那几个维护命令住在这里。
 #               它是因为 cli.py 撞上 900 行上限才拆出去的，职责没变。
 #   cli_memory.py  同理，`alterego memory` 的两条梳理命令。
+#   cli_study.py   同理，`alterego study` 的学习回。它要把学习记录写成
+#               具体的仓储，而不是经过一个不存在的 Protocol。
 #   cli_vault.py   同理，`alterego vault` 的五个知识库命令。它也要挑一个
 #               具体的仓储实现装上（日程 / 搜集到的 / 人设）。
 #   cli_dataset.py 同理，`alterego dataset` 的四个导出命令。它要装上
 #               DatasetSourceRepository 的具体实现。
 #   cli_chat.py 同理，`alterego chat`。它要装上引擎的十个仓储，
 #               才能把库读成「它现在什么心情、在干嘛、有没有人在等」。
+#   cli_serve.py 同理，`alterego serve`。它是**常驻**的那个：界面要读的
+#               十个仓储、要装的插件管理器，全在这里一次接好；分开写成
+#               一个 Protocol 只会把「同一台管理器活很久」这件事藏到别处。
 #   storage/    实现自己。`backend.py` / `migrator.py` 当然要互相 import。
 #
 # 组装根的价值在于「只有这几个地方知道存储到底是什么」，所以每多一个都得
-# 说得清为什么。碰存储的有七个，都叫 cli_*.py，都能一句话说清职责；
+# 说得清为什么。碰存储的有八个，都叫 cli_*.py，都能一句话说清职责；
 # 再加下一个之前先想想能不能并进现有的某一个。文件名统一成 `cli_` 开头
 # 也是为此——它一眼就能看出「这是组装根，不是业务代码」。
 #
@@ -246,8 +251,8 @@ check_forbidden_excluding \
     "sqlite 实现只被组装根与存储层引用" \
     "from alterego\.storage\.sqlite|import alterego\.storage\.sqlite" \
     "$SRC" \
-    "cli(_db|_dataset|_memory|_study|_vault|_chat)?\.py:|/storage/" \
-    "除 cli.py / cli_db.py / cli_dataset.py / cli_memory.py / cli_vault.py / cli_chat.py（组装根）与 storage/ 之外，一律通过 StorageBackend Protocol 访问。想要具体实现，让组装根构造好再传进来。"
+    "cli(_db|_dataset|_memory|_study|_vault|_chat|_serve)?\.py:|/storage/" \
+    "除 cli.py / cli_db.py / cli_dataset.py / cli_memory.py / cli_study.py / cli_vault.py / cli_chat.py / cli_serve.py（组装根）与 storage/ 之外，一律通过 StorageBackend Protocol 访问。想要具体实现，让组装根构造好再传进来。"
 
 check_forbidden \
     "sim/ 不直接依赖具体 LLM 客户端" \

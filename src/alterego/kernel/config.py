@@ -35,6 +35,7 @@ from alterego.kernel.clock import resolve_timezone
 from alterego.kernel.config_settings import SettingsConfig
 from alterego.kernel.config_study import StudyConfig
 from alterego.kernel.config_values import DATASET_FORMATS, build_section, type_hints
+from alterego.kernel.config_web import WebConfig
 from alterego.kernel.errors import ConfigError
 from alterego.kernel.logging import get_logger
 
@@ -505,34 +506,6 @@ class PluginsConfig:
         """取某个插件的配置。"""
         value = self.config.get(plugin_id, {})
         return dict(value) if isinstance(value, Mapping) else {}
-
-
-@dataclass(frozen=True)
-class WebConfig:
-    """``[web]`` —— 本地 Web 界面（v1 唯一的入站渠道，ADR-0004）。"""
-
-    enabled: bool = True
-    host: str = "127.0.0.1"
-    port: int = 8765
-    auth: Literal["token", "password", "none"] = "token"
-    sse_keepalive_seconds: int = 20
-    sse_max_connections: int = 20
-    page_size: int = 50
-
-    def __post_init__(self) -> None:
-        if not 1 <= self.port <= 65535:
-            raise ConfigError("port 超出范围", port=self.port)
-        _require_positive("sse_keepalive_seconds", self.sse_keepalive_seconds)
-        _require_positive("sse_max_connections", self.sse_max_connections)
-        _require_positive("page_size", self.page_size)
-        if self.auth == "none" and self.host not in {"127.0.0.1", "localhost", "::1"}:
-            # 监听 0.0.0.0 又不要认证 = 把内心日记暴露给整个局域网
-            raise ConfigError(
-                "非本机监听不能关闭认证",
-                host=self.host,
-                auth=self.auth,
-                hint="把 auth 改为 token/password，或只监听 127.0.0.1",
-            )
 
 
 # ═══════════════════════════════════════════════════════════════════════

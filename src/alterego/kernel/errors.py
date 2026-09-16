@@ -37,6 +37,7 @@ from typing import Any, ClassVar
 
 __all__ = [
     "AlterEgoError",
+    "ChannelError",
     "ConfigError",
     "IntegrityError",
     "IntentRejected",
@@ -56,6 +57,7 @@ __all__ = [
     "SimulationError",
     "StorageError",
     "TickAborted",
+    "WebAuthError",
     "is_retryable",
 ]
 
@@ -101,6 +103,31 @@ class ConfigError(AlterEgoError):
     """配置缺失或非法。"""
 
     code: ClassVar[str] = "config_error"
+
+
+# ─────────────────────────────────────────────────────────────
+# 渠道
+# ─────────────────────────────────────────────────────────────
+
+
+class ChannelError(AlterEgoError):
+    """渠道层的错误基类。
+
+    渠道把消息送出去**失败**是运行期的正常结果（对方机器人被删了、
+    网络抖了一下），那种情况返回 ``SendResult(ok=False)`` 而不是抛异常——
+    抛异常会逼上层为「一次发送没成功」写 ``try``。
+
+    这个类型留给**这个渠道本身没配好**：没装可选依赖、订阅数超上限、
+    监听地址不安全。它回答的是「这条管子根本立不起来」，不是「这条消息没过去」。
+    """
+
+    code: ClassVar[str] = "channel_error"
+
+
+class WebAuthError(ChannelError):
+    """Web 访问没通过认证，或认证配置本身不可用。"""
+
+    code: ClassVar[str] = "web_auth_error"
 
 
 # ─────────────────────────────────────────────────────────────

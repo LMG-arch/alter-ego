@@ -771,8 +771,84 @@ alterego config schema --json             # 机器可读清单，供补全脚本
   永远测不到「加载校验拦住」（改用跨字段的 `daily_message_limit`）；
   `core.data_dir` 的 `requires_restart` 是 **True** 而不是 False
 
+**主体四块 · 第三批：Web 界面（`alterego serve`）**
+
+计划见 `docs/plans/2026-09-16-main-body.md` § 4 批次 C，设计见
+`docs/design/05-channels.md` § 3.3 与 § 7。这一批把「主体」补上最后一块：
+**它现在有一个能打开的界面了**，而不只是命令行。
+
+```bash
+alterego serve                       # http://127.0.0.1:8765/，token 写在 .alterego-token
+alterego serve --host 0.0.0.0 --port 8080
+alterego serve --no-web              # 只装插件、不开界面
+```
+
+- **`channels/web/` 从 89 行 docstring 变成真正的渠道**：`app.py`（`create_app`）、
+  `deps.py`（`WebDeps`）、`auth.py`（token / password / none 三种模式）、
+  `sse.py`（SSE 广播）、`views.py`（领域记录 → JSON 的唯一出口）、
+  `plugin.py`（按 `Channel` 接口实现的 `WebChannel`）、`routes/` 八个模块共 20 条路由
+- **`static/` 单页 + 10 个标签**（总览 / 对话 / 动态 / 时间线 / 内心 / 记忆 / 统计 /
+  信息源 / 设置 / 后台）。无构建步骤：原生 JS + 一个 CSS，浏览器直接跑。
+  设计稿的 13 个标签里，关系网 / 相册 / 日志**没做**——缺的不是页面而是路由，
+  见下面「已知的缺口」
+- **`[web]` 配置段开了一个卫星模块**（`kernel/config_web.py`）。加 `auth_password`
+  之后 `kernel/config.py` 涨到 914 行，超过 900 的硬上限。**没有改上限**：把段搬出来，
+  `config.py` 回到 871 行并继续转出 `WebConfig`，外面十几处
+  `from alterego.kernel.config import WebConfig` 一行都没改
+- **`auth_password` 只接受引用**（`"${ALTEREGO_WEB_PASSWORD}"`）。这份配置会进 git，
+  写明文等于把家门钥匙提交进版本库。`auth = "password"` 而密码为空、或
+  `auth = "none"` 而监听 `0.0.0.0`，都在**加载配置时**就拒绝启动，
+  而不是等用户打开页面才发现自己进不去
+- **`deps.py` 里一行 fastapi 都没有**。`WebDeps` 只是「这一层要用的出口」的容器，
+  路由以外的模块拿它当参数，于是它们的测试不装 fastapi 也能跑
+- **它不通过插件机制进来，也不该有 `plugin.toml`**。包内没有内置插件的搜索路径
+  （`[project.entry-points."alterego.plugins"]` 是空的），所以由装配根
+  `cli_serve._deps` 直接注册到 `ServiceRegistry`，而且**必须在 `load_all()` 之前**：
+  插件在 `on_start` 里可能就去取渠道，反过来拿到的是空登记表
+- **`uvicorn.Config(app, log_config=None)` 是必须的**。不写这一条，uvicorn 会用自己的
+  `dictConfig` 覆盖内核装好的 handler，密钥脱敏（`SecretFilter`）当场失效
+- 测试新增 **105 个**：`test_web_routes.py`（62，用 `httpx.ASGITransport` 跑真中间件链）、
+  `test_web_app_middleware.py`（24，手搭 ASGI `scope`/`receive`/`send` 直接驱动中间件）、
+  `test_cli_serve.py`（19，命令行参数、覆盖、开场白、走到装配）。加上批次 C 早先的
+  `test_web_{sse,auth,plugin,views}.py`（72），Web 相关共 **177 个**
+- **不用 `starlette.testclient`**：`starlette 1.3` 在 import 期就发
+  `StarletteDeprecationWarning`，而本项目 `filterwarnings = ["error"]`，
+  于是整个测试文件**连收集都过不去**。改用 `httpx.ASGITransport`——
+  `httpx` 是两个必需依赖之一，而且它跑的是真的中间件 / 依赖注入 / 异常处理链
+
+**这三个缺陷是被新测试找出来的**，值得单独记一笔：`create_app` 此前**从未被任何测试调用过**，
+3083 个测试全绿而 WebUI 一行都跑不起来。
+
+- **整个应用 import 失败**。`limit_of(default)` 返回的是带着 `default=` 的 `Query`，
+  而 FastAPI 明确拒绝「`Annotated` 里的 `Query` 带默认值」——它是在**装饰的时候**
+  就 `assert` 掉，所以路由模块根本 import 不进来。改成 `PageLimit` 别名
+  （`Annotated[int, Query(ge=1, le=MAX_PAGE)]`），默认值写在各条路由的 `=` 后面
+- **`/api/settings` 读写都是 `AttributeError`**。它拿 `config.to_dict()` 的结果去调
+  `_flatten()`，而那个函数只接受 `Config`（它自己会调 `to_dict`）。
+  顺带删掉了一条**反脱敏路径**：为了让「密钥设了没有」有一份原值，
+  旧代码又摊平了一次不脱敏的配置——而 `bool("***") == bool("hunter2") is True`，
+  这个问题用脱敏值就能回答。少一次摊平，也就少一条泄漏路径
+- **`/api/feed` 的 `total` 是假的**。仓储只有 `list_recent(limit=)`，数出来的
+  「总数」其实是「这次取了几条」，用户会看到「共 30 条」翻一页变「共 60 条」。
+  改成回 `has_more`（多要一条来回答「还有没有」）；`/api/memory`、`/api/sources`
+  一次就把窗口取完，它们的 `total` 是真的，就继续叫 `total`
+
+**已知的缺口（写在这里，免得下次当成 bug 重新发现）**
+
+- `POST /api/feed/{id}/comment` 回 **503 并说明**：库里没有评论表，仓储也没有写它的
+  方法。假装成功（`comment_count += 1` 而没有那条评论）要到「刷新之后评论不见了」
+  才暴露，那时用户已经不再相信这一页了
+- `/api/emotion` 的 `history` 恒为空数组（`EmotionRepository` 没有区间查询）、
+  `/api/tick/{id}` 不存在（`TickLogRepository` 只写不读）、`/api/logs*` 与相册未接进来
+- 这些**全部是仓储接口的缺口**，不是界面层的——它们排在下一批「接口一致性审计」里
+
 ### 变更
 
+- **`[channels.web]` 不再是 Web 界面的配置段，真实配置在顶层 `[web]`**。
+  `[channels.<id>]` 是自由格式的 `Mapping[str, Any]`，键名写错**不会报错，只会被忽略**——
+  把真实设置放在那儿等于让用户对着一个永远不生效的键调参
+- **`config.py` 里 `[web]` 段搬到了 `kernel/config_web.py`**（见上），
+  转出关系不变：`from alterego.kernel.config import WebConfig` 照旧
 - **迁移文件从此只管 DDL**。四个 `.sql` 里没有任何 `PRAGMA` 头、没有 `IF NOT EXISTS`、
   没有 `BEGIN` / `COMMIT`、不往 `schema_version` 写任何东西——这四件事全部由迁移器
   在同一个事务里补齐。理由：**幂等靠版本号，不靠 `IF NOT EXISTS`**。后者会让一个
@@ -845,6 +921,12 @@ alterego config schema --json             # 机器可读清单，供补全脚本
 
 ### 修复
 
+- **测试之间共享 `logging` 全局状态**。`alterego serve` 会调 `setup_logging`，
+  而它把 `alterego` 这个 logger 的 `propagate` 关掉；`caplog` 挂在 root 上，
+  于是 `pytest tests/test_holidays.py` 单独跑是绿的，
+  `pytest tests/test_cli_serve.py tests/test_holidays.py` 就红。
+  收在 `tests/conftest.py` 的 autouse 夹具里（记下 handler / level / propagate
+  再原样放回），而不是给某个测试文件打补丁——CLI 入口本来就该配置日志
 - **`_registry()` 用错了注册键**（`cli_memory.py`）。`ServiceRegistry` 是按
   **接口类型**索引的，而这里拿具体的 provider 类当键。结果不是报错，
   是注册成功、查询失败——一条需要读代码才能发现的路径
@@ -971,6 +1053,18 @@ alterego config schema --json             # 机器可读清单，供补全脚本
 
 ### 文档
 
+- P7 同步（第三批）：`05-channels.md`（§ 2.4 与 § 3.3 的配置例从 `[channels.web]` 改成
+  真实的顶层 `[web]` 段；§ 3.3 补「实现状态」两张表——能用哪些路由、哪些还没有以及卡在
+  哪个仓储接口上——并写下**三条与设计稿不同的约定**：`has_more` 而不是 `total`、
+  `limit` 的默认值必须写在各条路由的 `=` 后面（写进 `Annotated` 会让整个应用 import
+  失败）、`MessageRecord.direction` 的 `inbound/outbound` 与 `Channel.direction` 的
+  `in/out` 两套词并存；§ 3.3 的文件树改成真实的十个模块并说明**这个渠道没有
+  `plugin.toml`**；§ 7.1 的开场白换成 `_banner` 的真实输出；§ 7.2 的
+  `auth_mode`/`auth_token` 改成 `auth`/`auth_password`，并删掉**不存在的**
+  `ALTEREGO_ALLOW_INSECURE` 后门）、`06-roadmap.md` M4（13 个标签标出已交付 10 个）、
+  `AGENTS.md` § 5 与 § 7（`kernel/config.py` 已从「顶到 900」降到 871，卫星模块先例补
+  `config_web.py`）、`docs/plans/2026-09-16-main-body.md` § 0（批次 C 的状态与三个缺陷）、
+  本文件
 - P7 同步：`03-data-model.md`（§ 8.5 五条命令标注为已实现并补上四条使用约定；
   § 9.1 备份文件名改为连字符——文档写的是 `alterego_20260915_143211.db`，
   代码输出的是 `alterego-20260915-143211.db`）、

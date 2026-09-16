@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<!-- 移动端可用：没有这一行，手机上整页会被缩到需要在两指之间来回捏 -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>alterego · 拟我</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!--
+  这一页没有构建步骤、没有前端框架、没有 CDN。
+  理由：它要在用户自己的机器上离线跑起来。一个需要 npm install 才能看的
+  界面，会在「我就想看一眼它今天怎么了」这个场景上直接失败。
+  所有内容都由 app.js 填进 <main>，HTML 里只有骨架。
+-->
+
+<header class="bar">
+  <h1>alterego</h1>
+  <div class="bar-right">
+    <span id="pill" class="pill" title="点一下重新检查">检查中…</span>
+    <button id="refresh" class="ghost" type="button">刷新</button>
+  </div>
+</header>
+
+<nav id="tabs" class="tabs" aria-label="页面">
+  <button type="button" data-tab="overview" class="on">总览</button>
+  <button type="button" data-tab="chat">对话</button>
+  <button type="button" data-tab="feed">动态</button>
+  <button type="button" data-tab="timeline">时间线</button>
+  <button type="button" data-tab="thoughts">内心</button>
+  <button type="button" data-tab="memory">记忆</button>
+  <button type="button" data-tab="stats">统计</button>
+  <button type="button" data-tab="sources">信息源</button>
+  <button type="button" data-tab="settings">设置</button>
+  <button type="button" data-tab="plugins">后台</button>
+</nav>
+
+<main id="view" aria-live="polite">
+  <p class="muted">正在载入…</p>
+</main>
+
+<footer class="foot">
+  <span id="where" class="muted"></span>
+</footer>
+
+<!-- 认证提示条：只有认证开着、而这次又没有 cookie 时才会出现 -->
+<div id="gate" class="gate" hidden>
+  <form id="gate-form">
+    <label for="gate-token">这台机器的 Web 界面需要凭据</label>
+    <input id="gate-token" type="password" autocomplete="current-password"
+           placeholder="token 或密码">
+    <button type="submit">进入</button>
+  </form>
+  <p class="muted">
+    token 模式：它写在项目根目录的 <code>.alterego-token</code> 里，
+    也可以直接用 <code>?token=…</code> 打开本页。
+  </p>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

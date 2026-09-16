@@ -1,0 +1,241 @@
+/* alterego 的 Web 界面样式。
+ *
+ * 暗色优先：一个自己待着的程序，大部分时间是在晚上被看见的。
+ * 亮色跟随系统（prefers-color-scheme: light），但默认值是暗的，
+ * 因为一个没有系统偏好的环境里暗色更不容易把眼睛刺醒。
+ *
+ * 不用任何框架是因为这一页的构件只有四种：卡片、列表、表格、表单。
+ * 为四种构件引一套 CSS 框架，代价是用户浏览器要下载几百 KB。
+ */
+
+:root {
+  --bg: #14161a;
+  --panel: #1b1e24;
+  --line: #2a2f38;
+  --fg: #e6e8ec;
+  --dim: #9aa3b2;
+  --accent: #7fb2ff;
+  --ok: #63c98a;
+  --warn: #e5b567;
+  --bad: #e56f6f;
+  --radius: 10px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --line: #e2e5ea;
+    --fg: #1c1f24;
+    --dim: #5c6675;
+    --accent: #2b6cd4;
+    --ok: #1f8a4c;
+    --warn: #9a6b12;
+    --bad: #b8332f;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  /* 中文字体栈：先本地系统字体，绝不从 CDN 拉字体 */
+  font: 15px/1.65 -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC",
+        "Hiragino Sans GB", "Source Han Sans SC", sans-serif;
+}
+
+code, pre, .num { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+
+/* ── 顶栏 ─────────────────────────────────────────────── */
+
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 10;
+}
+
+.bar h1 { font-size: 17px; margin: 0; font-weight: 600; letter-spacing: .02em; }
+.bar-right { display: flex; align-items: center; gap: 8px; }
+
+.pill {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--dim);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pill.ok { color: var(--ok); border-color: var(--ok); }
+.pill.bad { color: var(--bad); border-color: var(--bad); }
+
+/* ── 标签页 ───────────────────────────────────────────── */
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;          /* 窄屏时横向滚动，而不是换行挤压 */
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  scrollbar-width: thin;
+}
+
+.tabs button {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--dim);
+  padding: 5px 13px;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tabs button:hover { color: var(--fg); }
+.tabs button.on { color: var(--fg); border-color: var(--accent); background: var(--panel); }
+
+/* ── 内容 ─────────────────────────────────────────────── */
+
+main { padding: 16px; max-width: 900px; margin: 0 auto; }
+h2 { font-size: 15px; margin: 22px 0 8px; color: var(--dim); font-weight: 600; }
+h2:first-child { margin-top: 0; }
+.muted { color: var(--dim); font-size: 13px; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; }
+.spread { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+
+/* 对话气泡：自己 vs 它 */
+.bubble { margin-bottom: 10px; max-width: 86%; }
+.bubble .who { font-size: 12px; color: var(--dim); margin-bottom: 3px; }
+.bubble .body {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.bubble.me { margin-left: auto; }
+.bubble.me .body { border-color: var(--accent); }
+.bubble.me .who { text-align: right; }
+
+/* 输入区：跟着滚动条走，免得聊到一半要往上翻 */
+.composer {
+  position: sticky;
+  bottom: 0;
+  background: var(--bg);
+  padding: 10px 0 4px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: 8px;
+}
+.composer textarea {
+  flex: 1;
+  min-height: 44px;
+  max-height: 160px;
+  resize: vertical;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  font: inherit;
+}
+
+button {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  padding: 9px 15px;
+  font: inherit;
+  cursor: pointer;
+}
+button.ghost { background: none; color: var(--accent); border: 1px solid var(--line); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+
+input, select, textarea {
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 9px;
+  font: inherit;
+  max-width: 100%;
+}
+
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--dim); font-weight: 600; font-size: 13px; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+.tag {
+  display: inline-block;
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--dim);
+  margin-right: 4px;
+}
+.tag.ok { color: var(--ok); border-color: var(--ok); }
+.tag.bad { color: var(--bad); border-color: var(--bad); }
+.tag.warn { color: var(--warn); border-color: var(--warn); }
+
+.mono-list { list-style: none; margin: 0; padding: 0; }
+.mono-list li { padding: 6px 0; border-bottom: 1px dashed var(--line); }
+
+.setting { border-bottom: 1px solid var(--line); padding: 11px 0; }
+.setting:last-child { border-bottom: none; }
+.setting .name { font-weight: 600; }
+.setting .key { font-size: 12px; color: var(--dim); }
+.setting .effect { font-size: 13px; color: var(--dim); margin: 4px 0 8px; }
+.setting .ctl { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.setting .ctl input[type="text"], .setting .ctl select { min-width: 200px; }
+
+details summary { cursor: pointer; color: var(--accent); }
+details { margin: 8px 0; }
+
+.gate {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .6);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 20px;
+  z-index: 50;
+}
+.gate form { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.gate label { width: 100%; text-align: center; }
+.gate p { max-width: 420px; text-align: center; }
+
+.foot { padding: 10px 16px 24px; text-align: center; }
+
+/* 窄屏：标签页横向滚动、表格允许换行 */
+@media (max-width: 560px) {
+  main { padding: 12px; }
+  .bubble { max-width: 100%; }
+  th, td { padding: 6px 5px; }
+  .setting .ctl { flex-direction: column; align-items: stretch; }
+  .setting .ctl input[type="text"], .setting .ctl select { min-width: 0; width: 100%; }
+}

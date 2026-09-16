@@ -170,15 +170,12 @@ def truncate_smart(text: str, limit: int) -> str:
 
 ```toml
 [channels]
-# 各渠道的启用与控制
-[channels.web]
-enabled = true
-host = "127.0.0.1"
-port = 8765
-auth_token = "${ALTEREGO_WEB_TOKEN}"
+# 启用哪些渠道；顺序就是优先级
+enabled = ["channel.file", "channel.web"]
 
+# 每个渠道自己的配置。这张表是**自由格式**（Mapping[str, Any]），
+# 键名写错不会报错，只会静静地被忽略——所以真实的设置不要写在这儿。
 [channels.file]
-enabled = true
 out_dir = "data/outbox"
 format = "markdown"          # markdown | txt | jsonl
 
@@ -190,6 +187,13 @@ secret = "${DINGTALK_SECRET}"
 [channels.wecom_webhook]
 enabled = false
 webhook_url = "${WECOM_WEBHOOK}"
+
+# ⚠️ Web 界面**不在 `[channels]` 下面**。它是一个类型化的配置段，
+#    住在顶层 `[web]`（见 § 3.3 与 § 7.2）：
+[web]
+enabled = true
+host = "127.0.0.1"
+port = 8765
 
 # 消息类型 → 目标渠道
 [routing]
@@ -337,19 +341,74 @@ v1 的**主要交互入口**。
 
 **技术栈**：FastAPI + uvicorn + SSE + 少量原生 JS（无前端构建步骤）。
 
+**配置住在顶层 `[web]`**（`kernel/config_web.py`，不是 `[channels.web]`——
+它要被内核的配置系统类型化地校验，而不是塞进插件自由格式的那张表里）：
+
 ```toml
-[channels.web]
+[web]
 enabled = true
 host = "127.0.0.1"
 port = 8765
-auth_mode = "token"          # token | password | none（仅 localhost）
-auth_token = "${ALTEREGO_WEB_TOKEN}"
-cors_origins = []
-max_message_length = 4000
-session_ttl_hours = 720
+auth = "token"                               # token | password | none
+auth_password = "${ALTEREGO_WEB_PASSWORD}"   # 只有 auth = "password" 时才读它
+sse_keepalive_seconds = 20                   # SSE 心跳间隔
+sse_max_connections = 20                     # 同时连着的页面数上限
+page_size = 50                               # 每页默认条数的基准
 ```
 
-**API 设计**：
+三条校验在启动时就把话说清楚（全部在 `WebConfig.__post_init__` 里）：
+
+| 写法 | 结果 |
+| --- | --- |
+| `auth = "password"` 而 `auth_password` 为空 | 拒绝启动，并告诉你该设哪个环境变量 |
+| `auth = "none"` 而 `host` 不是 `127.0.0.1`/`localhost`/`::1` | 拒绝启动（否则等于把内心日记发给整个局域网） |
+| `port` 不在 1..65535 | 拒绝启动：`web.port 不能大于 65535` |
+
+⚠️ `auth_password` **只写引用，不写明文**。这份配置会进 git，写明文等于
+把家门钥匙提交进版本库——那是一次撤销不了的泄漏。
+
+**实现状态（v0.1.2）**：这一节下面的 API 表是**设计目标**，下面这张表才是**现在能用的**。
+两者不一致时以这张表为准。
+
+| 已经能用 | 说明 |
+| --- | --- |
+| `GET /` | 静态单页（10 个标签：总览/对话/动态/时间线/内心/记忆/统计/信息源/设置/后台） |
+| `GET /api/health` · `POST /api/auth` | 不需要认证的两个口（`PUBLIC_PATHS` 就这两条） |
+| `GET /api/chat/history?limit=&before=` · `POST /api/chat/send` · `GET /api/chat/stream` | 会话与 SSE |
+| `GET /api/feed?limit=&offset=` · `GET /api/feed/timeline?days=&limit=` | 动态与时间线（两者合成一页） |
+| `POST /api/feed/{id}/like` | 点赞 |
+| `GET /api/status` · `GET /api/emotion?days=` | 当前状态与情绪 |
+| `GET /api/thoughts?limit=&days=` · `GET /api/memory?limit=&offset=&kind=` | 内心与记忆 |
+| `GET /api/stats?days=` · `GET /api/budget?day=` · `GET /api/sources?limit=&offset=` | 统计、预算、信息源 |
+| `GET /api/settings/schema` · `GET /api/settings` · `POST /api/settings` | 全部设置 |
+| `GET /api/plugins` · `POST /api/plugins/{id}/reload` | 插件列表与重载 |
+
+| 设计里有、现在还没有 | 卡在哪儿 |
+| --- | --- |
+| `POST /api/feed/{id}/comment` | 库里没有评论表，仓储也没有写它的方法——所以回 **503 并说明**，而不是假装 `comment_count += 1` |
+| `GET /api/emotion` 的曲线 | `EmotionRepository` 没有区间查询，`history` 现在恒为空数组 |
+| `GET /api/tick/{id}` | `TickLogRepository` 没有读方法（写入有），「候选意图」那一页因此没得画 |
+| `/api/logs*`、`/api/trace/{id}` | 观测通道还没接进 Web |
+| `/api/album*`、`/api/media/{id}` | 相册（形象系统）未落地 |
+| `/api/sources/dropped` · `/api/sources/interests` | 信息源只有「留存的」这一个视图 |
+| `/api/stats/tokens` · `/api/stats/projection` · `/api/settings/reset` | 聚合视图与重置尚未实现 |
+| 关系网 / 相册 / 日志 三个标签 | 上面这些路由没有，标签也就没做（13 个设计标签里落了 10 个） |
+
+**三条与设计稿不同的约定**（写在这里，免得下次照着设计稿改回去）：
+
+1. **分页回 `has_more`，不回 `total`。** 仓储只有 `list_recent(limit=)`，
+   数出来的「总数」其实是「这次取了几条」——用户会看到「共 30 条」翻一页变
+   「共 60 条」。一次把窗口取完的列表页（`/api/memory`、`/api/sources`）的
+   `total` 是真的，就继续叫 `total`。
+2. **`limit` 的默认值写在各条路由的 `=` 后面，不放进 `Annotated`。**
+   公共别名叫 `PageLimit`（`routes/base.py`）。FastAPI 明确拒绝
+   「`Annotated` 里的 `Query` 带着 default」——它是在**装饰的时候**就
+   `assert` 掉，也就是说整个应用会 import 失败，而不是某条路由 400。
+3. **方向词两套并存，不要互相翻译。** `MessageRecord.direction` 是
+   `"inbound"` / `"outbound"`；`Channel.direction` 是 `frozenset({"in", "out"})`。
+   HTTP 层按前一套说话。
+
+**API 设计**（设计目标，未全做；现状见上表）：
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
@@ -452,7 +511,9 @@ def broadcast(event_type: str, data: dict) -> None:
             pass
 ```
 
-**页面结构**（单页 + 标签切换，共 13 个标签）：
+**页面结构**（单页 + 标签切换。设计稿 13 个标签，**已落地 10 个**：
+总览 / 对话 / 动态 / 时间线 / 内心 / 记忆 / 统计 / 信息源 / 设置 / 后台。
+少的是**关系网 / 相册 / 日志**——它们的路由还没做，见本节的「实现状态」）：
 
 ```
 ┌──────────────────────────────────────────────────────────┐
@@ -527,25 +588,38 @@ def broadcast(event_type: str, data: dict) -> None:
 **文件组织**：
 
 ```
-src/alterego/channels/web/
-├── __init__.py
-├── plugin.py           # WebChannel 插件
-├── app.py              # FastAPI app 与路由
-├── routes/
-│   ├── chat.py
-│   ├── feed.py
-│   ├── status.py
-│   ├── thoughts.py
-│   ├── stats.py
-│   └── plugins.py
-├── sse.py              # SSE 广播
-├── auth.py             # token / password 认证
-└── static/
-    ├── index.html
-    ├── app.js
-    ├── style.css
-    └── favicon.svg
+src/alterego/
+├── cli_serve.py        # 装配根：配置 → 库 → 插件 → 渠道 → uvicorn
+└── channels/web/
+    ├── __init__.py
+    ├── plugin.py           # WebChannel 插件（按 Channel 接口注册）
+    ├── app.py              # create_app：中间件 + 路由 + 静态文件
+    ├── deps.py             # WebDeps：这一层要用的全部出口（**不 import fastapi**）
+    ├── auth.py             # token / password 认证与 .alterego-token
+    ├── sse.py              # SSE 广播（连接数上限、心跳）
+    ├── views.py            # 领域记录 → HTTP JSON 的唯一出口
+    ├── routes/
+    │   ├── base.py         # Deps / PageLimit / require / 几个错误构造器
+    │   ├── status.py       # /api/health /auth /status /emotion
+    │   ├── chat.py         # /api/chat/*
+    │   ├── feed.py         # /api/feed/*
+    │   ├── thoughts.py     # /api/thoughts /memory
+    │   ├── stats.py        # /api/stats /budget /sources
+    │   ├── settings.py     # /api/settings*
+    │   └── plugins.py      # /api/plugins*
+    └── static/
+        ├── index.html
+        ├── app.js
+        ├── style.css
+        └── favicon.svg
 ```
+
+⚠️ **这个渠道没有 `plugin.toml`。** 包内没有内置插件的搜索路径
+（`[project.entry-points."alterego.plugins"]` 是空的，`DEFAULT_SEARCH_PATHS`
+只覆盖 `plugins/` 与 `~/.alterego/plugins`），所以它由装配根
+（`cli_serve._deps`）直接注册到 `ServiceRegistry`，而且**必须注册在
+`manager.load_all()` 之前**：插件在 `on_start` 里可能就去取渠道，
+反过来则拿到一张空登记表。
 
 ---
 
@@ -914,53 +988,51 @@ alterego serve --host 0.0.0.0 --port 8080
 alterego serve --no-web             # 只跑推演，不开 Web
 ```
 
-启动输出：
+启动输出（`cli_serve._banner`，**先打再起服务**——出问题时这几行是唯一线索）：
 
 ```
-AlterEgo v0.1.0
-
-  推演模式    realtime（虚拟时间 1:1）
-  Tick 间隔   5 虚拟分钟
-  数据库      data/alterego.db（42.3 MB，schema v1）
-  人格        林晚 · 26 岁 · UI 设计师 · 杭州
-
-  已加载插件（12）
-    ✓ storage.sqlite         0.1.0   [内置]
-    ✓ llm.openai_compatible  0.1.0   [内置]
-    ✓ stage.sense            0.1.0   [内置]
-    ✓ stage.reflect          0.1.0   [内置]
-    ✓ stage.intention        0.1.0   [内置]
-    ✓ stage.act              0.1.0   [内置]
-    ✓ stage.express          0.1.0   [内置]
-    ✓ stage.persist          0.1.0   [内置]
-    ✓ channel.web            0.1.0   [内置]
-    ✓ channel.file           0.1.0   [内置]
-    ✓ channel.dingtalk_webhook 0.1.0 [内置]
-    ✓ capability.activity    0.1.0   [内置]
-
-  Web 界面    http://127.0.0.1:8765
-              访问令牌见 .alterego-token
-
-  按 Ctrl+C 停止
+────────────────────────────────────────────────────────────
+人设    林晚（p1）
+界面    http://127.0.0.1:8765/
+登录    首次运行，先打开 http://127.0.0.1:8765/?token=9f3c… （或 token 在 .alterego-token 里）
+会话    user:p1
+回话    [llm.routing] …（账记在 llm_usage 表）
+配置    config/alterego.toml
+────────────────────────────────────────────────────────────
 ```
+
+`--host 0.0.0.0` 时「界面」那行仍然显示 `127.0.0.1`：`0.0.0.0` 是
+「听所有网卡」而不是一个能打开的地址，照原样打出来会让人点开一个连不上的
+链接，然后去怀疑服务根本没起来。
 
 ### 7.2 认证
 
-**默认 `auth_mode = "token"`**：
+**`auth = "token"`（默认）**：
 
 - 首次启动生成随机 token，写入 `.alterego-token`（权限 600，且加入 `.gitignore`）
-- 首次访问 Web 时需在 URL 中带上 `?token=xxx`，之后写入 cookie
+- 这个串**只在刚生成的那一次**打在屏幕上。已经存在的 token 不再回显：
+  `serve` 的 stdout 经常被重定向进某个日志文件，而日志会被贴出来
+- 首次访问在 URL 上带 `?token=xxx`，之后写进 cookie（`HttpOnly` + `SameSite=Lax`）
 
-**`auth_mode = "none"`**：仅允许 `host = 127.0.0.1`（启动时强校验，否则拒绝启动）。
+**`auth = "password"`**：密码来自 `auth_password`（值应当是
+`"${ALTEREGO_WEB_PASSWORD}"` 这样的引用），因此可以配在
+`0.0.0.0` 上给局域网里的手机用。
 
-**安全提示**：
+**`auth = "none"`**：只允许 `host` 是 `127.0.0.1` / `localhost` / `::1`，
+否则拒绝启动。报错就是内核那句话，没有「强制启动」的后门：
 
 ```
-⚠️  检测到 host = 0.0.0.0 且 auth_mode = none
-    这会把你的人格数据和聊天记录暴露给同一网络的所有设备。
-    要么设置 host = 127.0.0.1，要么配置 auth_token。
-    已拒绝启动。如需强制启动，设置 ALTEREGO_ALLOW_INSECURE=1
+错误：非本机监听不能关闭认证（host=0.0.0.0, auth=none）
+      hint: 把 auth 改为 token/password，或只监听 127.0.0.1
 ```
+
+凭据的四种递法按这个顺序找，第一个命中的算数：
+`Authorization: Bearer <cred>` → `?token=<cred>` → cookie。
+顺序是「最不可能被误存下来」到「最容易被误存下来」。
+
+`/api/health` 与 `/api/auth` 是仅有的两个不需要凭据的路径
+（`app.PUBLIC_PATHS`，一共两条，测试里逐字钉住了）。**`/api/openapi.json`
+不在白名单里**——它会把这套接口的完整形状发给任何能连上的人。
 
 ### 7.3 移动端访问
 
@@ -1758,4 +1830,5 @@ v2 新增渠道**不应影响 v1 用户**：
 | 日期 | 版本 | 变更 | 作者 |
 | --- | --- | --- | --- |
 | 2026-09-15 | v0.1.0 | 初版 | LMG-arch |
+| 2026-09-16 | v0.1.2 | Web 渠道落地：配置段从 `[channels.web]` 挪到顶层 `[web]`（`kernel/config_web.py`）；§ 3.3 补「实现状态」与三条与设计稿不同的约定（`has_more` / `PageLimit` / 两套方向词）；§ 7.1 换成真实的开场白；§ 7.2 的 `auth_mode`/`auth_token` 改成 `auth`/`auth_password`，去掉不存在的 `ALTEREGO_ALLOW_INSECURE` 后门 | LMG-arch |
 | 2026-09-15 | v0.1.1 | § 11.1 修正 `SecretFilter` 示例的两处实现 bug（单组过度脱敏、正则跨不过 `/`） | LMG-arch |

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="alterego">
+  <!-- 一个简单的拟我标记：外圈是「它」，里圈是「你」，两个圆套着但不重合。 -->
+  <rect width="64" height="64" rx="14" fill="#14161a"/>
+  <circle cx="27" cy="32" r="15" fill="none" stroke="#7fb2ff" stroke-width="3"/>
+  <circle cx="39" cy="32" r="15" fill="none" stroke="#63c98a" stroke-width="3" opacity="0.85"/>
+</svg>

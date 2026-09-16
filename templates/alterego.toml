@@ -166,11 +166,13 @@ out_dir = "data/outbox"             # 出站消息写到这里
 inbox_dir = "data/inbox"            # 每 5 秒轮询一次，处理后移到 processed/
 format = "markdown"                 # markdown | txt | jsonl
 
-[channels.web]
-host = "127.0.0.1"                  # ⚠️ 默认只监听本机。改成 0.0.0.0 需自担风险
-port = 8765
-auth = "token"                      # token | password | none（none 仅限本机）
-                                    # token 模式会在 .alterego-token 写入随机串
+# [channels.<id>] 是留给**渠道插件自己**解析的自由区（`ChannelsConfig.options_for`）。
+# 本版本没有哪个内置渠道读它，所以下面这一块是注释掉的示例——
+# Web 的真实设置在后面的 [web] 那一段，本版本读的是那一段。
+# [channels.web]
+# host = "127.0.0.1"
+# port = 8765
+# auth = "token"
 
 [channels.dingtalk_webhook]
 # 单向出站。必须使用「加签」模式（安全设置里勾选），否则消息会被拒收。
@@ -317,10 +319,28 @@ isolate_failures = true             # 插件异常不影响主流程
 
 # ───────────────────────────────────────────────────────────────────────────
 #  [web]  Web 界面（需要 pip install "alterego[web]"）
+#
+#  这是 v1 唯一的入站渠道：它主动说话靠别的渠道推给你，你能回它靠这一页。
+#  host / port / auth 只在这一段读（改完要重启 `alterego serve`；
+#  设置页里会标出哪些项需要重启）。
 # ───────────────────────────────────────────────────────────────────────────
 [web]
 enabled = true
-# host/port/auth 见上面 [channels.web]（两处等价，保留此处以兼容旧配置）
+host = "127.0.0.1"                  # ⚠️ 默认只监听本机
+                                    # 改成 0.0.0.0 等于把「它的一切」放到
+                                    # 局域网上；auth = "none" 配上非本机
+                                    # 会让配置校验直接报错，这是故意的
+port = 8765
+auth = "token"                      # token | password | none
+                                    # token：首次启动生成随机串，写进项目根目录的
+                                    #        .alterego-token，打开页面时带
+                                    #        ?token=<那个串> 换一个 cookie
+                                    # password：用下面的 auth_password
+                                    # none：只有 host 是本机时才允许
+                                    #       （注意 host 是 ip 串，localhost 字面量也算本机）
+auth_password = ""                  # auth = "password" 时的密码
+                                    # 配置会进 git，所以这里写引用而不是明文：
+                                    # auth_password = "${ALTEREGO_WEB_PASSWORD}"
 sse_keepalive_seconds = 20          # SSE 心跳间隔，防中间层断开连接
 sse_max_connections = 20            # 同时连接上限
 page_size = 50                      # 列表页每页条数

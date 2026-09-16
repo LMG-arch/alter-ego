@@ -440,6 +440,17 @@ SETTINGS: Final[tuple[Setting, ...]] = (
         danger=True,
     ),
     Setting(
+        key="web.auth_password",
+        label="网页登录口令",
+        description="认证方式选「口令」时，用来登录的那个口令。",
+        kind=SettingKind.SECRET,
+        default="",
+        group="Web 界面",
+        effect="口令是空的而认证方式又选了 password，启动时会直接报错并拒绝起来；"
+        "它不会自动退回成不认证——那种「配错了反而更开放」的降级最难发现。",
+        requires_restart=True,
+    ),
+    Setting(
         key="web.sse_keepalive_seconds",
         label="实时推送心跳间隔",
         description="多久往浏览器发一次空事件，防止连接被中间设备掐断。",

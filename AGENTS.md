@@ -106,7 +106,7 @@ bash scripts/check_architecture.sh
 
 | 约束 | 值 | 为什么 |
 | --- | --- | --- |
-| 单文件行数 | **≤ 900** | 超过就拆。`kernel/config.py` 已**顶到 900**（零余量），再加配置段请开卫星模块，先例是 `kernel/config_study.py` 与 `kernel/config_values.py` |
+| 单文件行数 | **≤ 900** | 超过就拆。`kernel/config.py` 已到 871（余额 29 行），再加配置段请开卫星模块，先例是 `kernel/config_study.py`、`kernel/config_values.py`、`kernel/config_web.py` |
 | 行长 | ≤ 100 | formatter 处理 |
 | 类型注解 | 全部 | `mypy strict = true` |
 | 必需依赖 | **只有两个**：`pydantic`、`httpx` | P5。新增必需依赖需写 ADR |
@@ -143,8 +143,10 @@ coverage 自带的 `--cov-fail-under` 只能表达一个全局下限，所以复
    会核对模板与配置类一一对应，缺了直接红。
 3. 如果是新增**段**，还要在 `kernel/config.py` 的 `Config` 上挂好；嵌套的 dataclass 段
    会被 `_split_known` 递归检查，写错键名会被告警点名（见 `07-model-routing-and-media.md` § 3.1.1）。
-   ⚠️ `kernel/config.py` 顶在 900 行，新段请开卫星模块（先例：`kernel/config_study.py`、
-   `kernel/config_settings.py`）。
+   ⚠️ `kernel/config.py` 只剩 29 行余额，新段请开卫星模块（先例：`kernel/config_study.py`、
+   `kernel/config_settings.py`、`kernel/config_web.py`），并从 `config.py` 继续转出那个类——
+   外面的 `from alterego.kernel.config import XxxConfig` 就一行都不用改（`__all__` 里
+   写名字即视为转出，mypy 的 `no_implicit_reexport` 认这个）。
 4. 在 `kernel/settings_catalog_*.py` 里注册展示元数据——`test_settings_metadata.py`
    会核对「每个配置字段都有元数据」「`effect` 说的是一句完整的话」「每个枚举选项都写了后果」。
 
