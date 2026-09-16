@@ -1031,6 +1031,20 @@ alterego serve --no-web              # 只装插件、不开界面
 
 ### 修复
 
+- **登录层在 `auth = "none"` 时也照样铺满整页，看起来像「这程序非要密码」**
+  （`channels/web/static/style.css`）。页面上那个登录层在 HTML 里是
+  `<div id="gate" class="gate" hidden>`，而 `.gate` 自己设了 `display: flex`。
+  `hidden` 属性**没有自己的样式**，它靠浏览器默认样式表里的 `display: none`
+  生效，而默认样式表**永远输给作者样式**——于是 `hidden` 只是个装饰，
+  `app.js` 里那句 `gate.hidden = true` 也照样「执行成功」，
+  没有任何日志能提示你它没起作用。`style.css` 顶部补一条
+  `[hidden] { display: none !important; }`，把默认行为写回作者样式表里。
+  这是**接口层测试结构上看不见的一类缺陷**：全部 Web 用例都走 httpx，
+  没有一条会去读 CSS。因此同时新增 `tests/test_web_static.py`（2 个）——
+  它拿 `index.html` 与 `style.css` 对照，找出「带着 `hidden`、又自己设了
+  `display`」的类，要求样式表里有那条规则。这条守卫**做过变异验证**：
+  把规则改成 `display: block` 会让它红，并点名 `gate`。
+
 - **`DatasetSpec.upstream_ready` 是一句会过期的假话，而且它被印给了用户看**
   （`domain/dataset.py`）。`reasoning` 与 `tooluse` 两类钉着 `upstream_ready=False`，
   理由是「`sim/` 主体尚未实现」——而推演引擎早已落地，`sim/engine.py` 的 Persist
@@ -1417,6 +1431,7 @@ alterego serve --no-web              # 只装插件、不开界面
   `_restore_logging` fixture。`logging.getLogger(...)` 是**进程级单例**，插件用
   `PropagateHandler` 时很容易让上一个测试的 handler 活到下一个测试，
   表现为「单独跑绿、一起跑红」——批次 C 的 `test_cli_serve.py` 就是这么把它逼出来的
+@TEST_ENTRY@
 - **新增 `tests/test_desktop_window_plugin.py`（84 个）**。两半：一半守**武装纪律**
   （哪条事件才值得占快捷键、配置改了之后窗口还在不在、`on_stop` 幂等），
   另一半是纯逻辑（快捷键字符串解析、位置解析、浏览器查找）。它**不假装测过**

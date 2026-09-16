@@ -37,6 +37,13 @@
 
 * { box-sizing: border-box; }
 
+/* `hidden` 属性本身没有样式，它靠浏览器**默认样式表**里的 `display: none` 生效，
+ * 而默认样式表的优先级低于任何作者样式——`.gate` 上的 `display: flex`
+ * 就把它整条盖掉了，于是「藏起来」的登录层照样铺满整页。
+ * 这一条是把默认行为写回来。用 `!important` 不是抢优先级，
+ * 是让那个本来就该赢的默认值真的赢。 */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   padding: 0;

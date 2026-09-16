@@ -1034,6 +1034,37 @@ alterego serve --no-web             # 只跑推演，不开 Web
 （`app.PUBLIC_PATHS`，一共两条，测试里逐字钉住了）。**`/api/openapi.json`
 不在白名单里**——它会把这套接口的完整形状发给任何能连上的人。
 
+#### 登录层什么时候出现在屏幕上
+
+页面上那个登录层（`#gate`）在 **HTML 里带着 `hidden`**，由 `/api/health`
+的 `auth.required` 决定要不要摘掉它。也就是说：`auth = "none"` 的人
+**应该一次都看不到它**。
+
+⚠️ 这里有一个 CSS 的坑，能让人以为「这程序非要密码」：
+
+```css
+.gate { display: flex; }   /* ← 它会把 hidden 整条盖掉 */
+```
+
+`hidden` 属性**自己没有样式**，它靠浏览器默认样式表里的 `display: none`
+生效；而默认样式表的优先级低于**任何**作者样式。所以只要某个类同时
+「带着 `hidden`」和「自己设了 `display`」，`hidden` 就完全失效，
+那个元素会照常铺满屏幕——而 `app.js` 里 `gate.hidden = true` 也照样
+「成功执行」，没有任何报错。`style.css` 顶部因此有一条把默认行为写回来的规则：
+
+```css
+[hidden] { display: none !important; }
+```
+
+`tests/test_web_static.py` 守着这条约定：它会找出 HTML 里所有带着 `hidden`
+的类，再看 CSS 里有没有哪条规则把它们设成了别的 `display`，有就必须配上
+上面那条规则。
+
+> 这个坑是接口层测试**结构上看不见**的：Web 的用例全部走 httpx，
+> 没有一条会去看 CSS。所以它是在真机上被人一眼看出来的，
+> 而不是被三千多个测试里的某一个抓到的——配一条静态文件的守卫用例，
+> 就是为了别再靠人眼。
+
 ### 7.3 移动端访问
 
 局域网内手机访问（`host = 0.0.0.0` + token 认证）：
