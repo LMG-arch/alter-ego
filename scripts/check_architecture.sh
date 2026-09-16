@@ -235,9 +235,13 @@ check_forbidden \
 #   storage/    实现自己。`backend.py` / `migrator.py` 当然要互相 import。
 #
 # 组装根的价值在于「只有这几个地方知道存储到底是什么」，所以每多一个都得
-# 说得清为什么。现在有七个，都叫 cli_*.py，都能一句话说清职责；
+# 说得清为什么。碰存储的有七个，都叫 cli_*.py，都能一句话说清职责；
 # 再加下一个之前先想想能不能并进现有的某一个。文件名统一成 `cli_` 开头
 # 也是为此——它一眼就能看出「这是组装根，不是业务代码」。
+#
+# cli_plugins.py 也是组装根（插件的组装根），但它**故意不在**名单里：
+# 它一行存储代码都不需要，加进来只会让这条红线少拦一个文件。
+# 豁免名单越短，检查越强——只有真的需要的才写上去。
 check_forbidden_excluding \
     "sqlite 实现只被组装根与存储层引用" \
     "from alterego\.storage\.sqlite|import alterego\.storage\.sqlite" \
