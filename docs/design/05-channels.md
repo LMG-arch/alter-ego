@@ -1042,6 +1042,44 @@ alterego serve --no-web             # 只跑推演，不开 Web
 
 **不做**：独立的移动端 App（非目标，见 DESIGN.md § 15）。
 
+### 7.4 桌面窗口：同一个界面，换一层壳
+
+`capability.desktop_window`（见它的 `README.md`）用一个全局快捷键，
+把**同一份** Web 界面叫成一个可以置顶的桌面窗口，再按一下收回去。
+它不渲染任何东西，它只是拿一个已经存在的浏览器去开：
+
+```
+msedge --app=http://127.0.0.1:8765/ --window-size=1180,800 --user-data-dir=<cache>/browser-profile
+```
+
+**为什么是 `--app=` 而不是自己画一个窗口。** 三条路都试过了：
+
+| 方案 | 为什么不选 |
+| --- | --- |
+| `tkinter` 自己画 | 会把「所有功能」重写成第二套界面，而第二套界面会先于第一套腐烂 |
+| `pywebview` / `PyQt` | 新增**必需**依赖，违反 P5；而它们嵌的也是个浏览器引擎 |
+| 再跑一个 Electron 壳 | 同上，而且壳与页面会有两个版本要同步 |
+
+用 `--app=` 的浏览器窗口拿到的是**字面意义上的「所有功能」**——
+它就是本地的 Web UI，SSE、认证、设置页、插件面板一样不少，
+新增页面不需要在插件里做任何事。代份是外壳那几条浏览器自己画的东西消失了
+（地址栏、标签页），而那正是 `--app=` 的目的。
+
+三个必须知道的后果：
+
+1. **窗口得真的在 Windows 上。** 全局快捷键是靠消息队列实现的（`ctypes` 调
+   `user32` 的 `RegisterHotKey` / `GetMessageW`），所以这个插件在别的系统上
+   只会报一句「不支持」，不会假装成功。
+2. **它不复制地址与端口。** 那些值住在 `[web]` 段里，读它们的是 `cli_serve`；
+   插件拿不到（import 白名单），所以 `cli_serve` 在**端口真的绑上之后**
+   广播 `serve.listening`，插件订阅。详见
+   [`guide/plugin-development.md`](../guide/plugin-development.md) § 2.4.2。
+   这个顺序还有一个附带好处：`alterego plugins doctor` 也走 `load_all()`，
+   而它不该占掉你的全局快捷键。
+3. **窗口的登录状态与浏览器共用。** `--user-data-dir` 指向插件的缓存目录，
+   所以那个窗口有自己的 cookie 罐，不会与你平时的浏览器互相干扰，
+   也不会把 `token` 写进事件总线——载荷里**没有**凭据。
+
 ---
 
 ## 8. CLI
@@ -1830,5 +1868,6 @@ v2 新增渠道**不应影响 v1 用户**：
 | 日期 | 版本 | 变更 | 作者 |
 | --- | --- | --- | --- |
 | 2026-09-15 | v0.1.0 | 初版 | LMG-arch |
+| 2026-09-16 | v0.1.3 | § 7.4 新增「桌面窗口：同一个界面，换一层壳」——记下「为什么是 `--app=` 而不是自己画一个窗口」以及 `serve.listening` 这条广播的必要性 | LMG-arch |
 | 2026-09-16 | v0.1.2 | Web 渠道落地：配置段从 `[channels.web]` 挪到顶层 `[web]`（`kernel/config_web.py`）；§ 3.3 补「实现状态」与三条与设计稿不同的约定（`has_more` / `PageLimit` / 两套方向词）；§ 7.1 换成真实的开场白；§ 7.2 的 `auth_mode`/`auth_token` 改成 `auth`/`auth_password`，去掉不存在的 `ALTEREGO_ALLOW_INSECURE` 后门 | LMG-arch |
 | 2026-09-15 | v0.1.1 | § 11.1 修正 `SecretFilter` 示例的两处实现 bug（单组过度脱敏、正则跨不过 `/`） | LMG-arch |

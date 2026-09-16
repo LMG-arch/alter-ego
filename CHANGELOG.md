@@ -898,6 +898,52 @@ alterego serve --no-web              # 只装插件、不开界面
   并且**真跑过一遍**（`discover` → `load_all` → `registry.get(Capability, ...)` → `execute`）
   才写进去
 
+**桌面窗口插件（`capability.desktop_window`）**
+
+一个全局快捷键，把 Web 界面叫成一个**可以置顶、可以调大小**的桌面窗口，再按一下收回去。
+它是按 `docs/guide/plugin-development.md` 写的**第一个新插件**，也是「指南能不能照做」
+的第一次真实检验。
+
+- `plugins/desktop_window/`（`plugin.toml` / `plugin.py` / `win32.py` / `README.md`）。
+  **它是第一个带自己平台层的插件**：`win32.py` 用 `ctypes` 调 `user32`
+  （`RegisterHotKey` / `GetMessageW` / `SetWindowPos` / `ShowWindow`），
+  **一行 `alterego` 代码都没有**，也**没有任何新依赖**（`ctypes` 与 `subprocess`
+  都是标准库，P5）
+- **窗口本身是浏览器开出来的，不是自己画的**：`msedge --app=<url> --window-size=W,H
+  --user-data-dir=<cache>/browser-profile`。所以「可以使用所有功能」是**字面意思**——
+  它就是本地的 Web UI，SSE、认证、设置页、插件面板一样不少，新增页面不需要动插件。
+  `tkinter` 自己画会造出第二套界面（第二套会先于第一套腐烂），
+  `pywebview` / `PyQt` / Electron 壳则会引入新的**必需**依赖。
+  选型记在 `docs/design/05-channels.md` § 7.4
+- **六条配置项**（`hotkey` / `width` / `height` / `position` / `always_on_top` / `browser`）——
+  全都在改「这个插件自己的行为」。地址与端口**刻意没有**声明：它们住在 `[web]` 段里，
+  读它们的是 `cli_serve`，抄一份过来就有两个真源（指南 § 2.4.1）
+- **新的事件缝：`serve.listening`。** 插件拿不到 `[web] port`，也 import 不到
+  `cli_serve`，所以 `cli_serve` 在**端口真的绑上之后**广播
+  `{"url": str, "port": int}`，插件订阅。这个顺序有两个作用：`alterego serve` 起来时
+  不会弹一个窗口出来（那是打扰，叫出来这件事留给用户按下去的那一刻）；
+  `alterego plugins doctor` 也走 `load_all()`，而它不该占掉你的全局快捷键。
+  载荷里**不放 token**——事件的去向是每一个订阅者加事件日志。
+  规律写进了指南新增的 § 2.4.2「插件**读不到**的值，只能『被给』」
+- `tests/test_desktop_window_plugin.py`（**84 个**）+ `tests/test_cli_serve.py` 补 3 个
+  （广播要等 `server.started`、服务已经在退时不播、超时后放弃）。测试**不假装测过**
+  `RegisterHotKey` 本身：真的按键归操作系统管，这里测的是「按下去之后插件做了什么」
+- **写测试时撞出三个真 bug，都是指南当时没写到、只有真写一遍才会遇上的**：
+  ① `_arm()` 在非 Windows 上照样构造 `HotkeyListener`，它抛的 `HotkeyError` 会逃出
+  `on_event`，用户看到的是「事件处理失败」而不是「这个系统不支持」；
+  ② `_arm()` 一上来先调 `_disarm()`，而后者会**关掉窗口**——于是改一次快捷键就毁掉
+  用户正开着的窗口（「收摊」其实是两件事：放掉快捷键 ≠ 关掉窗口）；
+  ③ `_open()` 成功之后没抹掉上一次的 `_problem`，东西已经好了，健康检查还在报错。
+  三条都补进了 `docs/design/02-plugin-api.md` § 16
+- **守卫比它守的规则窄，已加宽**：`test_plugins_only_depend_on_the_two_allowed_entries`
+  原来只扫 `*/plugin.py`，于是「把 import 挪进帮手模块」就是一条绕过 import 白名单的
+  捷径——而这条插件正好就是那种有帮手模块的插件。扫描范围改成 `PLUGINS.glob("**/*.py")`
+- **文档同步**：新分册小节 `05-channels.md` § 7.4（为什么是 `--app=`）、
+  指南 § 2.4.2（「被给」的五个硬要求）与 § 9.1（插件可以有第二个模块文件，且它同样
+  受 import 白名单管）、`02-plugin-api.md` § 8.1 / § 16、`06-roadmap.md` 第 14 条、
+  `13-interface-consistency.md` § 7、`DESIGN.md` 插件目录树、`guide/README.md`、
+  `plans/2026-09-16-main-body.md` § 0
+
 ### 变更
 
 - **`[channels.web]` 不再是 Web 界面的配置段，真实配置在顶层 `[web]`**。
@@ -1371,6 +1417,14 @@ alterego serve --no-web              # 只装插件、不开界面
   `_restore_logging` fixture。`logging.getLogger(...)` 是**进程级单例**，插件用
   `PropagateHandler` 时很容易让上一个测试的 handler 活到下一个测试，
   表现为「单独跑绿、一起跑红」——批次 C 的 `test_cli_serve.py` 就是这么把它逼出来的
+- **新增 `tests/test_desktop_window_plugin.py`（84 个）**。两半：一半守**武装纪律**
+  （哪条事件才值得占快捷键、配置改了之后窗口还在不在、`on_stop` 幂等），
+  另一半是纯逻辑（快捷键字符串解析、位置解析、浏览器查找）。它**不假装测过**
+  `RegisterHotKey` 本身——那件事归操作系统管，假装测过比不测更坏。
+  平台相关的路径靠打桩（`IS_WINDOWS` / `_HANDLE_LOAD`），所以无头 ubuntu 上也能跑。
+  其中一条 `test_the_os_layer_does_not_import_alterego` 用 `ast` 解析 `win32.py`
+  的 import 根——**不能用子串匹配**，因为那个模块里的线程名就叫
+  `alterego-desktop-hotkey`
 
 ### 架构
 

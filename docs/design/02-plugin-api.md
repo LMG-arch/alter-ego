@@ -778,14 +778,16 @@ optional = ["channel.web"]
 
 > 上面这两个 id 是**语法示例**，两个插件都还不存在。今天随内核一起发的只有
 > `capability.example`（示例）、`capability.obsidian_vault`（知识库）、
-> `capability.dataset_exporter`（训练数据集）与 `capability.study`（专项学习）。
-> **后两个都只「声明」**——真正干活的代码不在插件里：训练集的取数／脱敏／落盘在
+> `capability.dataset_exporter`（训练数据集）、`capability.study`（专项学习）
+> 与 `capability.desktop_window`（桌面窗口）。
+> **中间那两个都只「声明」**——真正干活的代码不在插件里：训练集的取数／脱敏／落盘在
 > `sim/dataset.py`（由 `alterego dataset` 驱动），专项学习的课程表／召回／落笔在
 > `domain/study.py` 与 `sim/study.py`（由 `alterego study` 驱动）。
 > 存储后端与 LLM provider 都是内核自带的，不走插件。
 >
-> **四个插件都是 `enabled_by_default = false`。** 插件不许替用户做决定——
-> 尤其是 `dataset_exporter`（会把对话写成文件）与 `study`（`next` 会花钱调模型）。
+> **五个插件都是 `enabled_by_default = false`。** 插件不许替用户做决定——
+> 尤其是 `dataset_exporter`（会把对话写成文件）、`study`（`next` 会花钱调模型）
+> 与 `desktop_window`（会占一个**全局**快捷键）。
 >
 > **为什么「只声明」也算插件。** 因为 `alterego plugins list` 是用户唯一能问
 > 「这个实例有哪些本事」的地方；没这条清单，专项学习就只能活在文档里。
@@ -861,7 +863,7 @@ plugins/
 
 > **插件目录里不需要 `__init__.py`。** 架构检查的「含 `.py` 的目录必须有
 > `__init__.py`」那一项只扫 `src/alterego/`，`plugins/` 不在范围里
-> （随包的四个插件目录都没有那个文件）。内核建包时把 `__path__` 直接指向目录，
+> （随包的五个插件目录都没有那个文件）。内核建包时把 `__path__` 直接指向目录，
 > 所以 `import helpers` 照样能找到邻居。
 
 > `entry` 里的模块路径**相对插件根目录**，不是插件 id。写成插件 id 时
@@ -1609,13 +1611,20 @@ class CameraStatusTool:
 - [ ] 在 `plugins/<name>/` 下创建目录
 - [ ] 编写 `plugin.toml`：`id` 符合命名规范、`api_version = 1`（**整数，不是字符串**）、`kind` 正确、`entry` 可解析
 - [ ] `config` 中每个字段都有 `type` 与 `description`；密钥字段标 `secret = true` 并配 `env`
+- [ ] `config` 里**只**声明「只有你的插件读它」的旋钮；别人已经读的值不要搬一份过来
+      （判断标准见 [`guide/plugin-development.md`](../guide/plugin-development.md) § 2.4.1）；
+      插件确实需要又根本读不到的值，让宿主广播给你（§ 2.4.2）
 - [ ] `requires` 只列出真正必需的依赖；能可选的放 `optional`
 - [ ] 实现 `Plugin` 子类，在 `on_load` 中注册能力
 - [ ] 所有时间判断使用 `ctx.now()` / `ctx.clock`，**不要用 `datetime.now()`**
 - [ ] 所有随机性使用 `ctx.rng` 或 tick 的 `ctx.rng`，**不要用全局 `random`**
 - [ ] 所有日志使用 `ctx.logger`，**不要用 `print`**
 - [ ] 所有配置从 `ctx.config` 读取，**不要自己读环境变量或文件**
-- [ ] `on_stop` 幂等，释放所有资源（HTTP 客户端、文件句柄、后台任务）
+- [ ] 只用 `ctx.registry` 拿别的插件；**只 import `alterego.interfaces.*` 与
+      `alterego.kernel.plugin`**（扫的是插件目录里的每一个 `.py`，帮手模块也不例外）
+- [ ] 依赖平台的插件：操作系统那一层单独一个模块，钩子里先判平台再干活——
+      不判的话用户看到的是「事件处理失败」，而不是「这个系统不支持」
+- [ ] `on_stop` 幂等，释放所有资源（HTTP 客户端、文件句柄、后台任务、全局快捷键）
 - [ ] 实现 `health_check()`，给出可操作的 `hint`
 - [ ] 网络请求有超时；区分可重试与不可重试错误
 - [ ] 大量 IO 用 `ctx.scheduler` 异步执行，不要阻塞 tick
@@ -1653,6 +1662,8 @@ from alterego.kernel.registry import ServiceRegistry
 - [ ] 若插件引入了新的用户可见行为 → 更新 `CHANGELOG.md`
 - [ ] 若插件定义了新的公开接口 → 更新 `docs/design/02-plugin-api.md`
 - [ ] 若插件带来重要架构变化 → 新增 `docs/adr/NNNN-*.md`
+- [ ] 若插件靠某条广播吃饭 → 在**广播那边**的常量上也留一句「谁在听」，
+      否则下一个人改名时不会知道有一个插件会静默失效
 
 ### 16.4 常见错误
 
@@ -1666,6 +1677,9 @@ from alterego.kernel.registry import ServiceRegistry
 | 在 `on_load` 中忘记注册能力 | 静默失效，难以排查 | 参考本 Checklist |
 | `on_stop` 中抛异常 | 影响逆拓扑序的后续停止 | 内部 try/except，只记录日志 |
 | 存密钥到 `ctx.state` | 明文落库 | 只用 `ctx.config` |
+| 平台相关的钩子不判平台 | 用户看到的是「事件处理失败」而不是「这个系统不支持」 | 钩子里先 `if not IS_WINDOWS: return` |
+| 广播名字在两边各写一份字面量 | 对不上时一句话都不报，症状是「永远没反应」 | 加一条测试把两边钉住 |
+| 成功之后不抹掉上次的失败原因 | 东西已经好了，健康检查还在报错 | 成功路径上清空 `_problem` |
 
 ---
 
@@ -1676,3 +1690,4 @@ from alterego.kernel.registry import ServiceRegistry
 | 2026-09-15 | v0.1.0 | 初版，api_version = 1 | LMG-arch |
 | 2026-09-15 | v0.1.1 | 修正接口包位置（`alterego/interfaces/`）；§ 5 补充 `ctx.bus` / `ctx.registry` 的归属视图（[ADR-0007](../adr/0007-auto-owning-plugin-context-views.md)） | LMG-arch |
 | 2026-09-16 | v0.1.2 | § 8.1 补一条「为什么专项学习不做成插件」：判断标准是「拆出去之后两边是不是都还得认识同一个内核数据结构」，并指向 [ADR-0012](../adr/0012-specialized-study-is-a-curriculum-not-a-prompt.md) 决策八 | LMG-arch |
+| 2026-09-16 | v0.1.3 | § 8.1 随包插件 4 → 5（新增 `capability.desktop_window`）；§ 9.1 补「插件可以有第二个模块文件」及其仍受 import 白名单约束；§ 16.1/16.3/16.4 补平台判定、只声明自己读的配置项、广播两边钉住、成功路径清错误 | LMG-arch |

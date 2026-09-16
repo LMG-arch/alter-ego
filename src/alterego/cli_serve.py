@@ -40,7 +40,7 @@ import asyncio
 import random
 import threading
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from typing import Any, Final
 
@@ -57,8 +57,8 @@ from alterego.cli_memory import _fail, _providers
 from alterego.cli_plugins import _print_load_report
 from alterego.interfaces.channel import Channel
 from alterego.interfaces.repository import PersonaRecord
-from alterego.kernel.bus import EventBus
-from alterego.kernel.clock import RealClock, resolve_timezone
+from alterego.kernel.bus import Event, EventBus
+from alterego.kernel.clock import Clock, RealClock, resolve_timezone
 from alterego.kernel.config import Config, WebConfig
 from alterego.kernel.errors import AlterEgoError, ChannelError
 from alterego.kernel.logging import get_logger, setup_logging
@@ -94,6 +94,21 @@ _LABEL: Final[int] = 10
 #: 不在这里再写一遍字面量：两处一旦不一致，症状是「命令行答得上来、网页答不上来」。
 _ROUTING_PURPOSE: Final[str] = PURPOSE
 
+#: 界面真的开始在某个地址上监听之后，广播的主题。
+#:
+#: 载荷：``{"url": str, "port": int}``。
+#:
+#: **名字里的 listening 是字面意思**，不是「进程起来了」的代称：它在 uvicorn
+#: 报出 ``started`` 之后才发，于是「端口被占了导致界面根本没起来」的情况下
+#: 它一条都不发——收到它的订阅者可以放心去用那个地址。
+#:
+#: 订阅它的第一个插件是 ``capability.desktop_window``。它**只能**自己再写一份
+#: 这个字面量（插件只许 import ``alterego.interfaces.*`` 与
+#: ``alterego.kernel.plugin``），两份靠
+#: ``tests/test_desktop_window_plugin.py::test_the_topic_is_the_one_cli_serve_publishes``
+#: 钉在一起。
+SERVE_LISTENING: Final[str] = "serve.listening"
+
 
 # ── 配置与装配 ──────────────────────────────────────────────
 
@@ -124,7 +139,9 @@ def _web_config(web: WebConfig, *, host: str | None, port: int | None) -> WebCon
     )
 
 
-def _kernel(config: Config, registry: ServiceRegistry) -> PluginManager:
+def _kernel(
+    config: Config, registry: ServiceRegistry, *, clock: Clock, bus: EventBus
+) -> PluginManager:
     """装一台插件管理器，**并且把登记表交出来**。
 
     没有直接复用 ``cli_plugins._manager``：那台把 ``ServiceRegistry`` 关在
@@ -133,18 +150,51 @@ def _kernel(config: Config, registry: ServiceRegistry) -> PluginManager:
     空登记表，症状是「插件里取渠道总是 ``None``」，而只有真写一个会发消息的
     插件才会碰到。
 
+    ``clock`` 与 ``bus`` 由调用方造好再传进来，**不在这里现造**：
+    :func:`_serve` 还要拿同一根总线去广播 :data:`SERVE_LISTENING`。
+    各造一根的话，广播投在一个没人在听的世界上，而症状是
+    「插件说它没收到界面地址」——一句话都不会错，就是不通。
+
     ``rng`` 显式按 ``config.core.random_seed`` 播种：不播种的话每次启动
     抖动都不一样，而本项目的推演要能重放（P6）。
     """
-    clock = RealClock(tz=resolve_timezone(config.core.timezone))
     return PluginManager(
         config=config,
-        bus=EventBus(clock, logger=_log),
+        bus=bus,
         registry=registry,
         clock=clock,
         scheduler=Scheduler(clock, logger=_log),
         logger=_log,
         rng=random.Random(config.core.random_seed),
+    )
+
+
+def _announce_listening(bus: EventBus, clock: Clock, config: Config) -> None:
+    """广播「界面已经在这个地址上」。
+
+    **为什么要有这条广播。** 有些插件做的事必须挂在「真的有界面」上，而不是
+    「进程起来了」：桌面窗口插件会占一个**全局**快捷键，而
+    ``alterego plugins doctor`` 同样会走一遍 ``manager.load_all()``——占在
+    ``on_start`` 里就等于用户看了一眼插件健不健康，键盘上的一个组合键就被
+    拿走了，而 ``doctor`` 打印的却是一切正常。广播只在真的监听之后发生，
+    于是那件事只可能发生在这个进程里；``--no-web`` 与 ``[web] enabled = false``
+    两种情况连广播都没有。
+
+    **地址顺便在这里给出去。** ``[web] host`` / ``[web] port`` 是本层读的，
+    插件不该自己抄一份（``docs/guide/plugin-development.md`` § 2.4.1：
+    内核已经读的值搬进插件就是两个真源），所以用 :func:`_url`——
+    把 ``0.0.0.0`` 显示成 ``127.0.0.1`` 的**唯一一份**实现。
+
+    载荷里**不放 token**。它是凭据，而事件的去向是每一个订阅者加事件日志；
+    窗口用的是自己的浏览数据目录，登录状态会自己留下。真需要凭据的时候
+    再走一条能指名道姓的通道，而不是往广播里塞。
+    """
+    bus.publish(
+        Event.create(
+            SERVE_LISTENING,
+            {"url": _url(config), "port": config.web.port},
+            clock=clock,
+        )
     )
 
 
@@ -327,13 +377,28 @@ async def _shutdown(deps: WebDeps, manager: PluginManager, providers: Mapping[st
         await provider.aclose()
 
 
-async def _uvicorn(app: Any, *, host: str, port: int) -> None:
+#: 后台任务的强引用。
+#:
+#: ``asyncio`` 只对任务持**弱**引用：一个没有被任何人拿住的任务可能在跑到一半
+#: 时被回收，而症状是「偶尔没广播」——最难查的那一类。任务结束时自己从这儿走。
+_BACKGROUND: set[asyncio.Task[None]] = set()
+
+
+async def _uvicorn(
+    app: Any, *, host: str, port: int, on_started: Callable[[], None] | None = None
+) -> None:
     """把应用交给 uvicorn，跑到 Ctrl+C。
 
     ``log_config=None`` 是关键：不写的话 uvicorn 会**换掉整套 logging 配置**，
     于是 :func:`alterego.kernel.logging.setup_logging` 装好的那个 handler
     （带脱敏过滤器）被顶掉，而症状是「日志里突然出现明文密钥」。红线第 19 条
     把 handler 的构造权收归内核，就是为了让脱敏只有一处。
+
+    ``on_started`` 在**端口真的绑上之后**才被调用，不是在这之前。
+    这个区别是有代价换来的：uvicorn 起来的那一瞬间之前，``_url(config)``
+    指向的东西还不存在。提前告诉插件「界面在 8765」会让它开出一个连不上的
+    窗口；而如果端口被别人占了、uvicorn 压根没起来，那更是永远不该说。
+    所以这里起一个小任务盯着 ``server.started``，发一次就散。
 
     import 写在函数里（理由同 ``channels/web/app.py``）：模块顶层 import
     uvicorn 会让 ``import alterego.cli_serve`` 直接抛 ``ModuleNotFoundError``，
@@ -343,15 +408,42 @@ async def _uvicorn(app: Any, *, host: str, port: int) -> None:
         import uvicorn
     except ImportError as exc:  # pragma: no cover - 取决于环境里装没装可选依赖
         raise ChannelError(describe_missing_extra(exc), missing=exc.name) from exc
-    config = uvicorn.Config(
-        app,
-        host=host,
-        port=port,
-        log_config=None,
-        server_header=False,
-        date_header=False,
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app,
+            host=host,
+            port=port,
+            log_config=None,
+            server_header=False,
+            date_header=False,
+        )
     )
-    await uvicorn.Server(config).serve()
+    if on_started is not None:
+        task = asyncio.create_task(_after_started(server, on_started))
+        _BACKGROUND.add(task)
+        task.add_done_callback(_BACKGROUND.discard)
+    await server.serve()
+
+
+async def _after_started(
+    server: Any, on_started: Callable[[], None], *, timeout: float = 60.0
+) -> None:
+    """等 uvicorn 真的把端口绑上，然后通知一次。
+
+    超时与 ``should_exit`` 两条出口都是**必须的**：这个任务挂在事件循环上，
+    一条永远转下去的循环不会报错，只会让这个进程永远退不掉。
+    """
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not getattr(server, "started", False):
+        if getattr(server, "should_exit", False):
+            return
+        if asyncio.get_running_loop().time() > deadline:
+            _log.warning(
+                "等了 %s 秒也没等到界面报出「已启动」，不广播 %s", timeout, SERVE_LISTENING
+            )
+            return
+        await asyncio.sleep(0.05)
+    on_started()
 
 
 async def _serve(
@@ -364,7 +456,9 @@ async def _serve(
 ) -> int:
     """装配 → 起服务 → 收摊。"""
     registry = ServiceRegistry(logger=_log)
-    manager = _kernel(config, registry)
+    clock = RealClock(tz=resolve_timezone(config.core.timezone))
+    bus = EventBus(clock, logger=_log)
+    manager = _kernel(config, registry, clock=clock, bus=bus)
     persona = _resolve_persona(backend.connection, name=persona_name)
     # token 是不是刚生成的，只有**构造之前**问得出来（``gate_for`` 会顺手写盘）。
     fresh_token = not token_path(config.data_dir.parent).exists()
@@ -384,7 +478,12 @@ async def _serve(
         if start:
             app = create_app(deps)
             _log.info("Web 界面起在 %s", _url(config))
-            await _uvicorn(app, host=config.web.host, port=config.web.port)
+            await _uvicorn(
+                app,
+                host=config.web.host,
+                port=config.web.port,
+                on_started=lambda: _announce_listening(bus, clock, config),
+            )
             return 0
         _wait_forever()
         return 0

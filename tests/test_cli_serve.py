@@ -297,3 +297,66 @@ def test_the_shutdown_order_is_plugins_then_channel_then_providers() -> None:
     asyncio.run(cli_serve._shutdown(deps, _Manager(), {"main": _Provider()}))  # type: ignore[arg-type]
 
     assert order == ["plugins", "channel", "provider"]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  「界面已经起来了」这条广播
+# ═══════════════════════════════════════════════════════════════════════
+#
+# 这条广播有个**真的会去按键盘**的订阅者（``capability.desktop_window``
+# 会占一个全局快捷键），所以它早发一秒或者晚发一秒都是要有后果的：
+# 早发 → 插件去开一个连不上的窗口；不发 → 快捷键永远没反应，而且一句
+# 话都不报。两边都得钉住。
+
+
+class _FakeServer:
+    """只留 uvicorn 会用到的那两个属性。"""
+
+    def __init__(self, *, started: bool = False, should_exit: bool = False) -> None:
+        self.started = started
+        self.should_exit = should_exit
+
+
+def test_the_announcement_waits_for_the_port_to_really_be_bound() -> None:
+    """``server.started`` 还是假的时候不许广播。
+
+    这个区别是有代价换来的：在这之前 ``_url(config)`` 指向的东西还不存在。
+    """
+    announced: list[str] = []
+    server = _FakeServer()
+
+    async def main() -> None:
+        task = asyncio.create_task(
+            cli_serve._after_started(server, lambda: announced.append("now"), timeout=30.0)
+        )
+        await asyncio.sleep(0.15)
+        assert announced == []  # 还没起来：不该发
+        server.started = True
+        await asyncio.wait_for(task, timeout=5.0)
+
+    asyncio.run(main())
+
+    assert announced == ["now"]
+
+
+def test_it_gives_up_when_the_server_is_already_going_down() -> None:
+    """端口被占了、uvicorn 决定退出：这条任务必须跟着结束。
+
+    一条永远转下去的协程不会报错，只会让 ``alterego serve`` 永远退不掉。
+    """
+    server = _FakeServer(should_exit=True)
+
+    coro = cli_serve._after_started(server, lambda: pytest.fail("它已经在退出了，不该广播"))
+
+    asyncio.run(asyncio.wait_for(coro, timeout=5.0))
+
+
+def test_it_gives_up_when_nothing_ever_reports_started() -> None:
+    """同上，另一条出口：等了太久也得散，不能挂在那里等一个不存在的时刻。"""
+    server = _FakeServer()
+
+    coro = cli_serve._after_started(
+        server, lambda: pytest.fail("一直没起来，不该广播"), timeout=-1.0
+    )
+
+    asyncio.run(asyncio.wait_for(coro, timeout=5.0))

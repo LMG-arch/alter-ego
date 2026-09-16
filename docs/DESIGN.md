@@ -1154,7 +1154,7 @@ alter-ego/
 │   ├── adr/                         # 架构决策记录
 │   │   ├── README.md                # 索引：新增 ADR 必须在这里补一行
 │   │   ├── 0000-template.md
-│   │   └── 0001…0012                # 机制/语言/存储/渠道/降级/选型即数据/归属视图/定妆照/不可信输入/元数据强制/训练集派生且脱敏/专项学习是课程表
+│   │   └── 0001…0013                # 机制/语言/存储/渠道/降级/选型即数据/归属视图/定妆照/不可信输入/元数据强制/训练集派生且脱敏/专项学习是课程表/宿主广播插件读不到的值
 │   ├── plans/                       # ✅ 每个批次的落地计划（记录历史，不做实时维护）
 │   └── guide/                       # 用户手册
 │       ├── getting-started.md
@@ -1318,9 +1318,13 @@ alter-ego/
 │   ├── dataset_exporter/            # ✅ capability 插件：声明「这个实例会导出训练集」
 │   │   ├── plugin.toml
 │   │   └── plugin.py
-│   └── study/                       # ✅ capability 插件：声明「这个实例会专项学习」
+│   ├── study/                       # ✅ capability 插件：声明「这个实例会专项学习」
+│   │   ├── plugin.toml
+│   │   └── plugin.py
+│   └── desktop_window/              # ✅ capability 插件：一个快捷键把 Web 界面叫成桌面窗口
 │       ├── plugin.toml
-│       └── plugin.py
+│       ├── plugin.py
+│       └── win32.py                 # 操作系统那一层（ctypes 调 user32，不含任何 alterego 代码）
 │
 ├── config/                          # `alterego init` 生成（gitignore）
 │   └── alterego.toml
@@ -1507,3 +1511,4 @@ PR 模板中包含勾选清单，未勾选不予合并。
 | 2026-09-15 | v0.2.2 | 新增分册 [12](design/12-calendar-and-conversation.md)（节日日历与对话节奏）；§ 5.2 领域层表补入 `calendar.py` 并标注实现状态；§ 7.5 作息与 § 7.6 世界接入节日上下文；节日**不**进 `world.events`（提前几天就知道是它特有的性质） | LMG-arch |
 | 2026-09-15 | v0.3.0 | [12](design/12-calendar-and-conversation.md) 新增 § 17 生日：生日 = `personal` 类的节日，不另开平行模型；数据住 `data/birthdays.toml`（你自己的数据，不进版本库）；新增 `domain/birthday.py`、`domain/_toml.py` 与 `birthdays/` 读取器；`day_kind()` 改为只按 `days_off` 判定「谁占哪一天」；§ 5.2 领域层表补入 `birthday.py` 与 `_toml.py` | LMG-arch |
 | 2026-09-16 | v0.3.2 | § 12.1 增 `[study]` 段；§ 13 目录树补 `cli_study.py` / `kernel/config_study.py` / `domain/study.py` / `sim/study.py` / `prompts/study_topic.md` 与三个测试文件；§ 13 子目录 `adr/` 改为 `0001…0012`；`domain/vault.py` 布局中间插一层 `60-专业`；[05](design/05-channels.md) § 8.1 命令树补 `study` 组、§ 8.3 组装根五→**六**；新增 [ADR-0012](adr/0012-specialized-study-is-a-curriculum-not-a-prompt.md) | LMG-arch |
+| 2026-09-16 | v0.3.3 | § 13 目录树补 `plugins/desktop_window/`（第一个带自己平台层的插件）；§ 13 子目录 `adr/` 改为 `0001…0013`；[02](design/02-plugin-api.md) § 8.1 随包插件 4→**5**、[05](design/05-channels.md) § 7.4 桌面窗口、[06](design/06-roadmap.md) 第 14 条、[guide](guide/plugin-development.md) § 2.4.2；新增 [ADR-0013](adr/0013-host-broadcasts-values-plugins-cannot-read.md) | LMG-arch |

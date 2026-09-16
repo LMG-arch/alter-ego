@@ -73,7 +73,7 @@ enabled = ["capability.my_plugin"]
 ```
 
 `enabled` 里**没有**它时，只有清单里 `enabled_by_default = true` 的插件会加载。
-随包的四个插件（`example` / `obsidian_vault` / `dataset_exporter` / `study`）都是 `false`——
+随包的五个插件（`example` / `obsidian_vault` / `dataset_exporter` / `study` / `desktop_window`）都是 `false`——
 **插件不该在你没要求的时候自己跑起来**，你自己的插件也应该保持 `false`。
 
 ---
@@ -192,6 +192,60 @@ max_length = 40
 > 反过来：如果「插件不声明就没人能改它的行为」，那多半说明这件事本来
 > 就该在内核里有一个设置项（见 [`10-settings-center.md`](../design/10-settings-center.md)），
 > 而不是在插件里再存一份。
+
+#### 2.4.2 插件**读不到**的值，只能「被给」
+
+上一节说的是「这个值别人已经读了，你别再声明一份」。还有更难的一种：
+插件**确实需要这个值**，而且**自己根本读不到**。
+
+插件能 import 的只有 `alterego.interfaces.*` 与 `alterego.kernel.plugin`
+（§ 3.1），所以 `alterego.kernel.config` 里的 `[web] port` 它看不到，
+`alterego.cli_serve._url()` 它也调不到。这种情况下的正确做法只有一个：
+
+> **让宿主在合适的时机把它广播出来，插件订阅。**
+
+现成的例子：`capability.desktop_window`（桌面窗口）要开一个指向 Web 界面的
+浏览器窗口，就得知道界面在哪个地址上。而地址住在 `[web] host` / `[web] port` 里，
+读它的是 `alterego serve`。所以 `cli_serve` 在**端口真的绑上之后**广播：
+
+```toml
+# 主题：serve.listening
+# 载荷：{"url": str, "port": int}
+```
+
+插件侧只有三行：
+
+```python
+def on_event(self, event: Any) -> None:
+    if getattr(event, "topic", "") != SERVE_LISTENING:   # 第一行必须是主题判断
+        return
+    url = str((getattr(event, "payload", None) or {}).get("url", "")).strip()
+    if url:
+        self._arm(url)
+```
+
+搭这种缝的时候有五条硬要求，少一条都会变成一个很难查的毛病：
+
+| 要求 | 漏了会怎样 |
+| --- | --- |
+| 广播方是**唯一**算那个值的地方 | 插件拿到的是原料（`host` + `port`）而不是算好的结果，两边各自拼一遍，`0.0.0.0` 就有一边会拼错 |
+| 发在**那个东西真的存在之后**，不是进程起来之后 | 插件会去开一个连不上的窗口；端口被占了则**永远不该发** |
+| 载荷里**不放凭据** | 事件的去向是每一个订阅者加事件日志，token 进去就等于公开 |
+| 插件侧第一行先判主题 | `on_event` 收到**所有**事件（§ 3.3），不判就是每个 tick 跑一遍 |
+| 名字用一条测试钉住两边 | 插件够不着 `cli_serve`，只能各写一份字面量；对不上时**一句话都不报**，症状是「界面起来了但快捷键永远没反应」 |
+
+最后一条的写法（参见 `tests/test_desktop_window_plugin.py`）：
+
+```python
+from alterego.cli_serve import SERVE_LISTENING
+
+assert plugin_module().SERVE_LISTENING == SERVE_LISTENING
+```
+
+> 住在广播那边的常量上也要留一句「谁在听」，否则下一个人改名字时
+> 不会知道有一个插件会静默失效。
+
+---
 
 ### 2.5 配置值的来源与优先级
 
@@ -325,6 +379,29 @@ def on_tick_post(self, _ctx: Any) -> None: ...   # ✗
 订阅了就必须处理：一个什么都不做的事件订阅会在每个 tick 上被调用一次，
 变成纯粹的噪声与性能损耗。记住每个 tick 都写一次盘是最常见的性能坑——
 攒够一批再写（见 § 8）。
+
+### 3.4 「放掉资源」与「拆掉状态」是两件事，写成两个函数
+
+只要你的插件同时持有一个**可再申请的资源**（快捷键、socket、定时任务、文件锁）
+和一个**用户看得见的状态**（窗口、托盘图标、会话），这两个动作就**必须能分开调**：
+
+```python
+def _drop_listener(self) -> None:
+    """只放掉快捷键，不碰窗口。幂等。"""
+    ...
+
+def _disarm(self) -> None:
+    """全拆：先放快捷键，再关窗口。幂等。"""
+    self._drop_listener()
+    ...
+```
+
+反例是 `_arm()` 开头直接调 `_disarm()`。配置里只改了快捷键，用户的窗口却跟着没了——
+用户看到的是「改个设置，东西自己关掉了」，而且没有任何日志能解释这件事。
+
+> 判断方法：问「用户改了这一项，他原来正在用的东西还应不应该在？」
+> 答案是「应该在」时，就只能调释放资源的那半边。
+> `plugins/desktop_window/` 的 `_rearm()` 就是这么写的——改快捷键只换快捷键。
 
 ---
 
@@ -612,10 +689,24 @@ search_paths = ["plugins", "~/.alterego/plugins"]
 
 > **插件目录里不需要 `__init__.py`。** 架构检查里「含 `.py` 的目录必须有
 > `__init__.py`」那一项（`scripts/check_architecture.sh` 第 23 项）只扫
-> `src/alterego/`，**`plugins/` 不在范围里**——随包的四个插件目录都没有那个文件。
+> `src/alterego/`，**`plugins/` 不在范围里**——随包的五个插件目录都没有那个文件。
 > 内核用 `_install_package()` 把插件目录注册成 `alterego_plugins.<id>` 这个包，
 > `__path__` 直接指向目录本身，所以插件内部写 `import helpers` 照样找得到邻居。
 > 加一个 `__init__.py` 也不会出错（内核不执行它），只是没有必要。
+>
+> 也正因为如此，**一个插件可以有第二个模块文件**。随包的 `desktop_window`
+> 就是这么拆的：`plugin.py` 是内核看得见的那半边（钩子、配置、健康检查），
+> `win32.py` 是操作系统看得见的那半边（`ctypes` 调 `user32`，一行 `alterego`
+> 代码都没有），两边用一个相对 import 连起来：
+>
+> ```python
+> from . import win32        # 同目录的另一个文件，不是子包
+> ```
+>
+> ⚠️ 但**拆出去的模块同样受 § 3.1 的 import 白名单管**：
+> `tests/test_interfaces_consistency.py` 扫的是插件目录里的**每一个** `.py`。
+> 把 `import alterego.kernel.config` 挪进帮手模块并不能绕过那条红线——
+> 它只是把违规藏到了名字更好听的文件夹里。
 
 ### 9.2 pip 包（entry point）
 
@@ -788,8 +879,12 @@ alterego config explain <配置键>          # 「它是什么、改了会怎样
 - [ ] 每个 `[plugin.config.*]` 都有 `description`
 - [ ] 密钥类字段标了 `secret = true`
 - [ ] **如果真的一个配置项都不需要**，在 `plugin.toml` 的注释与 `README.md` 里写明「这是有意的」（见 § 2.4.1）
+- [ ] 清单里**没有**声明「内核或某条命令已经读过的值」；确实需要又读不到的，改成订阅宿主广播（见 § 2.4.2）
 - [ ] 只 import 了 `alterego.interfaces.*` 与 `alterego.kernel.plugin`（见 § 11.1）
+- [ ] 只依赖平台的插件：操作系统的那个模块单独放一个文件，钩子里**先判平台再干活**
 - [ ] `on_stop` 幂等
+- [ ] 「放掉资源」与「拆掉状态」写成了两个能分开调的函数（见 § 3.4）
+- [ ] 上一次的失败原因在成功路径上会被抹掉
 - [ ] 订阅的事件都有实际处理逻辑
 - [ ] 跨重启要留的东西**没有**放在 `ctx.state`（见 § 8）
 - [ ] `alterego plugins doctor` 全绿
@@ -801,4 +896,5 @@ alterego config explain <配置键>          # 「它是什么、改了会怎样
 
 | 日期 | 版本 | 变更 | 作者 |
 | --- | --- | --- | --- |
+| 2026-09-16 | v0.1.3 | 新增 § 2.4.2「插件**读不到**的值，只能『被给』」（宿主广播的五条硬要求）；新增 § 3.4「『放掉资源』与『拆掉状态』是两件事」；§ 1.3 随包插件 4 → **5**（新增 `desktop_window`）；§ 9.1 补「插件可以有第二个模块文件，且它同样受 import 白名单管」；§ 15 交付清单补三条（平台判定 / 配置项归属 / 资源与状态可分开释放）。依据：按本指南写的第一个新插件 `capability.desktop_window` | LMG-arch |
 | 2026-09-16 | v0.1.2 | 首版。依据是一次完整的接口一致性审计（`13-interface-consistency.md`）：所有命令、字段、类型均取自当时代码 | LMG-arch |

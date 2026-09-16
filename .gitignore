@@ -162,6 +162,7 @@ plugins/*/
 !plugins/obsidian_vault/
 !plugins/dataset_exporter/
 !plugins/study/
+!plugins/desktop_window/
 
 # 临时文件
 tmp/

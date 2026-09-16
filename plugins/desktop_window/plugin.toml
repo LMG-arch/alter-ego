@@ -1,0 +1,75 @@
+# 桌面窗口插件清单
+#
+# 装它：把 plugins/desktop_window 拷到你的插件搜索路径下，然后在
+# config/alterego.toml 里加
+#     [plugins]
+#     enabled = ["capability.desktop_window"]
+# 然后跑 `alterego serve`，界面起来之后按快捷键。
+#
+# 字段语义见 docs/design/02-plugin-api.md § 3.1。
+
+[plugin]
+id = "capability.desktop_window"
+version = "0.1.0"
+api_version = 1
+kind = "capability"
+entry = "plugin:DesktopWindow"
+
+name = "桌面窗口"
+description = "一个全局快捷键，把 Web 界面叫成一个可以置顶的桌面窗口，再按一下收回去。"
+authors = ["LMG-arch"]
+license = "MIT"
+tags = ["desktop", "window", "hotkey", "ui", "capability"]
+
+enabled_by_default = false
+priority = 0
+auto_reload = true
+
+# ── 插件配置 ──────────────────────────────────────────────
+# 每个字段都要有说明：`alterego plugins config capability.desktop_window` 会打出来。
+#
+# ⚠️ 这里**没有**界面地址、端口、认证方式——那不是漏了，是故意不放的。
+# 那些值住在 [web] 段里，读它们的是 `cli_serve`；这个插件只是「知道有这回事」，
+# 抄一份过来就有两个真源，而 `alterego serve --port 9000` 的那天，
+# 插件会去开一个连不上的地址。地址由 `cli_serve` 在服务起来之后广播给它
+# （主题 `serve.listening`，见 plugins/desktop_window/plugin.py 的模块 docstring）。
+#
+# 判断标准就一句：**这个旋钮改变的是「插件自己的行为」吗？**
+# 换快捷键、换尺寸、换置顶 —— 是，所以留在这里。
+# 换端口 —— 不是，那是服务器的事。
+
+[plugin.config.hotkey]
+type = "string"
+default = "ctrl+alt+a"
+description = "召唤与收起窗口的全局快捷键，形如 ctrl+alt+a。"
+# 写法不在清单里校验，而是加载时用真的解析器过一遍（plugin.py 的 on_load）：
+# 一个 pattern 只能挡住「很明显是乱写的」，而它会变成第二份、更弱的真源。
+
+[plugin.config.width]
+type = "integer"
+default = 1180
+min = 480
+max = 8192
+description = "窗口的宽度（像素）。"
+
+[plugin.config.height]
+type = "integer"
+default = 800
+min = 360
+max = 8192
+description = "窗口的高度（像素）。"
+
+[plugin.config.position]
+type = "string"
+default = "auto"
+description = "窗口开在哪：auto 交给系统，或者写成 横,纵（例如 1024,80，允许负数）。"
+
+[plugin.config.always_on_top]
+type = "boolean"
+default = true
+description = "窗口是否固定在最上层。"
+
+[plugin.config.browser]
+type = "string"
+default = ""
+description = "用哪个浏览器开窗口；留空表示自动找 Edge 或 Chrome。"

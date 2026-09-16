@@ -20,8 +20,9 @@
 因为指南的硬条件是**里面每条命令都能跑**。
 
 - `plugin-development.md` 合格：`alterego plugins list|doctor|info|reload|reset`
-  五条命令都已存在，`plugins/` 下有 4 个能跑的插件（`example_plugin` 是模板，
-  `obsidian_vault` / `dataset_exporter` / `study` 是真实用途），所有字段都在代码里。
+  五条命令都已存在，`plugins/` 下有 5 个能跑的插件（`example_plugin` 是模板，
+  `obsidian_vault` / `dataset_exporter` / `study` / `desktop_window` 是真实用途），
+  所有字段都在代码里。
 - `getting-started.md` 不合格：`alterego run` 还不存在（推演引擎在阶段 E/F，见
   [06-roadmap.md](../design/06-roadmap.md) § 3），也还没有任何一个能真实通信的渠道插件
   （阶段 G）。「从零到第一次收到它主动发来的消息」这条路**今天走不通**。

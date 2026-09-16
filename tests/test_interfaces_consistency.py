@@ -236,24 +236,32 @@ def test_plugins_only_depend_on_the_two_allowed_entries() -> None:
     焊在内核的内部结构上——那些模块不在 ``__all__`` 的承诺范围内，可以随时改；
     而插件的全部价值是「内核变了插件不用改」。失败方式也很难懂：
     装到只装了 wheel 的机器上，报的是「缺一个你从没见过的模块」。
+
+    **扫的是插件目录里的每一个 ``.py``，不只是 ``plugin.py``。** 这条曾经只扫
+    ``*/plugin.py``，而插件目录是可以放第二个模块的（加载器把整个目录装成一个
+    真包，``alterego_plugins.<kind>.<name>``，所以 ``from . import helpers`` 能用）。
+    于是「把 import 挪进帮手模块」就成了绕过这条约束的一条捷径——守卫比它守的
+    规则窄，而窄的那部分读起来还是一样的理直气壮。
     """
     violations: list[str] = []
-    scanned = sorted(PLUGINS.glob("*/plugin.py"))
+    scanned = sorted(PLUGINS.glob("**/*.py"))
     assert scanned, (
-        f"{PLUGINS} 下一个 plugin.py 都没有，这条测试会静默失效。"
+        f"{PLUGINS} 下一个 .py 都没有，这条测试会静默失效。"
         "随包的插件是 git 追踪的，正常情况下一定存在；没有就说明路径写错了。"
     )
     for path in scanned:
+        shown = path.relative_to(PLUGINS.parent).as_posix()
         for name in sorted(_imported_alterego_modules(path)):
             if name == "alterego" or any(
                 name == prefix or name.startswith(f"{prefix}.")
                 for prefix in PLUGIN_ALLOWED_PREFIXES
             ):
                 continue
-            violations.append(f"plugins/{path.parent.name}/plugin.py 导入了 {name}")
+            violations.append(f"{shown} 导入了 {name}")
 
     assert not violations, (
-        "插件只能 import alterego.interfaces.* 与 alterego.kernel.plugin：\n  "
+        "插件（包括同目录下的帮手模块）只能 import alterego.interfaces.* "
+        "与 alterego.kernel.plugin：\n  "
         + "\n  ".join(violations)
         + "\n需要更多东西时，说明这段逻辑本该住在内核里，插件只负责声明。"
     )

@@ -382,7 +382,7 @@ storage/sqlite/               没有 PluginStateRepository ❌
 | `test_config_value_types_match_the_documented_eight` | 同上，配置值类型 |
 | `test_manifest_known_keys_are_derived_from_the_dataclass` | 手抄清单写回去时立刻红 |
 | `test_unknown_manifest_key_is_rejected` | `enabledByDefault = false` 这类拼错当场报错 |
-| `test_plugins_only_depend_on_the_two_allowed_entries` | 随包插件只 import `alterego.interfaces.*` 与 `alterego.kernel.plugin`。**架构检查管不到这一半**：它的 `find` 只扫 `src/`，`plugins/` 下没有 `__init__.py`、也不参与分层依赖方向 |
+| `test_plugins_only_depend_on_the_two_allowed_entries` | 随包插件只 import `alterego.interfaces.*` 与 `alterego.kernel.plugin`。**架构检查管不到这一半**：它的 `find` 只扫 `src/`，`plugins/` 下没有 `__init__.py`、也不参与分层依赖方向。⚠️ **扫的是插件目录里的每一个 ``.py``（`glob("**/*.py")`），不只是 ``plugin.py``**——否则「把 import 挪进帮手模块」就是一条绕过红线的捷径 |
 
 清单的**表级**校验在 `tests/test_kernel_loader.py`（§ 3.5 的回归测试）：
 
@@ -427,5 +427,6 @@ grep -rn 'provide_channel\|provide_capability\|provide_llm\|provide_tool' src/
 
 | 日期 | 版本 | 变更 | 作者 |
 | --- | --- | --- | --- |
+| 2026-09-16 | v0.1.3 | 新增 `capability.desktop_window`（第一个带平台层的插件，`plugins/desktop_window/win32.py`）；§ 7 的 import 白名单守卫扫描范围从 `*/plugin.py` 加宽到 `**/*.py` | LMG-arch |
 | 2026-09-16 | v0.1.2 | 首次审计：22 条差异，6 条代码侧修正 + 4 个回归测试文件 | LMG-arch |
 | 2026-09-16 | v0.1.2 | 补审：新增 #23（顶层表被静默忽略，代码侧修）；文档侧 12 条全部改完（含 `02-plugin-api.md` 9 节、`DESIGN.md` § 6.1/§ 6.2、`01-architecture.md` § 2.2、`06-roadmap.md` § 2.2）；配套新增 `docs/guide/plugin-development.md` | LMG-arch |

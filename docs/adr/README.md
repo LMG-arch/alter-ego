@@ -129,6 +129,7 @@ src/           →  实际实现
 | [0010](0010-every-setting-carries-display-metadata.md) | 每个配置项都必须携带可展示的元数据 | 已接受 | 2026-09-15 |
 | [0011](0011-training-datasets-are-derived-and-redacted.md) | 训练数据集是派生物，且先脱敏再落盘 | 已接受 | 2026-09-16 |
 | [0012](0012-specialized-study-is-a-curriculum-not-a-prompt.md) | 专项学习是算出来的课程表，不是提示词 | 已接受 | 2026-09-16 |
+| [0013](0013-host-broadcasts-values-plugins-cannot-read.md) | 插件读不到的值，由宿主在合适的时机广播给它 | 已接受 | 2026-09-16 |
 
 > 新增 ADR 后请在此表补充一行。**忘记更新索引是最常见的疏漏。**
 

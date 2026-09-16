@@ -113,7 +113,7 @@ flowchart LR
 > 与上面这些并列的还有一批**主体**工作
 > （[`plans/2026-09-16-main-body.md`](../plans/2026-09-16-main-body.md)）：
 > 它们不加新机制，只把已经写好、已经被测试覆盖的部分接到人能看见、能操作的位置上。
-> 五批——
+> 六批——
 >
 > 9. **对话主体**——`sim/` 的六阶段推演循环与 `alterego chat`（`cli_chat.py`）。
 > 10. **插件加载**——`alterego plugins {list,doctor,info,reload,reset}`（`cli_plugins.py`）。
@@ -121,9 +121,16 @@ flowchart LR
 > 12. **Web UI**——`channels/web/` 与 `alterego serve`（`cli_serve.py`）。
 > 13. **接口一致性审计 + 插件开发指南**——[13](13-interface-consistency.md) 与
 >     [`guide/plugin-development.md`](../guide/plugin-development.md)。
+> 14. **桌面窗口**——`capability.desktop_window`：一个全局快捷键，
+>     把 Web 界面叫成一个可以置顶的桌面窗口，再按一下收回去。
+>     它是第一个**带自己平台层**的插件（`plugins/desktop_window/win32.py`，
+>     `ctypes` 调 `user32`，一行 `alterego` 代码都没有），
+>     也是第一个**需要内核把值广播给它**的插件——界面地址住在 `[web]` 段里，
+>     插件读不到，所以 `cli_serve` 在端口真的绑上之后广播 `serve.listening`。
+>     见 [`guide/plugin-development.md`](../guide/plugin-development.md) § 2.4.2。
 >
-> 至此共 3336 个测试，全局覆盖率 **96.07%**（kernel 97.05% / domain 98.48% / sim 96.42%，
-> 更新于第 13 条）。
+> 至此共 3423 个测试，全局覆盖率 **96.04%**（kernel 97.05% / domain 98.48% / sim 96.42%，
+> 更新于第 14 条）。
 >
 > **领域层**：13 个模块已落地（`schedule` / `emotion` / `memory` / `calendar` /
 > `conversation` / `birthday` / `study` / `vault` / `knowledge` / `consolidation` /
