@@ -164,13 +164,19 @@ def test_virtual_clock_jump_to_rejects_naive() -> None:
 
 
 def test_virtual_clock_now_is_real_time() -> None:
-    """``now()`` 是给 UI 用的真实时间，不能被虚拟推进带走。"""
+    """``now()`` 是给 UI 用的真实时间，不能被虚拟推进带走。
+
+    这里的断言只能拿**虚拟时间自己前后的差**来比。曾经的写法是
+    ``clock.virtual_now() - after > timedelta(days=29)``——把
+    ``T0`` 推出来的合成时间直接减真实时间，而那个差每天都会变小，
+    于是每天 09:00 一到就必挂。合成时间只和它自己的起点比才有意义。
+    """
     clock = VirtualClock(T0, speed=1.0)
-    before = clock.now()
+    before, virtual_before = clock.now(), clock.virtual_now()
     clock.advance(timedelta(days=30))
     after = clock.now()
     assert after - before < timedelta(seconds=5)
-    assert clock.virtual_now() - after > timedelta(days=29)
+    assert clock.virtual_now() - virtual_before > timedelta(days=29)
 
 
 async def test_virtual_clock_sleep_until_past_returns_immediately() -> None:
