@@ -135,13 +135,17 @@ jobs:
       # AGENTS.md § 4 把 `python -m mypy src/alterego` 列为必跑门禁，
       # pyproject.toml 也把它配成 strict —— 但在此之前 CI 里根本没有这一步，
       # 类型错误可以一路合进 main。与覆盖率下限同一类缺陷：文档说了、机制没有。
+      # ⚠️ 装 extras 时必须带 `web`：mypy 要能看见 fastapi 才会去检查那些路由函数。
+      # 只装 `.[dev]` 时 channels/web/** 会报 35 个 import-not-found + untyped-decorator，
+      # 于是这道门禁**永远红**，而它与每一次改动的内容都无关；
+      # 本地看不出来，因为开发者的环境里本来就装着 fastapi。
       - name: mypy
         run: |
           if [ ! -d src/alterego ]; then
             echo "⊘ 尚无 src/alterego（当前处于设计阶段），跳过"
             exit 0
           fi
-          python -m pip install -e ".[dev]"
+          python -m pip install -e ".[dev,web,zh]"
           python -m mypy src/alterego
 
       - name: 检查 TOML 可解析

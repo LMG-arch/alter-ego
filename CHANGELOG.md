@@ -1162,6 +1162,14 @@ alterego serve --no-web              # 只装插件、不开界面
 - **CI 里没有 mypy**（`.github/workflows/ci.yml`）。`AGENTS.md` § 4 把它列为必跑门禁，
   `pyproject.toml` 把它配成 `strict = true`，`dev` 依赖里也装了它——但没有一步在跑它。
   与上一条同一类缺陷：**文档说了、机制没有**。现已补上
+- **补上的 mypy 门禁在 CI 上从来不可能通过**。`70cb4a3` 接 mypy 进 CI 时，那一行装的是
+  `-e ".[dev]"`——**没有 `web` 这个 extra**。于是 `channels/web/**` 里 9 个文件报 35 个错
+  （清一色 `Cannot find implementation or library stub for module named "fastapi"`，
+  加上它连锁带出来的 `Untyped decorator`），从 Web 界面落地那次提交（`f6aa2b1`）起
+  **连续 6 次 CI 全红，而这条红与每一次改动的内容都无关**。
+  **本地看不出来，因为开发者自己的环境里装着 fastapi。** 现在那一行与测试作业对齐成
+  `-e ".[dev,web,zh]"`。这和 `check_coverage.py` 那次是同一条教训：
+  **门禁的可信度取决于它的运行环境，而不是它的配置**
 
 **接口一致性审计（v0.1.2，插件接口专项）**
 
