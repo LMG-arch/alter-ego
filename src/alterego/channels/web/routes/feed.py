@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Body, Query
@@ -87,7 +87,7 @@ def timeline(
     ``days`` 的默认值 3 是「一眼能看完的一小段」：给 7 天时返回的首屏里
     大半是三天前的东西，而人在这一页想看的通常是「刚发生了什么」。
     """
-    now = datetime.now().astimezone()
+    now = deps.now
     since = now - timedelta(days=days)
     items: list[dict[str, Any]] = []
 

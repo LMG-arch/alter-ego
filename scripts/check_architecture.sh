@@ -25,6 +25,7 @@ DOMAIN="$SRC/domain"
 SIM="$SRC/sim"
 STORAGE="$SRC/storage"
 LLM="$SRC/llm"
+CHANNELS="$SRC/channels"
 
 FAILED=0
 CHECKS=0
@@ -345,6 +346,34 @@ if [[ -n "$MISSING_INIT" ]]; then
 else
     printf '  %s✓%s 所有含 .py 的目录都有 __init__.py\n' "$GREEN" "$RESET"
 fi
+
+# 红线 24（v0.4.1 新增）：channels/ 不得自己读进程时区取时间。
+#
+# 理由：`datetime.now().astimezone()` 读的是**进程的**时区，装的可能是 UTC；
+# 而 `core.timezone` 才定义「它的几点、今天算哪天」。两者在开发机上恰好一致
+# （都装着东八区），所以本地永远看不出区别——在 UTC 的容器里则差 8 小时。
+# 而 `/api/budget` 拿这个时刻取**日期**：东八区早上 8 点之前 UTC 还停在昨天，
+# 那一页显示的就是昨天的额度，而引擎写 `budget_usage.day` 用的是当地日期
+# （`sim/stages/common.py::day_key`）——两边差一天时，症状是「它明明发过消息，
+# 额度却显示 0」。`cli.py::_today` 与 `kernel/scheduler.py` 早就按配置时区取
+# 时间了，channels/ 是漏掉的那一处。
+#
+# ⚠️ 这条只在 CI（ubuntu runner，UTC）上才会暴露，本地带绿。所以它必须是
+# 一条会拦人的红线，而不是一句写进文档的提醒。
+#
+# 例外只有两个，都是形式上的：
+#   channels/web/deps.py  算「现在」的那个地方。它必须调 `datetime.now()`——
+#                         但那一次是 `datetime.now(resolve_timezone(...))`，
+#                         带时区，正是这条红线要的结果。
+#   注释行                 讲这条规则本身时难免要写出被禁的调用（「不用
+#                         `datetime.now()`，用 `deps.now`」）。拦掉散文而
+#                         不拦代码，才拦得住代码。
+check_forbidden_excluding \
+    "channels/ 不读进程时区（用 deps.now / deps.today）" \
+    "datetime\.now\(|date\.today\(|datetime\.utcnow\(" \
+    "$CHANNELS" \
+    "channels/web/deps\.py:|:[0-9]+:[[:space:]]*#" \
+    "用 deps.now / deps.today：它们读 core.timezone，也就是「它的几点」。"
 
 # ═════════════════════════════════════════════════════════════
 # 第 6 组 · 插件自包含

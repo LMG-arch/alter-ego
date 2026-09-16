@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import date, datetime
 from typing import Any
 
 from alterego.channels.web.auth import AuthGate
@@ -37,6 +38,7 @@ from alterego.interfaces.repository import (
     SourceRepository,
     TickLogRepository,
 )
+from alterego.kernel.clock import resolve_timezone
 from alterego.kernel.config import Config
 from alterego.kernel.logging import get_logger
 from alterego.kernel.registry import ServiceRegistry
@@ -89,3 +91,30 @@ class WebDeps:
     def web(self) -> Any:
         """``[web]`` 段的快捷方式。路由里出现 ``deps.config.web.page_size`` 太长。"""
         return self.config.web
+
+    @property
+    def now(self) -> datetime:
+        """按**配置的时区**取此刻。
+
+        不用 ``datetime.now().astimezone()``：那读的是**进程的**时区，装的可能是
+        UTC；而 ``core.timezone`` 才是「它的几点」。两者在开发机上恰好一致
+        （都装着东八区），所以本地永远看不出区别——在 UTC 的容器里则差 8 小时，
+        而 :func:`alterego.channels.web.routes.stats.budget` 拿这个时刻取**日期**：
+        东八区早上 8 点之前，UTC 还停在昨天，于是那一页显示的是**昨天**的额度。
+
+        ``cli.py::_today`` 与 ``kernel/scheduler.py`` 早就按配置时区取时间了，
+        ``channels/`` 是漏掉的那一处。``scripts/check_architecture.sh`` 第 5 组
+        现在拦这个——这条规则只能靠人记住的时候，它就不是规则。
+        """
+        return datetime.now(resolve_timezone(self.config.core.timezone))
+
+    @property
+    def today(self) -> date:
+        """按配置的时区取今天。
+
+        与引擎同口径：``budget_usage.day`` 是**当地日期**（见
+        ``sim/stages/common.py::day_key``），而 ``/api/budget`` 读的就是那一列。
+        两边算的不是同一天时，页面会显示一个引擎从没写过的那天，
+        而症状是「它明明发过消息，额度却显示 0」。
+        """
+        return self.now.date()

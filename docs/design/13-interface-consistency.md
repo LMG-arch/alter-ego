@@ -414,7 +414,7 @@ python -m pytest tests/test_kernel_manager.py -k StatusSteps -q
 # 清单校验（含 § 3.5 的两个回归测试）
 python -m pytest tests/test_kernel_loader.py -q
 
-# 架构红线（23 项，含分层依赖方向）
+# 架构红线（24 项，含分层依赖方向）
 bash scripts/check_architecture.sh --verbose
 
 # 「数命中数」这个动作本身

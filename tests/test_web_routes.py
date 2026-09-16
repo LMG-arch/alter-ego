@@ -24,7 +24,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -188,8 +188,12 @@ class _FakeBudgets:
     def __init__(self, usage: BudgetUsage | None = None) -> None:
         self.usage = usage
         self.saved: list[BudgetUsage] = []
+        #: 路由问的是**哪一天**。日期口径是这一页最要紧的一件事（见 ``deps.today``），
+        #: 所以假仓储要把它记下来，而不是只回一个 ``usage`` 就完事。
+        self.asked: list[date] = []
 
     def load(self, persona_id: str, *, day: Any) -> BudgetUsage:
+        self.asked.append(day)
         return self.usage if self.usage is not None else BudgetUsage(day=day)
 
     def save(self, persona_id: str, usage: BudgetUsage) -> None:  # pragma: no cover
@@ -281,6 +285,28 @@ def _config(tmp_path: Path, **web: Any) -> Config:
     return Config.load(
         env={},
         overrides={"core": {"data_dir": str(tmp_path / "data")}, "web": section},
+    )
+
+
+def _config_in(tmp_path: Path, timezone: str) -> Config:
+    """一份把 ``core.timezone`` 换成别的时区的配置。
+
+    为什么要专门造一个：默认值是 ``Asia/Shanghai``，而开发机恰好也装着东八区，
+    于是「读配置时区」与「读进程时区」两种写法给出**同一个答案**——
+    本机测多久都是绿的，CI 的 UTC runner 上却差 8 小时。
+    想真问出「页面上的『现在』跟谁走」，只有换一个偏移不同的时区。
+
+    ⚠️ 传进来的名字必须是 :data:`alterego.kernel.clock._FIXED_OFFSET_HOURS`
+    里有的（``Asia/Tokyo`` / ``UTC`` / ``Asia/Kolkata`` …）：这十个内置在代码里，
+    不装 ``tzdata`` 也有；换成 ``America/New_York`` 会在 Windows 上直接抛
+    :class:`ConfigError`。
+    """
+    return Config.load(
+        env={},
+        overrides={
+            "core": {"data_dir": str(tmp_path / "data"), "timezone": timezone},
+            "web": {"auth": "none", "host": "127.0.0.1"},
+        },
     )
 
 
@@ -816,6 +842,27 @@ async def test_budget_without_a_store_is_503(tmp_path: Path) -> None:
         assert (await client.get("/api/budget")).status_code == 503
 
 
+async def test_the_budget_day_is_today_in_your_configured_zone(tmp_path: Path) -> None:
+    """不传 ``day`` 时用的是**配置时区**的今天，不是这台机器的今天。
+
+    这一页最要命的失败是「它明明发过消息，额度却显示 0」：引擎按当地日期
+    写 ``budget_usage.day``（``sim/stages/common.py::day_key``），而路由按
+    进程时区去取——两边差的不是一小时，是一整天。
+
+    为什么非得换个时区才测得出来：默认值是 ``Asia/Shanghai``，开发机也是东八区，
+    于是两种写法在本机给出同一答案。用东京（+09:00）就不一样了——本机 +08:00、
+    CI runner +00:00，都不等于 +09:00。
+    """
+    store = _FakeBudgets()
+    deps = _deps(_config_in(tmp_path, "Asia/Tokyo"), budgets=store, persona_id="p1")
+    async with _client(deps) as client:
+        body = (await client.get("/api/budget")).json()
+
+    assert deps.now.utcoffset() == timedelta(hours=9)
+    assert store.asked == [deps.today]
+    assert body["day"] == deps.today.isoformat()
+
+
 async def test_sources_shows_the_kept_ones_newest_first(tmp_path: Path) -> None:
     records = [
         SourceRecord(id="s1", url="https://x.test/1", fetched_at=NOW.replace(hour=8)),
@@ -852,6 +899,21 @@ async def test_the_overview_answers_in_one_request(tmp_path: Path) -> None:
     assert body["plugins"] == {}
     assert body["channel"]["ok"] is True
     assert body["at"].endswith("+08:00")
+
+
+async def test_the_overview_tells_time_in_your_configured_zone(tmp_path: Path) -> None:
+    """``at`` 的偏移跟着 ``core.timezone`` 走，不跟着跑它的那台机器。
+
+    **这条曾经在 CI 上挂过，而在本机永远是绿的。** 开发机装着东八区，
+    和默认配置恰好一样，所以「读配置时区」与「读进程时区」给出同一个答案；
+    CI 的 runner 是 UTC，那两种写法就差 8 小时。用东京（+09:00）才问得出来：
+    本机 +08:00、CI +00:00，都不是 +09:00。
+    """
+    deps = _deps(_config_in(tmp_path, "Asia/Tokyo"))
+    async with _client(deps) as client:
+        body = (await client.get("/api/status")).json()
+
+    assert body["at"].endswith("+09:00")
 
 
 async def test_status_without_anything_attached_still_answers(tmp_path: Path) -> None:

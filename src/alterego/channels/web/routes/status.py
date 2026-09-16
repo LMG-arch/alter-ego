@@ -12,7 +12,7 @@ router 上，而挂错既不报错也不警告——默认拒绝、例外写在�
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Body, HTTPException, Query, Response
@@ -104,7 +104,7 @@ def status(deps: Deps) -> dict[str, Any]:
     **一个请求里拿齐**，因为这一页是启动时第一眼看到的：分成六个请求会让
     页面上先出现六块「正在加载」，而它们其实是一次查询能答完的东西。
     """
-    now = datetime.now().astimezone()
+    now = deps.now
     payload: dict[str, Any] = {
         "persona": None,
         "emotion": None,

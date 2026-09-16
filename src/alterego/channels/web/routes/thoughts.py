@@ -19,7 +19,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Query
@@ -58,7 +58,7 @@ def thoughts(
     if not deps.persona_id:
         return {"items": [], "days": days}
 
-    now = datetime.now().astimezone()
+    now = deps.now
     window = now - timedelta(days=days)
     records = activities.list_range(deps.persona_id, since=window, until=now, limit=500)
     voiced = [record for record in records if record.inner_voice.strip()]
@@ -88,7 +88,7 @@ def memory(
     if not deps.persona_id:
         return {"items": [], "total": 0}
 
-    since = datetime.now().astimezone() - timedelta(days=MAX_WINDOW_DAYS)
+    since = deps.now - timedelta(days=MAX_WINDOW_DAYS)
     records = memories.list_recent(
         deps.persona_id,
         since=since,

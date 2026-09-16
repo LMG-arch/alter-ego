@@ -247,7 +247,7 @@ flowchart LR
 | 总线 | 通配符订阅、优先级、异常隔离、重入深度限制均有测试 |
 | 时钟 | `VirtualClock` 以 60x 推进；同一 tick 内时间冻结 |
 | 调度 | `every` / `at_time_of_day` 在虚拟时钟下正确触发 |
-| 架构红线 | `scripts/check_architecture.sh` 七组 23 项全部通过 |
+| 架构红线 | `scripts/check_architecture.sh` 七组 24 项全部通过 |
 | 测试 | 内核层覆盖率 ≥ 90% |
 
 **验证命令**：
@@ -368,7 +368,7 @@ alterego channels doctor
 | --- | --- |
 | 文档 | DESIGN.md + **11 个分册**全部同步到最终实现 |
 | 测试 | 总覆盖率 ≥ 85%；领域层 ≥ 95%；内核层 ≥ 90%；推演层 ≥ 85%（由 `scripts/check_coverage.py` 核对） |
-| 红线 | `bash scripts/check_architecture.sh` 七组 23 项全部通过（含「LLM 调用必经 `ctx.llm()`」与「不得自建 logging handler」） |
+| 红线 | `bash scripts/check_architecture.sh` 七组 24 项全部通过（含「LLM 调用必经 `ctx.llm()`」、「不得自建 logging handler」与「`channels/` 不读进程时区」） |
 | 设置标注 | ⏳ **v0.1.0 未达成，推迟到 v0.2.0**（[ADR-0010](../adr/0010-every-setting-carries-display-metadata.md)）：`test_settings_metadata.py` 与 `kernel/settings.py` 都还不存在。今天只强制「每个字段有中文 docstring + `templates/alterego.toml` 里有默认值」 |
 | 可追踪 | 所有可观测表均有 `correlation_id`；`v_trace` 能把一次推演串成完整链路 |
 | CHANGELOG | `[0.1.0]` 章节完整 |

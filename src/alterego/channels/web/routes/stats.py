@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Query
@@ -49,7 +49,7 @@ def stats(
     days: Annotated[int, Query(ge=1, le=365)] = DEFAULT_WINDOW_DAYS,
 ) -> dict[str, Any]:
     """窗口内的活跃度：发了多少、做了多少、说了多少、记住了多少。"""
-    now = datetime.now().astimezone()
+    now = deps.now
     since = now - timedelta(days=days)
     payload: dict[str, Any] = {
         "window_days": days,
@@ -116,9 +116,10 @@ def budget(
     budgets = require(deps.budgets, "预算存储")
     if not deps.persona_id:
         return {"day": None, "usage": None}
-    # 不用 ``date.today()``：它读的是这台机器的今天，而且不带时区。
-    # 和 ``/api/stats`` 保持同一个口径——先取带时区的此刻，再取日期。
-    target = day or datetime.now().astimezone().date()
+    # 不用 ``date.today()``：它读的是这台机器的今天。
+    # 而 ``deps.today`` 读的是 ``core.timezone``——引擎写 ``budget_usage.day``
+    # 用的就是那个口径（``sim/stages/common.py::day_key``），两边必须同一天。
+    target = day or deps.today
     usage = budgets.load(deps.persona_id, day=target)
     return {"day": target.isoformat(), "usage": budget_view(usage)}
 
@@ -139,7 +140,7 @@ def sources(
     if not deps.persona_id:
         return {"items": [], "total": 0}
 
-    since = datetime.now().astimezone() - timedelta(days=MAX_SOURCE_AGE_DAYS)
+    since = deps.now - timedelta(days=MAX_SOURCE_AGE_DAYS)
     records = repo.list_kept(deps.persona_id, since=since, limit=limit + offset)
     ordered = list(reversed(records))
     return {

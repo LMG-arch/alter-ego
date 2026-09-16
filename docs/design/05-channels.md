@@ -459,6 +459,13 @@ page_size = 50                               # 每页默认条数的基准
 | 需重启项 | ✅ | 写入后页面必须显式提示「待重启生效」 |
 | 只读派生项（如当日用量） | ❌ | 单独通道 `/api/budget` |
 
+**「现在」的口径**：这一层的路由一律通过 `WebDeps.now` / `WebDeps.today` 取时间，
+它们读 `core.timezone`。不得写 `datetime.now().astimezone()` 或 `date.today()`——
+那两个读的是**跑这个进程的那台机器**的时区。开发机上装的时区恰好与配置里的一样，
+所以两种写法给出同一个答案；UTC 的容器里差 8 小时，而 `/api/budget` 拿这个时刻
+取**日期**，差 8 小时就是差一天：页面会去问一个引擎从没写过的那天。
+`scripts/check_architecture.sh` 第 24 项拦这个。
+
 **SSE 实现**：
 
 ```python
@@ -1899,6 +1906,7 @@ v2 新增渠道**不应影响 v1 用户**：
 | 日期 | 版本 | 变更 | 作者 |
 | --- | --- | --- | --- |
 | 2026-09-15 | v0.1.0 | 初版 | LMG-arch |
+| 2026-09-16 | v0.1.4 | § 3.3 补「现在」的口径：这一层取时间必经 `WebDeps.now` / `WebDeps.today`（读 `core.timezone`），不得用进程时区——本地与配置恰好同区所以看不出问题，换台 UTC 的机器就差一天 | LMG-arch |
 | 2026-09-16 | v0.1.3 | § 7.4 新增「桌面窗口：同一个界面，换一层壳」——记下「为什么是 `--app=` 而不是自己画一个窗口」以及 `serve.listening` 这条广播的必要性 | LMG-arch |
 | 2026-09-16 | v0.1.2 | Web 渠道落地：配置段从 `[channels.web]` 挪到顶层 `[web]`（`kernel/config_web.py`）；§ 3.3 补「实现状态」与三条与设计稿不同的约定（`has_more` / `PageLimit` / 两套方向词）；§ 7.1 换成真实的开场白；§ 7.2 的 `auth_mode`/`auth_token` 改成 `auth`/`auth_password`，去掉不存在的 `ALTEREGO_ALLOW_INSECURE` 后门 | LMG-arch |
 | 2026-09-15 | v0.1.1 | § 11.1 修正 `SecretFilter` 示例的两处实现 bug（单组过度脱敏、正则跨不过 `/`） | LMG-arch |

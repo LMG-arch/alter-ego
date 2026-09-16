@@ -499,7 +499,7 @@ git diff --name-only main...HEAD | grep '^docs/'  # 有文档变更？
 
 ## 架构红线
 
-CI 会跑 [`scripts/check_architecture.sh`](scripts/check_architecture.sh)，**七组共 23 项**检查：
+CI 会跑 [`scripts/check_architecture.sh`](scripts/check_architecture.sh)，**七组共 24 项**检查：
 
 | 组 | 内容 |
 | --- | --- |
@@ -507,7 +507,7 @@ CI 会跑 [`scripts/check_architecture.sh`](scripts/check_architecture.sh)，**�
 | 2 | 领域层纯净 —— `domain/` 无 IO、无数据库、无网络、无环境变量 |
 | 3 | 推演层抽象 —— `sim/` 不 import 具体实现，不用全局 `random`，不用 `datetime.now()` |
 | 4 | 分层不越级 —— `storage/` 与 `llm/` 不含业务逻辑 |
-| 5 | 代码卫生 —— 无 `print`、目录有 `__init__.py`、单文件 ≤ 900 行、**不得自行构造 logging handler** |
+| 5 | 代码卫生 —— 无 `print`、目录有 `__init__.py`、单文件 ≤ 900 行、**不得自行构造 logging handler**、**`channels/` 不读进程时区** |
 | 6 | 插件自包含 —— 插件之间不互相 import |
 | **7** | **LLM 调用必经 `ctx.llm()`** —— 不得在 `sim/`、`capabilities/` 里直接 `httpx.Client(base_url=...)`；否则无法计量、无法路由、无法受限 |
 
@@ -524,8 +524,11 @@ CI 会跑 [`scripts/check_architecture.sh`](scripts/check_architecture.sh)，**�
 | 推演层抽象 | golden test 开始随机失败（用了全局 `random`） | 第二天 |
 | 不经 `ctx.llm()` | **成本统计漏报**，预算闸门失效 | 收到账单的那天 |
 | 自建 logging handler | **密钥脱敏失效**（`SecretFilter` 挂在 root logger 上） | 泄露的那天 |
+| `channels/` 读进程时区 | 页面上的「今天」与引擎写的不是同一天（额度显示 0） | 换服务器的那天 |
 
 **最后两条是 v0.2.0 新增的**，因为 Token 统计页与日志页把这两件事从「建议」变成了「必须」。
+最后一条是 **v0.4.1 新增的**：它在开发机上永远看不出问题（本机时区与配置里恰好一样），
+只有在 UTC 的容器里才差 8 小时。
 
 本地运行：
 
@@ -545,7 +548,7 @@ def test_kernel_has_no_io_imports(path: Path) -> None:
     ...
 ```
 
-它**不是**权威——权威是 `scripts/check_architecture.sh`（七组 23 项，CI 里跑）。
+它**不是**权威——权威是 `scripts/check_architecture.sh`（七组 24 项，CI 里跑）。
 pytest 版存在的理由是：bash 脚本在 Windows 上不一定可用，而本地开发者
 应该在任何平台上都能立刻发现自己越了界。
 

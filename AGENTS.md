@@ -72,7 +72,7 @@ logging.FileHandler(...)  # → 用 ctx.logger，脱敏与轮转由内核负责
 **自行验证**：
 
 ```bash
-bash scripts/check_architecture.sh --verbose   # 七组红线，共 23 项
+bash scripts/check_architecture.sh --verbose   # 七组红线，共 24 项
 python -m pytest tests/test_kernel_config.py tests/test_packages.py -q
 ```
 

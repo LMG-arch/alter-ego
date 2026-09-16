@@ -1171,6 +1171,32 @@ alterego serve --no-web              # 只装插件、不开界面
   `-e ".[dev,web,zh]"`。这和 `check_coverage.py` 那次是同一条教训：
   **门禁的可信度取决于它的运行环境，而不是它的配置**
 
+- **Web 路由读的是进程时区，不是配置时区**（`channels/web/routes/` 四个文件、共 6 处
+  `datetime.now().astimezone()`）。`core.timezone` 才定义「它的几点、今天算哪天」，
+  而 `/api/budget` 拿这个时刻取**日期**：东八区早上 8 点之前 UTC 还停在昨天，
+  页面显示的是**昨天**的额度，而引擎写 `budget_usage.day` 用的是当地日期——
+  两者差一天时，症状是「它明明发过消息，额度却显示 0」。`cli.py::_today`
+  （注释里明写了 `DTZ011`）与 `kernel/scheduler.py` 早就按配置时区取时间了，
+  `channels/` 是漏掉的那一处。新增 `WebDeps.now` / `WebDeps.today` 两个属性作为
+  唯一入口，6 处全部改过来
+
+  这条 bug 在本机与 CI 上给出**同一个答案**：开发机装着东八区，配置默认值也是
+  `Asia/Shanghai`，于是「读配置」与「读进程」写起来一样、跑起来一样，直到换一台
+  服务器。同一批断言（`body["at"].endswith("+08:00")`）里写死 +08:00，也被这个
+  巧合掩盖了一半——所以新增的两条用例特意换用 `Asia/Tokyo`（+09:00）：本机 +08:00、
+  CI +00:00，都不是 +09:00。两条都用「把生产代码换回旧写法」做过变异验证
+
+- **`channels/` 从此不许自己读进程时区**（`scripts/check_architecture.sh` 第 5 组，
+  新增第 24 项）。上面那个 bug 在本机与 CI 上给出**同一个答案**：
+  开发机装着东八区，配置默认值也是 `Asia/Shanghai`，于是「读配置」与「读进程」
+  写起来一样、跑起来一样，直到换一台服务器。**这条规则只能靠人记住的时候，
+  它就不是规则**——所以它现在是一条会拦人的红线，而不是一句写进文档的提醒。
+  例外只有两处，都是形式上的：`channels/web/deps.py`（它就是算「现在」的那个
+  地方，写的是 `datetime.now(resolve_timezone(...))`，带时区）与注释行
+  （讲这条规则时难免要写出被禁的调用）。连带更新 `AGENTS.md`、`CONTRIBUTING.md`、
+  `01-architecture.md`、`06-roadmap.md`、`13-interface-consistency.md` 里的
+  「七组 23 项」——**数字写进文档就会过期，而过期的数字会让人不再去跑那个脚本**
+
 **接口一致性审计（v0.1.2，插件接口专项）**
 
 - **`plugin.toml` 里拼错的顶层键被静默忽略**。`enabled_by_default` 敲成
