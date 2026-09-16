@@ -220,6 +220,34 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 details summary { cursor: pointer; color: var(--accent); }
 details { margin: 8px 0; }
 
+/* 设置页的分组。每一个分组就是一个原生 <details>：展开/收起由浏览器
+ * 提供，没有事件代码，键盘能用（Tab 到摘要、Enter 开合），
+ * 而且可以同时开好几个——这对「对照着改两项」是必要的。
+ *
+ * 摘要做成原来那个 <h2> 的样子，因为它就是这一段的标题。
+ * ⚠️ 浏览器自带的三角标记（::marker）**必须留着**：它是「这里能点」
+ * 唯一的视觉线索，把它去掉、又没补上自己的箭头，收起之后这一行
+ * 看起来就跟一段普通文字一样，没人会想到去点它。 */
+details.group { margin: 22px 0 10px; }
+/* 收起的分组之间不留卡片那种空隙——全收起来时这一页就是一张目录，
+ * 行距该按目录来。 */
+details.group:not([open]) { margin-bottom: 0; }
+details.group > summary {
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--dim);
+  padding: 2px 0;
+}
+details.group > summary:hover { color: var(--fg); }
+details.group[open] > summary { margin-bottom: 8px; }
+details.group > summary .count {
+  font-size: 12px;
+  font-weight: 400;
+  margin-left: 8px;
+  opacity: .7;
+}
+
 .gate {
   position: fixed;
   inset: 0;

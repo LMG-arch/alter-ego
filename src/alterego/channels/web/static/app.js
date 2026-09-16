@@ -23,6 +23,10 @@ const state = {
   retries: 0,
   health: null,
   authed: false,
+  // 设置页里被用户收起的那些分组。`render()` 会整个重画面板，
+  // 刷新一下、或者切到别的页签再回来，都算一次重画——不记下来的话，
+  // 用户刚收起的分组会在他什么都没做的时候自己弹开。
+  collapsed: new Set(),
 };
 
 const $ = (id) => document.getElementById(id);
@@ -403,10 +407,19 @@ views.settings = async function () {
   const head =
     `<p class="muted">配置文件：${current.source ? `<code>${esc(current.source)}</code>` : "内置默认值（还没跑过 alterego init，这一页改不了任何东西）"}</p>`;
 
+  // 分组用原生 `<details>` 收起：浏览器自带展开/收起、键盘可操作、
+  // 不写一行事件代码，也不影响「没有 JS 时至少看得见内容」。
+  // 默认展开——把 96 项藏在 12 次点击后面，对「只想抄一下某个键名」的人
+  // 是净损失；这里要的是「能收起」，不是「默认收起」。
   const sections = [...groups.entries()]
     .map(([group, settings]) => {
       const rows = settings.map((setting) => settingRow(setting, values[setting.key]));
-      return `<h2>${esc(group)}</h2><div class="card">${rows.join("")}</div>`;
+      const open = state.collapsed.has(group) ? "" : " open";
+      return (
+        `<details class="group" data-group="${attr(group)}"${open}>` +
+        `<summary>${esc(group)}<span class="count">${settings.length} 项</span></summary>` +
+        `<div class="card">${rows.join("")}</div></details>`
+      );
     })
     .join("");
 
@@ -545,6 +558,11 @@ function hookKind() {
 }
 
 function hookSettings() {
+  for (const group of view().querySelectorAll("details.group")) {
+    group.addEventListener("toggle", () => {
+      group.open ? state.collapsed.delete(group.dataset.group) : state.collapsed.add(group.dataset.group);
+    });
+  }
   for (const button of view().querySelectorAll("[data-save]")) {
     button.addEventListener("click", async () => {
       const key = button.dataset.save;

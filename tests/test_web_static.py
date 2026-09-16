@@ -13,6 +13,9 @@
 
 这也不是一个 CSS 引擎。它挡不住所有盖掉默认值的写法（内联 ``style``、
 ``:not([hidden])`` 之类），它挡的是已经真的发生过的那一条。
+
+同一个理由后来也用在了 ``app.js`` 上：设置页的分组该怎么收起、收起之后
+刷新一下还在不在，都是浏览器里的事，接口用例一个字也看不到。
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ import pytest
 STATIC = Path(__file__).resolve().parent.parent / "src" / "alterego" / "channels" / "web" / "static"
 HTML = STATIC / "index.html"
 CSS = STATIC / "style.css"
+JS = STATIC / "app.js"
 
 #: 匹配一个属性里的 ``hidden``，但不匹配 ``data-hidden`` 这种带连字符的键。
 _HIDDEN_ATTR = re.compile(r"(?<![-\w])hidden(?=[\s/>])")
@@ -135,4 +139,50 @@ def test_no_author_rule_defeats_the_hidden_attribute() -> None:
         f"这些类带着 hidden 属性、又自己设了 display：{defeated}——"
         f"hidden 属性会完全失效。{CSS.name} 里必须有一条 "
         "`[hidden] { display: none }` 把浏览器默认行为写回来。"
+    )
+
+
+# ── 设置页的分组收起 ─────────────────────────────────────────────
+#
+# 设置页有十几个分组、九十多项。它们靠原生 ``<details>`` / ``<summary>``
+# 收起，一行事件代码都不写；「用户收起过哪些组」记在 ``state.collapsed`` 里。
+#
+# 为什么要在这里查源码：收起行为是浏览器的，记不记得住是内存里的，两者
+# 都逃得出 httpx 的视野。真实会发生的退化只有两种，而且都很安静——
+# 有人把 ``<details>`` 换回 ``<h2>``（能看，但再也收不起来），
+# 或者渲染时写死 ``open``（当时能收，一刷新又自己弹开）。这两种都能在
+# 字符串层面认出来，所以这一条守的是它们。
+
+_DETAILS_GROUP = re.compile(r"<details\s[^>]*class=\"group\"")
+
+
+def test_settings_groups_collapse_through_native_details() -> None:
+    """设置页的分组必须是原生 ``<details>``，并且带着 ``<summary>``。
+
+    换回 ``<h2>`` 的那一刻，这一页就再也没有「收起」这个功能了——
+    而且没有任何报错，只是点不动。
+    """
+    js = _read(JS)
+    groups = _DETAILS_GROUP.findall(js)
+
+    assert groups, f'{JS.name} 里没有用 `class="group"` 的 <details>，设置页的分组收不起来了'
+    assert "<summary>" in js, (
+        f"{JS.name} 里的 <details> 没配 <summary>——没有把手，展开了也就没法再收回去"
+    )
+
+
+def test_the_collapsed_state_is_remembered_not_hardcoded() -> None:
+    """分组展开与否要读 ``state.collapsed``，且把用户的每次开合记回去。
+
+    ``render()`` 会把整个面板重画一遍，所以刷新、切页签回来都算一次重画。
+    渲染时写死 ``open``、或者只监听不记录，用户都会遇到「刚收起的分组
+    自己弹开」——那一刻他什么都没做，只会以为界面坏了。
+    """
+    js = _read(JS)
+
+    assert "state.collapsed.has(" in js, (
+        f"{JS.name} 渲染分组时没有读 state.collapsed——收起来的分组会在下一次重画时自己弹开"
+    )
+    assert re.search(r"state\.collapsed\.(add|delete)\(", js), (
+        f"{JS.name} 里没人往 state.collapsed 里记东西——只读不写的话，那个集合永远是空的"
     )
