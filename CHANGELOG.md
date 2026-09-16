@@ -997,6 +997,38 @@ alterego serve --no-web              # 只装插件、不开界面
   `pyproject.toml` 把它配成 `strict = true`，`dev` 依赖里也装了它——但没有一步在跑它。
   与上一条同一类缺陷：**文档说了、机制没有**。现已补上
 
+**接口一致性审计（v0.1.2，插件接口专项）**
+
+- **`plugin.toml` 里拼错的顶层键被静默忽略**。`enabled_by_default` 敲成
+  `enabledByDefault`，键落进「不认识的顶层键」里，然后**什么都不发生**——
+  作者想要「默认别开」，实际得到一个默认开着的插件。这类
+  **「配错了反而更开放」**的降级最难发现，因为没人会去查一个「本来就没配」的东西。
+  现在 `PluginManifest.parse` 用**从数据类推导**的 `_KNOWN_MANIFEST_KEYS` 拒绝未知键
+  （不去手抄一份允许清单——手抄的清单会和字段漂）
+- **`[plugin]` 之外的整张顶层表被静默忽略**。这条与上一条同源但更严重：
+  `load_manifest` 只取 `data["plugin"]`，顶层剩下的东西一个都没碰。于是把配置写成
+  顶层 `[config]`（漏了 `plugin.` 前缀，也是文档示例里的写法）的插件会**加载成功**，
+  但 `ctx.config` 是空的——连「必填字段缺失会报错」这条保护也一并失效，
+  因为清单里根本没有这个字段。现在 `load_manifest` 报出多出来的顶层键并给出写法提示。
+  三个真实插件与所有测试夹具写的都是 `[plugin.config.*]`，
+  **这个 bug 的唯一实例是文档自己的示例**：读文档照抄的人会掉进去，读代码的人不会
+- **`PluginStatus` 的三个成员从来没被赋值过**。`DISCOVERED` / `VALIDATED` / `STOPPED`
+  在枚举、CLI 状态标签表、`info` 输出格式里全都写好了，但没有任何一处代码写过它们——
+  于是 `alterego plugins info <没启用的插件>` 的输出和「插件不存在」一样空。
+  现在 `discover()` 标 `DISCOVERED`、`load_all()` 按拓扑序标 `VALIDATED`、
+  `_teardown()` 在 `on_stop` 之后 `on_unload` 之前标 `STOPPED`
+  （`STOPPED` 的位置是刻意的：它是 `Loaded` 与 `Unloaded` 之间唯一可观察的中间态——
+  服务与事件订阅还在，这正是最难定位的那一类问题）
+- **`interfaces/channel.py` 的 `__all__` 只导 7 个公开名字里的 4 个**，漏掉
+  `Direction` / `ChannelCapability` / `MessageKind`——它们是 `Channel` 协议三个字段的
+  类型，插件实现渠道时要用它们标注类属性。漏在门面外面，等于逼插件作者去翻源码。
+  同时 `interfaces/__init__.py` 改为**全量转发**六个子模块的 44 个公开名字：
+  「部分转发」比「完全不转发」更坏，`ImportError` 会让人以为是自己写错了
+- **`README`/`DESIGN` 里的 `provide_*()` 扩展点从未存在**。文档 § 7 列了 12 个
+  `provide_llm` / `provide_channel` / `provide_capability` 之类的方法，全仓库
+  `grep` 只命中 1 条（而且是一条 docstring）。真实机制只有一条：
+  `ctx.registry.register(接口, 实例, name=…)`
+
 ### 安全
   退出码还是 0。原因：`load_calendar(2027)` 为了看年末会把前后各一年合并进来，
   于是磁盘上只有 `2026.toml` 时它照样返回一份日历，调用方的 `is None` 判断从未生效。
@@ -1200,6 +1232,66 @@ alterego serve --no-web              # 只装插件、不开界面
 - `docs/adr/0009` 里一个指向 `08-external-sources.md` 的相对链接**少了一层 `../`**，
   在 GitHub 上是 404
 - `tests/test_architecture.py` 的 docstring 写着「20 项」，实际是七组 23 项
+
+**接口一致性审计（v0.1.2）**
+
+- **新增 [`docs/design/13-interface-consistency.md`](docs/design/13-interface-consistency.md)**
+  —— 一次完整审计的结论：**23 条**「代码与文档不一致」，逐条给出判定
+  （代码胜 / 文档胜 / 两边都错）、处理方式与依据文件。更重要的是它写了**审计方法**：
+  四步、可原样复现，并且第一条就是「**先读代码，后读文档**」——
+  反过来会让文档里的措辞变成你读代码时的滤镜，你会不自觉地把代码「读成」文档的样子
+- **新增 [`docs/guide/plugin-development.md`](docs/guide/plugin-development.md)**
+  —— **写插件的唯一依据**。15 节：五分钟写一个、`plugin.toml` 字段表（含
+  `ConfigField` 的 17 个键）、九个钩子、`PluginContext` 全貌、六种「我提供什么」、
+  实现一个渠道、依赖语法、状态、加载来源与热重载、出错会怎样、测试你的插件、
+  12 行常见错误速查、红线表、调试命令、交付清单。
+  它只写**今天能跑起来的东西**——设计意图仍看 `02-plugin-api.md`，两者矛盾时以指南为准
+- **`docs/design/02-plugin-api.md` 9 节改写**：§ 3.1 清单示例（裸整数 `api_version`
+  + 七个 `[plugin.config.<字段名>]` 子表）、§ 3.2 去掉 `object.schema`（代码明确拒绝）、
+  § 3.4 补三条校验、§ 4.1 说明 `on_tick_pre` 的实际标注是 `Any`、
+  § 5 `PluginContext` 草稿对齐真实字段与 5 个便捷方法、§ 5.2 `PluginState` 从 6 改到 9 个成员、
+  § 7 把 12 个不存在的 `provide_*()` 换成真实的 `ctx.registry.register(...)`、
+  § 9.1 导入机制、§ 9.2 补「入口查清单的两种来源」（兄弟 `plugin.toml` 或模块级 `MANIFEST`）、
+  § 9.3 并列优先级改为**抛错**而不是猜一个。文档顶部加了一句：
+  **本文档回答「为什么这样设计」，不回答「现在能怎么写」**
+- **`docs/guide/plugin-development.md` § 4.3 单列一节：「两个 `ctx` 不一样」**。
+  `kernel.PluginContext`（插件存活期，有 `registry` / `paths` / `config`）
+  与 `sim.TickContext`（一个 tick，有 `llm()` / `virtual_now` / `StateSnapshot`）
+  是插件 API 里最容易混的一处，而两个对象**都有叫 `state` 的属性**，含义完全不同。
+  这一节用六行表格把它们摆在一起，并写明「要调模型只能在推演过程中」
+- **`docs/DESIGN.md` § 6.1 的八类表格改成指向 `02-plugin-api.md` § 2**。
+  原表格与 § 2 重复，而且把 `capability` 的扩展点写成 `provide_tool()`——
+  一张表两处维护，就走样了两处。现在只留三条别处不重复的结论；
+  § 6.2 的清单示例也从「顶层 `[config]` + 行内表」改成真实的 `[plugin.config.*]` 子表，
+  并点出三个会被当场报错的易错点
+- **`docs/design/01-architecture.md` § 2.2** 的 `SimulationConfig` / `DisturbBudgetConfig`
+  草稿补齐到真实字段数（6 / 7）；「校验」那一行原本举例 `0 <= daily_message_limit <= 20`，
+  而代码只查非负——改成描述真实的校验方式
+- **`docs/design/06-roadmap.md` § 2.2** 删掉**不存在**的 `ImageProvider` / `SourceProvider`，
+  改为真实文件名与三个真实契约名，并说明这两种 `kind` 今天已经通过清单校验
+- **`docs/guide/README.md`** 从「现在为什么是空的」改成「现在有什么」，
+  并解释了为什么只有一篇指南能通过「必须可照做」这条门槛
+- `docs/DESIGN.md` § 17 分册索引补两行（`13-interface-consistency.md` 与
+  `guide/plugin-development.md`）；三处指向**从不存在**的 `docs/PLUGIN_GUIDE.md`
+  的引用改到真实路径（`kernel/manifest.py` ×2、`interfaces/__init__.py` ×1）
+
+### 测试
+
+- **新增 `tests/test_interfaces_consistency.py`（26 个，`@pytest.mark.architecture`）**
+  —— 把「能写成断言」的那部分差异钉死：每个 `interfaces/*.py` 的 `__all__`
+  覆盖它定义的每个公开名字、包级 `__all__` 恰好等于六个子模块的并集、
+  `PluginKind` / `ConfigValueType` 的 `Literal` 与运行时 `_KINDS` / `_VALUE_TYPES` 同步、
+  清单允许键**确实是从数据类推导**的（不手抄）、拼错的顶层键真的报错。
+  ⚠️ 它**刻意不写**「`__all__` 是否按字母序」「是否有未使用 import」——
+  那是 `ruff` 的 `RUF022` / `F401`，再写一遍只会制造「lint 说对、测试说错」的假红
+- **`tests/test_kernel_manager.py::TestStatusSteps`（4 个）**：状态机上每个成员都真的
+  被落到 `_status`——`PluginStatus` 里三个从没被赋值过的成员就是靠它守住的
+- **`tests/test_kernel_loader.py` 新增 2 个**：顶层多一张表、顶层多一个标量键，
+  都必须报错且报错里点名是哪个键（见上面的「修复」）
+- **补记（代码在批次 C 已提交，本轮才补上条目）**：`tests/conftest.py` 加 autouse 的
+  `_restore_logging` fixture。`logging.getLogger(...)` 是**进程级单例**，插件用
+  `PropagateHandler` 时很容易让上一个测试的 handler 活到下一个测试，
+  表现为「单独跑绿、一起跑红」——批次 C 的 `test_cli_serve.py` 就是这么把它逼出来的
 
 ### 架构
 

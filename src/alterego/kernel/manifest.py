@@ -53,12 +53,31 @@ API_VERSION: int = 1
 #: 插件配置字段被脱敏后的占位符。
 MASK: str = "***"
 
-PluginKind = Literal["llm", "storage", "channel", "capability", "stage", "tool"]
+#: 插件类型。**八类，与 ``docs/design/02-plugin-api.md`` § 2 逐字一致。**
+#:
+#: ``image`` 与 ``source`` 的接口（``interfaces/image.py`` / ``interfaces/source.py``）
+#: 要到 v0.2.0 / v0.3.0 才落地（见 ``docs/design/06-roadmap.md`` 阶段 L / M），
+#: 但**清单层面今天就接受它们**——理由有三条：
+#:
+#: 1. ``kind`` 目前是**纯元数据**：内核只用它来显示，以及措辞一句
+#:    「entry 指错地方了」的提示（见 ``loader._entry_hint``）。内核**不校验**
+#:    「声明 channel 就必须注册 Channel」——今天不校验，以后也不该用一个
+#:    半吊子的校验器代替（没校验可查，错校验难查）。
+#: 2. 一份照设计文档写出来的 ``plugin.toml`` 不该在解析阶段被拒。拒绝它会让
+#:    「文档说要写 kind = "image"」和「内核说这不是合法 kind」同时为真，
+#:    而插件作者无从判断该信哪一个。
+#: 3. 加两个字符串的成本是零：没有任何分支读这两个值。
+#:
+#: 「能通过解析」不等于「今天能用」——那张「今日可用」的表在
+#: ``docs/guide/plugin-development.md`` § 1.2 与 ``docs/design/13-interface-consistency.md``。
+PluginKind = Literal["llm", "storage", "channel", "capability", "stage", "tool", "image", "source"]
 ConfigValueType = Literal[
     "string", "integer", "number", "boolean", "array", "object", "duration", "path"
 ]
 
-_KINDS: frozenset[str] = frozenset({"llm", "storage", "channel", "capability", "stage", "tool"})
+_KINDS: frozenset[str] = frozenset(
+    {"llm", "storage", "channel", "capability", "stage", "tool", "image", "source"}
+)
 _VALUE_TYPES: frozenset[str] = frozenset(
     {"string", "integer", "number", "boolean", "array", "object", "duration", "path"}
 )
@@ -356,6 +375,26 @@ class PluginManifest:
                 "manifest": str(path / "plugin.toml") if path else None,
             }
 
+        # 先查「有没有拼错的键」，再查值。
+        #
+        # 与 ``_parse_config_table`` 拒绝未知的**配置字段**是同一件事，理由也一样：
+        # 静默忽略一个键，等于允许插件带着一份「你以为配了、其实没配」的配置跑起来。
+        # ``enabled_by_default`` 拼成 ``enabledByDefault`` 是最典型的例子——
+        # 一个只想写「这个插件默认别开」的作者，会得到一个默认开着的插件。
+        # 这类「配错了反而更开放」的降级最难发现，所以宁可当场报错。
+        unknown_keys = sorted(set(data) - _KNOWN_MANIFEST_KEYS)
+        if unknown_keys:
+            raise PluginManifestError(
+                "清单里有无法识别的键",
+                **where(),
+                unknown=unknown_keys,
+                supported=sorted(_KNOWN_MANIFEST_KEYS),
+                hint=(
+                    "键名拼错会被静默忽略，插件会带着一份你没真正配上的清单跑起来。"
+                    "字段表见 docs/guide/plugin-development.md § 2。"
+                ),
+            )
+
         version = data.get("version")
         if not isinstance(version, str) or not _SEMVER_RE.match(version):
             raise PluginManifestError("插件 version 必须是 SemVer", **where(), version=version)
@@ -413,6 +452,21 @@ class PluginManifest:
             path=path,
             source=source,
         )
+
+
+#: ``plugin.toml`` 的 ``[plugin]`` 表里**允许出现**的键。
+#:
+#: 从 :class:`PluginManifest` 自己的字段**推导**，不手抄：手抄的清单一定会漂，
+#: 漂成两种后果——「写对了的键被判成非法」或者更糟的「拼错的键被静默忽略」。
+#: 推导一次，加字段时自动跟着变，不可能不一致。
+#:
+#: 去掉 ``path`` 与 ``source``：它们由发现过程填（本地目录 / entry point），
+#: 不是插件作者写的，写进 ``plugin.toml`` 只会被忽略——那正是这里要拦的。
+#:
+#: 位置在类定义**之后**，因为推导需要字段已经存在。
+_KNOWN_MANIFEST_KEYS: frozenset[str] = frozenset(
+    f.name for f in dataclasses.fields(PluginManifest) if f.name not in {"path", "source"}
+)
 
 
 def is_api_version_compatible(

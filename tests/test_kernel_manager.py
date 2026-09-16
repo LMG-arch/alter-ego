@@ -248,6 +248,91 @@ class TestSelection:
         assert pm.order == ("storage.zed", "channel.aaa")
 
 
+class TestStatusSteps:
+    """``PluginStatus`` 的每一步都要真的被落到 ``_status`` 上。
+
+    三个「设计了却从没被赋值」的成员（``DISCOVERED`` / ``VALIDATED`` / ``STOPPED``）
+    是最难发现的一类缺口：枚举、CLI 的状态标签表、``info`` 的输出格式全都写好了，
+    只有赋值那一行忘了。后果是 ``alterego plugins info`` 对「没被启用的插件」
+    和「根本不存在的插件」给出同一个答案——空。
+    """
+
+    def test_discovered_plugins_are_marked_before_they_are_enabled(
+        self, tmp_path, clock, bus, registry
+    ):
+        install(tmp_path / "plugins", "channel.a", SIMPLE, enabled_by_default=False)
+        pm = make_manager(tmp_path, clock=clock, bus=bus, registry=registry)
+        pm.discover()
+
+        assert pm.status_of("channel.a") == PluginStatus.DISCOVERED
+
+    def test_load_walks_validated_then_loaded_then_started(self, tmp_path, clock, bus, registry):
+        """在 ``_load_one`` / ``_start_one`` 的边界上读状态，拼出实际走过的顺序。
+
+        ``LOADING`` 在 ``_load_one`` 内部设置、内部清掉，只能从里面看见，
+        所以这里断言的是能观察到的三个边界：进 ``_load_one`` 前是 ``VALIDATED``、
+        出来是 ``LOADED``、进 ``_start_one`` 时还是 ``LOADED``。
+        """
+        install(tmp_path / "plugins", "channel.a", SIMPLE)
+        pm = make_manager(tmp_path, clock=clock, bus=bus, registry=registry)
+
+        seen: list[PluginStatus | None] = []
+        load_one, start_one = pm._load_one, pm._start_one
+
+        def spy_load(plugin_id: str) -> bool:
+            seen.append(pm.status_of(plugin_id))
+            result = load_one(plugin_id)
+            seen.append(pm.status_of(plugin_id))
+            return result
+
+        def spy_start(plugin_id: str) -> None:
+            seen.append(pm.status_of(plugin_id))
+            start_one(plugin_id)
+
+        pm._load_one = spy_load  # type: ignore[method-assign]
+        pm._start_one = spy_start  # type: ignore[method-assign]
+        pm.load_all()
+
+        assert seen == [
+            PluginStatus.VALIDATED,
+            PluginStatus.LOADED,
+            PluginStatus.LOADED,
+        ]
+        assert pm.status_of("channel.a") == PluginStatus.STARTED
+
+    def test_shutdown_marks_stopped_before_unloaded(self, tmp_path, clock, bus, registry):
+        install(tmp_path / "plugins", "channel.a", SIMPLE)
+        pm = make_manager(tmp_path, clock=clock, bus=bus, registry=registry)
+        pm.load_all()
+
+        seen: list[PluginStatus] = []
+        record = pm.plugin_of("channel.a")
+        assert record is not None
+        original = record.on_unload
+
+        def spy() -> None:
+            seen.append(pm.status_of("channel.a"))
+            original()
+
+        record.on_unload = spy  # type: ignore[method-assign]
+        pm.shutdown()
+
+        # ``on_unload`` 那一刻插件已经停了（STOPPED），但服务与订阅还在。
+        # 少了这个中间态，「服务已经摘了而插件以为自己在跑」就无从定位。
+        assert seen == [PluginStatus.STOPPED]
+        assert pm.status_of("channel.a") == PluginStatus.UNLOADED
+
+    def test_a_broken_plugin_is_discovered_then_failed(self, tmp_path, clock, bus, registry):
+        directory = tmp_path / "plugins" / "broken"
+        directory.mkdir(parents=True)
+        (directory / "plugin.toml").write_text("[plugin]\nid = 'nope'\n", encoding="utf-8")
+        pm = make_manager(tmp_path, clock=clock, bus=bus, registry=registry)
+        report = pm.load_all()
+
+        assert report.ok is False
+        assert pm.status_of(str(directory)) == PluginStatus.FAILED
+
+
 # ── 加载与隔离 ──────────────────────────────────────────────
 
 RAISES_ON_LOAD = """

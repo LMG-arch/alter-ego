@@ -116,6 +116,16 @@ class PluginManager:
         state_sink: Callable[[str, Mapping[str, Any]], None] | None = None,
         entry_point_group: str = DEFAULT_ENTRY_POINT_GROUP,
     ) -> None:
+        """装上管理器。
+
+        ``state_loader`` / ``state_sink`` 是插件状态落盘的两个方向：装进来时读一次，
+        tick 结束时批量写回。**它们必须由组装根提供**（内核无知，P1——``kernel/``
+        不认识 ``plugin_state`` 这张表），所以内核只留接口。
+
+        ⚠️ 现状：**还没有组装根传这两个参数**，因此插件状态今天不跨重启
+        （见 :class:`~alterego.kernel.context.PluginState` 与
+        ``docs/design/13-interface-consistency.md``）。
+        """
         self._config = config
         self._bus = bus
         self._registry = registry
@@ -225,7 +235,23 @@ class PluginManager:
             entry_point_group=self._entry_point_group,
             logger=self._logger,
         )
+        self._mark_discovered(self._discovery)
         return self._discovery
+
+    def _mark_discovered(self, found: DiscoveryResult) -> None:
+        """给每个发现到的插件打上 ``DISCOVERED``。
+
+        清单已经过校验（非法的那批进了 ``failed``），所以这里同时可以打
+        ``VALIDATED``——``load_manifest`` 只在解析成功时才产出 ``DiscoveredPlugin``。
+        两个状态因此**都**在发现阶段落地，``VALIDATED`` 不是多余的。
+
+        为什么值得记这两个状态：``alterego plugins list`` 报的是「发现有谁」，
+        ``info`` 报的是「这一个现在处于哪一步」。第二件事以前只能回答
+        「配置里列了但库里没有」——因为没被启用的插件在 ``_status`` 里是**空的**，
+        和「根本没有这个插件」长得一模一样。
+        """
+        for plugin_id in found.plugins:
+            self._status.setdefault(plugin_id, PluginStatus.DISCOVERED)
 
     def enabled_ids(self) -> list[str]:
         """要加载哪些插件。
@@ -252,11 +278,7 @@ class PluginManager:
                 CLI 应把成环翻译成退出码 3（见 :data:`alterego.kernel.loader.EXIT_DEPENDENCY_ERROR`）。
         """
         report = LoadReport()
-        self._discovery = discover(
-            search_paths=[str(p) for p in self._config.plugin_search_paths],
-            entry_point_group=self._entry_point_group,
-            logger=self._logger,
-        )
+        self.discover()
         for path, error in self._discovery.failed:
             report.failed[str(path)] = str(error)
             self._status[str(path)] = PluginStatus.FAILED
@@ -275,6 +297,8 @@ class PluginManager:
                 self._logger.debug("%s 的可选依赖：%s", plugin_id, found.manifest.optional)
 
         self._order = list(resolution.order)
+        for plugin_id in self._order:
+            self._status[plugin_id] = PluginStatus.VALIDATED
         for plugin_id in self._order:
             if not self._load_one(plugin_id):
                 report.failed[plugin_id] = self._describe_status(plugin_id)
@@ -412,7 +436,12 @@ class PluginManager:
         if record is None:
             self._status[plugin_id] = PluginStatus.UNLOADED
             return
+        # ``STOPPED`` 落在 ``on_stop`` 之后、``on_unload`` 之前。
+        # 它是 ``Loaded`` 与 ``Unloaded`` 之间唯一可观察的中间态：插件已经停了，
+        # 但它注册的服务与订阅**还在**（下面两行才撤）。写成「两个状态」
+        # 而不是三个，会让「服务已经摘了但插件以为自己在跑」这类问题无法定位。
         self._safe_call(plugin_id, "on_stop", record.plugin.on_stop)
+        self._status[plugin_id] = PluginStatus.STOPPED
         self._safe_call(plugin_id, "on_unload", record.plugin.on_unload)
         self._registry.unregister_owner(plugin_id)
         self._bus.unsubscribe_owner(plugin_id)
@@ -497,7 +526,14 @@ class PluginManager:
                 self.record_failure(plugin_id, exc, where=hook)
 
     def flush_state(self) -> None:
-        """把所有插件挂起的状态写入存储。由 Persist 阶段每 tick 调用一次。"""
+        """把所有插件挂起的状态写入存储。
+
+        ⚠️ **今天没有人调用它，调了也不写。** 设计上由 Persist 阶段每 tick 调一次，
+        但 (a) 组装根没有把 ``state_sink`` 传进来，(b) 全仓库 ``grep flush_state``
+        只有这个定义。没有 ``sink`` 时 :meth:`PluginState.flush` 会丢弃挂起的写入，
+        所以这是个**静默无操作**——留着兑现的接口，不是能用的功能。
+        跟踪项：``docs/design/13-interface-consistency.md`` 审计表第 14 行。
+        """
         for record in self._records.values():
             record.context.state.flush()
 

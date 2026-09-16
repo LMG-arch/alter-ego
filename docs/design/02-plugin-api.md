@@ -1,6 +1,15 @@
 # 02 · 插件 API 规范
 
 > 上级文档：[DESIGN.md](../DESIGN.md) · 版本 v0.1.0 · **api_version = 1**
+>
+> ⚠️ **本文档回答「为什么这样设计」，不回答「现在能怎么写」。**
+> 它保留完整的设想想与后备方案，因此会描述**尚未实现**的东西。
+>
+> 要写插件，请读 **[`docs/guide/plugin-development.md`](../guide/plugin-development.md)**——
+> 那里的每一条命令、每一个字段都对着当时代码验过。两者矛盾时以指南为准，
+> **并且把矛盾报出来**（那说明有一边过时了）。差异清单与逐条依据见
+> [`13-interface-consistency.md`](13-interface-consistency.md)。
+>
 > 本文档面向**插件开发者**。项目的一切可变部分都通过插件实现——LLM、存储、渠道、行为、推演阶段。
 
 ---
@@ -78,6 +87,18 @@
 
 一个插件**只能声明一个 kind**。若需要提供多种能力，拆成多个插件（内聚性更好，也便于单独启停）。
 
+> ⚠️ **今天只有六种 `kind` 有对应的接口。** `capability` / `tool` / `stage` /
+> `channel` / `llm` / `storage` 的契约都在代码里（`interfaces/`）。
+> `image` 与 `source` **只有清单层面被接受**——`plugin.toml` 里写
+> `kind = "image"` 不会报错（`PluginKind` 是八值的），但
+> `interfaces/image.py` 与 `interfaces/source.py` **尚未落地**，
+> 内核也不会用这个 `kind` 做任何事（它目前是纯元数据，只用于展示与措辞）。
+> 落地版本是 v0.2.0 / v0.3.0，见 [06-roadmap.md § 2.2](06-roadmap.md)。
+> 判断依据见 [13-interface-consistency.md](13-interface-consistency.md) § 3.4。
+>
+> 也就是说，上表 `image` / `source` 两行的「必须实现」与「内置实现」是**设计目标**，
+> 不是今天的事实。
+
 ### 2.1 为什么 `image` 与 `source` 不复用 `tool`
 
 `tool` 的语义是「**LLM 可以主动调用的事情**」——它会被写进 function calling 列表，
@@ -124,13 +145,16 @@ capabilities = ["reference"]        # 声明支持参考图；不声明 = 不支
 
 ### 3.1 完整字段参考
 
+> ⚠️ 下面这份清单是**一份可用的完整示范**：`api_version` 用裸整数，
+> 配置字段写成 `[plugin.config.<字段名>]` 子表。两层细节都对齐过代码。
+
 ```toml
 [plugin]
 # ── 必填 ──────────────────────────────────────────────
 id          = "channel.dingtalk_webhook"   # 全局唯一。约定 "<kind>.<name>"，全小写+下划线
 version     = "0.1.0"                       # 插件自身版本，SemVer
-api_version = "1"                           # 面向的插件 API 主版本
-kind        = "channel"                     # llm|storage|channel|capability|stage|tool
+api_version = 1                             # 裸整数；字符串 "1" 也接受，但整数才是规范形态
+kind        = "channel"                     # 八种之一，见 § 2
 entry       = "plugin:DingtalkWebhookChannel"  # "<模块>:<类名>"，模块路径相对于插件根目录
 
 # ── 选填（推荐填写） ──────────────────────────────────
@@ -151,34 +175,66 @@ enabled_by_default = true
 priority           = 10                     # 同接口多实现时的选中优先级，数值大者优先
 auto_reload        = true                   # 是否支持文件变化热重载（仅本地插件有效）
 
-# ── 配置 Schema ───────────────────────────────────────
-[config]
-# 每个字段：type / required / default / description / secret / env / choices / min / max
-webhook_url = { type = "string", required = true,  secret = true,
-                env = "DINGTALK_WEBHOOK",
-                description = "钉钉机器人 Webhook 地址" }
-secret      = { type = "string", required = true,  secret = true,
-                env = "DINGTALK_SECRET",
-                description = "加签密钥，以 SEC 开头" }
-at_mobiles  = { type = "array",  default = [],
-                description = "需要 @ 的手机号列表" }
-at_all      = { type = "boolean", default = false }
-timeout_sec = { type = "integer", default = 10, min = 1, max = 60 }
-max_retry   = { type = "integer", default = 3,  min = 0, max = 5 }
+# ── 配置字段 ──────────────────────────────────────────
+# 每个字段一张子表，键就是字段名；表头必须带 plugin. 前缀，
+# 漏写（写成顶层 [config]）会当场报错，不会被静默忽略。
+# 每个字段：type / required / default / description / secret / env
+#           / choices / min / max / min_length / max_length / pattern
+#           / item_type / min_items / max_items / must_exist
+
+[plugin.config.webhook_url]
+type        = "string"
+required    = true
+secret      = true
+env         = "DINGTALK_WEBHOOK"
+description = "钉钉机器人 Webhook 地址"
+
+[plugin.config.secret]
+type        = "string"
+required    = true
+secret      = true
+env         = "DINGTALK_SECRET"
+description = "加签密钥，以 SEC 开头"
+
+[plugin.config.at_mobiles]
+type        = "array"
+item_type   = "string"
+default     = []
+description = "需要 @ 的手机号列表"
+
+[plugin.config.at_all]
+type    = "boolean"
+default = false
+
+[plugin.config.timeout_sec]
+type    = "integer"
+default = 10
+min     = 1
+max     = 60
+
+[plugin.config.max_retry]
+type    = "integer"
+default = 3
+min     = 0
+max     = 5
 ```
 
 ### 3.2 配置字段类型
 
 | type | 映射的 Python 类型 | 额外约束键 |
 | --- | --- | --- |
-| `string` | `str` | `pattern`, `min_length`, `max_length` |
-| `integer` | `int` | `min`, `max` |
-| `number` | `float` | `min`, `max` |
+| `string` | `str` | `pattern`, `min_length`, `max_length`, `choices` |
+| `integer` | `int` | `min`, `max`, `choices` |
+| `number` | `float` | `min`, `max`, `choices` |
 | `boolean` | `bool` | — |
 | `array` | `list` | `item_type`, `min_items`, `max_items` |
-| `object` | `dict` | `schema`（嵌套字段定义） |
+| `object` | `dict` | —（**v1 不支持负嵌 `schema`**） |
 | `duration` | `timedelta` | 支持 `"30s"`, `"5m"`, `"2h"`, `"1d"` |
 | `path` | `Path` | `must_exist` |
+
+> `object` 的 `schema` 子键**已被实现明确拒绝**（报「v1 尚不支持嵌套的
+> object.schema」）。嵌套结构请拆成多个平铺字段，或用 `type = "string"`
+> 存 JSON 字符串。这与本文档早期版本的描述不同，以这里为准。
 
 ### 3.3 特殊配置键
 
@@ -194,11 +250,21 @@ max_retry   = { type = "integer", default = 3,  min = 0, max = 5 }
 `PluginLoader` 在加载前校验：
 
 1. `id` 符合 `^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`
-2. `kind` 在允许枚举内
+2. `kind` 在允许枚举内（**八种**，见 § 2）
 3. `api_version` 与内核兼容
 4. `entry` 格式为 `模块:类名`，且模块可导入、类可解析
 5. `config` 中每个字段的 `type` 合法，且 `required` 与 `default` 不同时存在
 6. `requires` 中每个 id 在已发现插件集合中（或可通过 pip 安装）
+
+另外三条**「写错了不许静默通过」**的检查（均已于 v0.1.2 落地）：
+
+7. `[plugin]` 里有**认不得的顶层键**（`enabledByDefault`）→ 报错并列出支持的键
+8. 顶层有 **`[plugin]` 之外的表**（漏写前缀的 `[config]`）→ 报错；
+   否则那整段配置会被静默忽略，插件带着一份「你以为配了」的清单跑起来
+9. `[plugin.config.<字段>]` 里有认不得的键（`requierd`、`defualt`）→ 报错
+
+这三条是同一个判断：**静默忽略一个键，等于允许插件带着一份没真正配上的清单
+跑起来**。这类「配错了反而更宽松」的降级最难发现，所以宁可当场报错。
 
 校验失败 → 该插件标记 `Failed` 并给出精确到字段的错误信息：
 
@@ -264,6 +330,12 @@ class Plugin(ABC):
 `pyproject.toml` 因此对 `plugins/*/plugin.py` 关掉 `ARG002`（未使用的参数）。
 **不给参数名加下划线前缀**——mypy 检查协议一致性时认的就是参数名
 （实现方可能被按关键字调用），改名字等于把一个 lint 警告换成一个类型错误。
+
+> ⚠️ **`on_tick_pre` / `on_tick_post` 的实际标注是 `ctx: Any`，不是 `"TickContext"`。**
+> 原因是硬的：`TickContext` 属于 `sim/`，而架构红线第 1 组禁止 `kernel/` 导入 `sim/`。
+> 内核一旦为了类型标注认识 `sim`，「内核无知」（P1）就只剩一句口号。
+> 运行时传进来的确实是 `sim.TickContext`——**能用的字段见
+> [`04-simulation-loop.md`](04-simulation-loop.md)**，但你在内核这一侧拿不到它的类型。
 
 ### 4.2 状态机
 
@@ -333,29 +405,30 @@ sequenceDiagram
 
 `PluginContext` 是插件访问系统的**唯一入口**。插件不得直接 `import` 内核的其他模块或全局单例。
 
+**十一个字段 + 五个便捷方法**（下面是逐字段对齐代码的版本）：
+
 ```python
-@dataclass(frozen=True)
 class PluginContext:
     # ── 身份 ──
     plugin_id: str
     manifest: PluginManifest
 
     # ── 配置 ──
-    config: dict[str, Any]
-    """已校验、已填充默认值、已解析 ${ENV} 的插件配置字典。
-    密钥字段也在其中（插件自己需要真实值）。"""
+    config: Mapping[str, Any]
+    """已校验、已填充默认值、**已解析 env** 的插件配置。
+    密钥字段也在其中（插件自己需要真实值）。用 ctx.config["键"] 取。"""
 
     # ── 基础设施 ──
     logger: logging.Logger
-    """已绑定插件 id 的 logger，输出自动带 plugin_id 字段"""
+    """已绑定插件 id 的 logger，输出自动带 plugin_id 字段。
+    不要自己建 handler——脱敏与轮转由内核负责。"""
 
-    bus: EventBus
-    """事件总线：订阅与发布。
-    运行期实际拿到的是 OwnedBus——订阅自动记在本插件名下。"""
+    bus: OwnedBus
+    """事件总线：订阅与发布。运行期类型是 OwnedBus——订阅自动记在本插件名下。"""
 
-    registry: ServiceRegistry
+    registry: OwnedRegistry
     """能力注册表：注册自己提供的实现，获取自己依赖的实现。
-    运行期实际拿到的是 OwnedRegistry——注册自动记在本插件名下。"""
+    运行期类型是 OwnedRegistry——注册自动记在本插件名下。"""
 
     clock: Clock
     """时钟：所有时间判断必须用它，保证倍速仿真正确"""
@@ -364,20 +437,30 @@ class PluginContext:
     """调度器：注册周期任务"""
 
     state: PluginState
-    """插件持久化 KV 存储（底层为 plugin_state 表）"""
+    """插件 KV 状态。⚠️ 今天不跨重启，见 § 5.2"""
 
     paths: PluginPaths
-    """路径工具：data_dir / config_dir / plugin_dir / cache_dir"""
+    """路径工具：data_dir / cache_dir / config_dir / plugin_dir / alterego_dir"""
 
     rng: random.Random
-    """插件专属随机源（由全局 seed 派生），保证可复现"""
+    """插件专属随机源（由全局 seed 派生），保证可复现。
+    **不要 import random。**"""
 
-    # ── 便捷方法 ──
+    # ── 便捷方法（只有这五个）──
     def get_service(self, interface: type[T], name: str | None = None) -> T: ...
+        """取不到就抛。"""
     def get_optional_service(self, interface: type[T], name: str | None = None) -> T | None: ...
-    def publish(self, topic: str, payload: dict) -> None: ...
-    def now(self) -> datetime: ...      # == clock.virtual_now()
+        """取不到返回 None。"""
+    def publish(self, topic: str, payload: Any = None, *, correlation_id: str | None = None) -> None: ...
+    def now(self) -> datetime: ...            # == clock.now()
+    def config_value(self, key: str, default: Any = None) -> Any: ...
+        """带默认值的配置读取——与 ctx.config["键"] 的区别是缺键不报错。"""
 ```
+
+> ❌ **没有 `ctx.provide()`。** 注册只有一条路：
+> `ctx.registry.register(接口, 实例, name=..., priority=...)`。
+> 早期设计稿里的 `provide_llm` / `provide_channel` 之类的方法**从未实现**，
+> 详见 § 7 与 [`plugin-development.md` § 5](../guide/plugin-development.md)。
 
 #### `bus` 与 `registry` 是「带归属的视图」
 
@@ -423,14 +506,26 @@ class PluginPaths:
 ```python
 class PluginState:
     def get(self, key: str, default: Any = None) -> Any: ...
-    def set(self, key: str, value: Any) -> None: ...      # 值必须 JSON 可序列化
+    def set(self, key: str, value: Any) -> None: ...      # 值必须 JSON 可序列化，否则当场抛
     def delete(self, key: str) -> None: ...
+    def update(self, mapping: dict[str, Any]) -> None: ...  # 批量
     def keys(self) -> list[str]: ...
     def clear(self) -> None: ...
-    def update(self, mapping: dict[str, Any]) -> None: ...  # 批量，单事务
+    def snapshot(self) -> dict[str, Any]: ...
+    def has_pending_writes(self) -> bool: ...
+    def take_pending(self) -> dict[str, Any]: ...          # 删除以 None 编码
 ```
 
 > **实现提示**：`set()` 不会立即写盘。`PluginManager` 在每个 tick 结束时批量 flush，减少 SQLite 写入次数。
+>
+> ⚠️ **这条链今天没有接线（已知缺口）。** `plugin_state` 表、`PluginState`、
+> `flush_state()` 都在，但**没有任何组装根**把 `state_loader` / `state_sink`
+> 传给 `PluginManager`，`storage/sqlite/` 里也没有对应的仓储。
+> 后果具体而隐蔽：**今天能正常读写，但进程重启后拿不回来**——
+> 没有 sink 时挂起的写入会被直接丢弃。
+>
+> 跨重启要留下的东西请放数据库或 `config_dir` 下的用户配置。
+> 跟踪项：[`13-interface-consistency.md`](13-interface-consistency.md) § 5.2。
 
 ---
 
@@ -586,27 +681,47 @@ class EmbeddingProvider(Protocol):
 
 内核在固定位置调用插件。这是「不改内核就能扩展行为」的机制。
 
-| 扩展点 | 触发时机 | 可注册实现 | 典型用途 |
-| --- | --- | --- | --- |
-| `provide_llm` | `on_load` 中注册 | `LLMProvider` | 接入新模型供应商 |
-| `provide_storage` | `on_load` 中注册 | `StorageBackend` + Repository | 换数据库 |
-| `provide_channel` | `on_load` 中注册 | `Channel` | 接入新消息渠道 |
-| `provide_capability` | `on_load` 中注册 | `Capability` | 新增行为类型 |
-| `provide_tool` | `on_load` 中注册 | `Tool` | 给 LLM 新工具 |
-| `provide_embedding` | `on_load` 中注册 | `EmbeddingProvider` | 语义检索 |
-| `pipeline` | `on_load` 中注册 | `Stage` | 插入推演阶段 |
-| `intent_catalog` | `on_load` 中注册 | `IntentType` | 新增意图类型 |
-| `prompt_source` | `on_load` 中注册 | `PromptSource` | 从数据库/远程加载提示词 |
-| `on_tick_pre` | 每 tick 开始 | 插件方法 | 采集指标、状态快照 |
-| `on_tick_post` | 每 tick 结束 | 插件方法 | 上报、清理 |
-| `on_event` | 事件发布时 | 订阅回调 | 响应系统事件 |
+### 7.1 两种扩展方式
 
-### 7.1 注册示例
+**方式一：实现钩子**——内核在固定时机调你的方法。
+
+| 钩子 | 触发时机 | 典型用途 |
+| --- | --- | --- |
+| `on_load(ctx)` | 装进来时（一次性） | 注册服务、订阅事件、读配置 |
+| `on_start()` | 所有依赖 load 完之后 | 建连接、起后台任务 |
+| `on_stop()` | 停机与热重载时（**必须幂等**） | 释放连接 |
+| `on_unload()` | `on_stop` 之后 | 清自己申请的资源 |
+| `on_config_changed(new)` | 用户改配置或热重载 | 重新读配置 |
+| `on_tick_pre(ctx)` / `on_tick_post(ctx)` | 每 tick 前后 | 采集指标、上报、清理 |
+| `on_event(event)` | 事件发布时 | 响应系统事件 |
+| `health()` | `alterego plugins doctor` | 自报健康状态 |
+
+**方式二：在 `on_load` 里注册接口实现**——内核不调你，而是在需要时从注册表里取。
+
+| 注册的接口 | import 自 | 典型用途 | 内置实现 |
+| --- | --- | --- | --- |
+| `LLMProvider` | `interfaces.llm` | 接入新模型供应商 | `llm.openai_compatible` |
+| `EmbeddingProvider` | `interfaces.llm` | 语义检索 | — |
+| `StorageBackend` | `interfaces.storage` | 换数据库 | `storage.sqlite` |
+| `Channel` | `interfaces.channel` | 接入新消息渠道 | `channel.web` |
+| `Capability` | `interfaces.simulation` | 新增行为类型的**执行方式** | — |
+| `Tool` | `interfaces.simulation` | 给 LLM 新工具 | — |
+| `Stage` | `interfaces.simulation` | 插入推演阶段 | Sense / Reflect / Intention / Act / Express / Persist |
+| `IntentType` | `interfaces.simulation` | 新增**意图类型**（想做什么） | `reach_out` / `post_moment` / … |
+| `PromptSource` | `interfaces.simulation` | 从数据库/远程加载提示词 | — |
+
+> ❌ **没有 `provide_llm` / `provide_channel` / `provide_capability` 这些方法。**
+> 早期设计稿里有十二个 `provide_*` 扩展点，实现时没有采用——因为那是十二个
+> 只差一个类型的重复方法。**统一成一条** `ctx.registry.register(接口, 实例, name=…)` 之后，
+> 新增一种接口不再需要改内核，也不需要新增一个 `provide_*`。这是 P4（可插拔优于可配置）
+> 的直接推论，已记入 [`13-interface-consistency.md`](13-interface-consistency.md) § 2 第 2 行。
+
+### 7.2 注册示例
 
 ```python
 def on_load(self, ctx: PluginContext) -> None:
-    # 注册能力
-    ctx.registry.register(Channel, self, name=self.id, priority=self.config.get("priority", 0))
+    # 注册渠道（name 约定就是插件 id）
+    ctx.registry.register(Channel, self, name=self.id)
 
     # 注册推演阶段
     ctx.registry.register(Stage, MyCustomStage(ctx), name="stage.mood_weather")
@@ -615,13 +730,17 @@ def on_load(self, ctx: PluginContext) -> None:
     ctx.registry.register(IntentType, TakePhotoIntent(), name="intent.take_photo")
 
     # 订阅事件
-    ctx.bus.subscribe("post.created", self._on_post_created, priority=10)
+    ctx.bus.subscribe("post.created", self._on_post_created)
 
     # 注册定时任务
     ctx.scheduler.every(timedelta(hours=1), self._hourly, name=f"{self.id}.hourly")
 ```
 
-### 7.2 完整扩展点契约
+> 不要自己传 `owner=`。`OwnedRegistry` / `OwnedBus` 会自动把归属记成你的插件 id
+> （[ADR-0007](../adr/0007-auto-owning-plugin-context-views.md)），
+> 自己填只会填错，而填错的表现是「插件卸载后服务还在」。
+
+### 7.3 完整扩展点契约
 
 ```python
 class PromptSource(Protocol):
@@ -726,7 +845,19 @@ plugins/
 │   └── helpers.py        ← 可选，同目录可互相 import
 ```
 
-**导入机制**：用 `importlib.util.spec_from_file_location` 以 `alterego_plugins.<plugin_id>` 为模块名加载，避免污染全局命名空间，也避免与 pip 包名冲突。
+**导入机制**（实现细节，看源码时对不上会怀疑自己）：不直接用
+`importlib.util.spec_from_file_location` 加进 `sys.modules` 就完事，而是两步：
+
+1. `_install_package()` 以 `alterego_plugins.<id>` 为名建一个包模块，
+   把它的 `__path__` 指向插件目录，并把它沿途的父包（`alterego_plugins`）
+   也建成空的命名空间包；
+2. `importlib.import_module(f"{package_name}.{module_path}")` 导入 `entry` 指的那个模块。
+
+这样插件内部的 `import helpers` 会解析成 `alterego_plugins.<id>.helpers`——
+既不会污染全局命名空间，也不会和 pip 包撞名。
+
+> `entry` 里的模块路径**相对插件根目录**，不是插件 id。写成插件 id 时
+> 报错会明确提醒这一点（`_entry_hint`）。
 
 ### 9.2 pip 分发（entry_points）
 
@@ -738,13 +869,41 @@ dingtalk = "alterego_dingtalk.plugin:DingtalkWebhookChannel"
 
 通过 `importlib.metadata.entry_points(group="alterego.plugins")` 发现。
 
+**清单从哪来**（两种都行，优先前者）：
+
+1. 模块旁边放一个 `plugin.toml`（与本地插件同一套写法，含 `[plugin]` 与
+   `[plugin.config.*]`）；
+2. 没有 `plugin.toml` 时退回读**模块级的 `MANIFEST` 字典**：
+
+```python
+MANIFEST = {
+    "id": "channel.dingtalk_webhook",
+    "version": "0.1.0",
+    "api_version": 1,
+    "kind": "channel",
+    "entry": "alterego_dingtalk.plugin:DingtalkWebhookChannel",
+}
+```
+
+两种都没有就报错——**不猜**一个清单出来（P2 显式优于隐式）。
+
+> ⚠️ entry point 的名字（上面例子里的 `dingtalk`）只是**注册表的键**，
+> 不是插件 id。插件 id 必须写在 `plugin.toml` / `MANIFEST` 的 `id` 里。
+>
+> ⚠️ entry point 插件**不支持热重载**，只能重装包。
+
 ### 9.3 优先级与冲突
 
 | 情况 | 行为 |
 | --- | --- |
 | 同一 `id` 在本地目录和 entry_points 都存在 | **本地优先**（便于覆盖调试），记录警告 |
 | 本地两个 search_path 都有同一 `id` | 按 `search_paths` 顺序，前者优先 |
-| 两个插件提供同一接口且 priority 相同 | 内核不自动选择，需用户在 config 中显式指定 `default_provider` |
+| 两个插件提供同一接口、且都没指定 `name` | 取 `priority` 最大者 |
+| 两个插件提供同一接口、**`priority` 并列最高** | **抛 `PluginError`**，报出并列的名字。不做「随便挑一个」——挑错的后果是运行时行为随机变化 |
+
+> 想避开最后一行只有两条路：给 `name` 并用 `get_service(接口, name=...)` 显式取，
+> 或调 `priority` 分出高下。注册表本身是
+> **按 `(priority 降序, 注册顺序)` 排序**的，所以 `get_all()` 的顺序是可复现的。
 
 ---
 

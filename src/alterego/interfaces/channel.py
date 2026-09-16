@@ -20,10 +20,23 @@ from typing import Any, Literal, Protocol
 from alterego.interfaces.common import HealthStatus
 
 
-__all__ = ["Channel", "InboundMessage", "OutboundMessage", "SendResult"]
+__all__ = [
+    "Channel",
+    "ChannelCapability",
+    "Direction",
+    "InboundMessage",
+    "MessageKind",
+    "OutboundMessage",
+    "SendResult",
+]
 
 
 #: 渠道方向。``{"out"}`` 表示单向出站。
+#
+# 下面三个别名**必须在 __all__ 里**：它们不是内部细节，而是 ``Channel``
+# 协议三个字段的类型（``direction`` / ``capabilities`` / ``OutboundMessage.kind``）。
+# 插件实现渠道时要用它们标注自己的类属性，所以它们是契约的一部分——
+# 漏在 __all__ 外面会让「按文档写类型注解」这件事必须靠翻源码才能做到。
 Direction = frozenset[Literal["in", "out"]]
 
 #: 渠道能力标签。

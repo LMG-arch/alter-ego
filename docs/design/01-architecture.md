@@ -161,6 +161,7 @@ class SimulationConfig:
     speed_multiplier: float
     npc_tick_interval_minutes: int
     enable_npc_conversations: bool
+    max_consecutive_tick_failures: int
 
 @dataclass(frozen=True)
 class DisturbBudgetConfig:
@@ -170,6 +171,7 @@ class DisturbBudgetConfig:
     quiet_hours: tuple[time, time]
     min_interval_minutes: int
     consecutive_no_reply_limit: int
+    pending_topic_ttl_hours: int
 
 @dataclass(frozen=True)
 class Config:
@@ -205,7 +207,7 @@ dataclass 默认值  →  alterego/defaults.toml  →  config/alterego.toml
 | --- | --- |
 | TOML 解析 | Python 3.11 内置 `tomllib`，无第三方依赖 |
 | 密钥注入 | 配置值形如 `${ENV_VAR}` 时在加载阶段解析为环境变量内容；变量缺失直接失败并点名 |
-| 校验 | `__post_init__` 中校验范围（如 `0 <= daily_message_limit <= 20`） |
+| 校验 | `__post_init__` 里逐字段查：取值范围、枚举合法性、跨字段一致（如紧急上限不得低于普通上限） |
 | 不可变 | 全部 `frozen=True`，防止运行时被意外修改 |
 | 脱敏 | `Config.redacted()` 返回密钥替换为 `***` 的副本，用于日志与 Web 展示 |
 | 环境变量映射 | `ALTEREGO_CORE__LOG_LEVEL` 双下划线表示层级；只有一级的 `ALTEREGO_XXX` 忽略而非猜测 |

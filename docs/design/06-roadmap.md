@@ -173,10 +173,17 @@ flowchart LR
 - 人设自动演化（v0.4.0）
 - 双向 IM（v0.3.0）
 - 记忆向量检索（可选插件，非核心）
-- **图片生成（v0.2.0，只预留 `ImageProvider` 接口与 `media_asset` 表）**
-- **联网检索（v0.3.0，只预留 `SourceProvider` 接口）**
+- **图片生成（v0.2.0；`media_asset` 表已在，`interfaces/image.py` 尚未落地）**
+- **联网检索（v0.3.0；`source_item` 表已在，`interfaces/source.py` 尚未落地，
+  届时提供 `SearchProvider` / `FeedReader` / `PageFetcher` 三个契约）**
 - 多 Agent 交互
 - 移动端 App
+
+> 这两个 `kind`（`image` / `source`）的**清单校验今天已经放行**——
+> `plugin.toml` 里写 `kind = "image"` 不报错，但内核不会用它做任何事
+> （`kind` 目前是纯元数据，内核只用它显示和措辞提示）。
+> 放行的理由与后续计划见
+> [`13-interface-consistency.md`](13-interface-consistency.md) § 3.4 与 § 5.3。
 
 ### 2.3 兼容性承诺
 

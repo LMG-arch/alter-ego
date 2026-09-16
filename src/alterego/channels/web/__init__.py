@@ -10,10 +10,10 @@
 - ``static/`` 下的纯静态资源：无构建步骤，vanilla JS + SSE。
 
 **这个包不是通过插件机制进来的。** 包内没有内置插件的搜索路径
-（``[project.entry-points."alterego.plugins"]`` 是空的，``DEFAULT_SEARCH_PATHS``
-只覆盖 ``plugins/`` 与 ``~/.alterego/plugins``），所以这里**没有也不该有
-``plugin.toml``**：它是装配根 ``cli_serve._deps`` 直接注册到
-``ServiceRegistry`` 的，而且必须在 ``manager.load_all()`` 之前注册——
+（``[project.entry-points."alterego.plugins"]`` 是空的；扫描目录由
+``Config.plugins.search_paths`` 决定，默认只有仓库根的 ``plugins/``），
+所以这里**没有也不该有 ``plugin.toml``**：它是装配根 ``cli_serve._deps``
+直接注册到 ``ServiceRegistry`` 的，而且必须在 ``manager.load_all()`` 之前注册——
 插件在 ``on_start`` 里可能就去取渠道，反过来拿到的是空登记表。
 
 **为什么 ``deps.py`` 里一行 fastapi 都没有。** ``WebDeps`` 只是「这一层

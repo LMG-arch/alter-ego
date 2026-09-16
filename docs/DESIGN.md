@@ -306,23 +306,23 @@ v1 采用**单进程多线程**模型：
 
 ### 6.1 八类插件
 
-| kind | 说明 | 内置实现 | 扩展点 |
-| --- | --- | --- | --- |
-| `llm` | 大模型供应商适配 | `llm.openai_compatible` | `provide_llm()` |
-| `storage` | 持久化后端 | `storage.sqlite` | `provide_storage()` |
-| `channel` | 消息进出通道 | `channel.file`, `channel.web`, `channel.wecom_webhook`, `channel.dingtalk_webhook` | `provide_channel()` |
-| `capability` | 具体行为执行能力 | `capability.activity`, `capability.post`, `capability.chat`, `capability.selfie`, `capability.research` | `provide_tool()` |
-| `stage` | 推演流水线阶段 | `stage.sense/reflect/intention/act/express/persist` | 注册到 `pipeline` 扩展点 |
-| `tool` | LLM 可调用的工具 | `tool.time_query` | `provide_tool()` |
-| `image` | 生图供应商适配（v0.2.0） | `image.openai_compatible`, `image.local_sd` | `provide_image()` |
-| `source` | 外部信息来源适配（v0.3.0） | `source.tavily`, `source.rss`, `source.http_fetch` | `provide_source()` |
+八种 `kind` 的**唯一定义处**是 [`02-plugin-api.md` § 2](design/02-plugin-api.md#2-插件类型kind)——
+那里有每种 `kind` 的适用场景与「什么不该做成插件」。
+这里只留三条**别处不重复**的结论，避免同一张表两处维护、两处走样：
 
-`image` 与 `source` 的契约见 [07-model-routing-and-media.md](design/07-model-routing-and-media.md#4-生图接口契约)
-与 [08-external-sources.md](design/08-external-sources.md#3-接口契约)。
+1. **`image` 与 `source` 不复用 `tool`。** `tool` 是「LLM 可以主动调用的事情」，
+   会出现在 function calling 列表里；而生图与检索是**推演循环自己决定要做的事**
+   （角色想拍张照、想去读点东西），不经过 LLM 的工具选择环节。把它塞进 `tool`
+   会让 LLM 有能力不经过预算门直接生图与联网，破坏 P3。
+2. **今日可用的只有六种**（`capability` / `tool` / `stage` / `channel` / `llm` / `storage`）。
+   `image` / `source` 只有**清单层面**被接受——写进 `plugin.toml` 不报错，但内核不会
+   用它做任何事。两个接口的落地版本见 [06-roadmap.md § 2.2](design/06-roadmap.md)。
+3. **没有 `provide_*()` 这类扩展点方法。** 注册只有一条路：
+   `ctx.registry.register(接口, 实例, name=…)`。八种 `kind` 对应八种接口，
+   但注册动作是同一个。理由见 [02-plugin-api.md § 7](design/02-plugin-api.md#7-扩展点hook)。
 
-**为什么单独设两类而不复用 `tool`**：`tool` 是「LLM 可以主动调用的事情」，会出现在 function calling 列表里；
-而生图与检索是**推演循环自己决定要做的事**（角色想拍张照、想去读点东西），不经过 LLM 的工具选择环节。
-把它塞进 `tool` 会让 LLM 有能力不经过预算门直接生图与联网，破坏 P3。
+> 写插件请看 **[`guide/plugin-development.md`](guide/plugin-development.md)**。
+> 本文档与它矛盾时，以指南为准。
 
 ### 6.2 插件清单
 
@@ -333,7 +333,7 @@ v1 采用**单进程多线程**模型：
 id = "channel.dingtalk_webhook"
 name = "钉钉自定义机器人"
 version = "0.1.0"
-api_version = "1"
+api_version = 1
 kind = "channel"
 entry = "plugin:DingtalkWebhookChannel"
 description = "通过钉钉自定义机器人 Webhook 推送消息"
@@ -342,13 +342,30 @@ license = "MIT"
 requires = ["storage.sqlite >= 0.1.0"]
 provides = ["channel"]
 
-[config]
-webhook_url = { type = "string", required = true, secret = true, env = "DINGTALK_WEBHOOK" }
-secret = { type = "string", required = true, secret = true, env = "DINGTALK_SECRET" }
-at_mobiles = { type = "array", default = [] }
+[plugin.config.webhook_url]
+type = "string"
+required = true
+secret = true
+env = "DINGTALK_WEBHOOK"
+
+[plugin.config.secret]
+type = "string"
+required = true
+secret = true
+env = "DINGTALK_SECRET"
+
+[plugin.config.at_mobiles]
+type = "array"
+item_type = "string"
+default = []
 ```
 
-完整字段与语义见 [02-plugin-api.md](design/02-plugin-api.md)。
+三个易错点（都会被当场报错，不会静默通过）：
+`api_version` 是**裸整数**；配置字段要写成 `[plugin.config.<字段名>]` 子表，
+漏掉 `plugin.` 前缀的顶层 `[config]` 会被整段拒绝；
+顶层键名拼错也会被拒绝。
+
+完整字段与语义见 [guide/plugin-development.md](guide/plugin-development.md)。
 
 ### 6.3 插件生命周期
 
@@ -1471,6 +1488,8 @@ PR 模板中包含勾选清单，未勾选不予合并。
 | [10-settings-center.md](design/10-settings-center.md) | 配置元数据模型、**用测试强制标注**、写入与热生效、设置页结构 | 核心开发者、前端 |
 | [11-optimization-roadmap.md](design/11-optimization-roadmap.md) | 记忆系统选型、推演系统加深方向、其他系统的优化取舍与推荐排序 | 所有读者 |
 | [12-calendar-and-conversation.md](design/12-calendar-and-conversation.md) | 节日数据格式、**强度曲线**、今天归哪个节日、日型与调休、对话节奏四条机制、复读检测 | 核心开发者、Prompt 工程师 |
+| [13-interface-consistency.md](design/13-interface-consistency.md) | **接口一致性审计**：22 条「代码与文档不一致」的结论与依据、已知缺口、可执行的对照物 | 所有改接口的人 |
+| [guide/plugin-development.md](guide/plugin-development.md) | **写插件的唯一依据**：清单字段表、九个钩子、`PluginContext` 全貌、注册方式、依赖、热重载、调试与自查清单 | **插件开发者（从这里开始）** |
 
 ---
 

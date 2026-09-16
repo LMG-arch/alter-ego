@@ -307,6 +307,29 @@ class TestLoadManifest:
         with pytest.raises(PluginManifestError):
             load_manifest(path)
 
+    def test_a_stray_top_level_table_is_rejected(self, tmp_path: Path) -> None:
+        """漏写 ``plugin.`` 前缀的 ``[config]`` 必须报错，不能被静默忽略。
+
+        这是最容易犯也最难查的一种清单错误：作者以为配好了 6 个字段，
+        实际加载出来的插件一个字段都没有。症状要等到功能不工作时才显形，
+        而那时没人会想到去翻 ``plugin.toml`` 的顶层键名。
+        """
+        path = write_manifest(tmp_path / "demo", VALID_TOML + '\n[config]\ntoken = "x"\n')
+
+        with pytest.raises(PluginManifestError) as caught:
+            load_manifest(path)
+
+        assert caught.value.context["unknown"] == ["config"]
+        assert "plugin.config" in caught.value.context["hint"]
+
+    def test_a_stray_top_level_scalar_is_rejected(self, tmp_path: Path) -> None:
+        path = write_manifest(tmp_path / "demo", VALID_TOML + '\nversion_typo = "1"\n')
+
+        with pytest.raises(PluginManifestError) as caught:
+            load_manifest(path)
+
+        assert caught.value.context["unknown"] == ["version_typo"]
+
 
 # ── 发现 ────────────────────────────────────────────────────
 

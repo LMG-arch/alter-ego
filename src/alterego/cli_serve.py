@@ -21,9 +21,9 @@ SQLite 在哪儿、模型走哪一家。
 **它把自己注册成一个渠道。** ``WebChannel`` 挂在本进程这**一台**
 ``ServiceRegistry`` 的 ``Channel`` 名下，名字就是 ``"web"``——插件要发消息时
 ``registry.get_all(Channel)`` 找的就是它。**没有 ``WebChannelPlugin``**：
-包内没有内置插件的搜索路径（``DEFAULT_SEARCH_PATHS`` 只有 ``plugins/`` 与
-``~/.alterego/plugins``），所以 ``channels/web/plugin.toml`` 永远不会被发现，
-这条路只能由组装根走。
+包内没有内置插件的搜索路径（``[project.entry-points."alterego.plugins"]`` 是空的，
+扫描目录由 ``Config.plugins.search_paths`` 决定，默认只有仓库根的 ``plugins/``），
+所以 ``channels/web/plugin.toml`` 永远不会被发现，这条路只能由组装根走。
 
 **不加 ``--reload``。** uvicorn 的热重载要按 import 字符串重新导入这个应用，
 那是**第二个进程**：装第二遍插件、开第二条库连接、两份 SSE 连接表。

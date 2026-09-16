@@ -64,6 +64,17 @@ class PluginState:
 
     ``set()`` **不落盘**——写入先记账，由 ``PluginManager`` 在 tick 结束时
     批量 :meth:`flush`。一个 tick 里插件可能改十几次状态，逐次写库没有必要。
+
+    ⚠️ **这条链今天只差最后一环，用之前请先知道。** ``plugin_state`` 表在
+    ``migrations/001_initial.sql`` 里，:meth:`PluginManager.flush_state` 也在，
+    但**没有任何组装根**往 ``PluginManager`` 传 ``state_loader`` / ``state_sink``
+    （``grep -rn state_sink src/`` 只命中 ``kernel/manager.py`` 自己）。
+    后果是具体的：插件今天可以正常记账、正常读回自己刚写的东西，
+    但**进程重启后拿不回来**——``flush`` 在没有 ``sink`` 时直接丢掉挂起的写入。
+
+    所以：跨重启要留下的东西请放数据库或 ``ctx.config``（``config_dir`` 下的
+    用户配置），别放这里。这是已知缺口而非缺陷，跟踪在
+    ``docs/design/13-interface-consistency.md``（审计表第 14 行）。
     """
 
     def __init__(

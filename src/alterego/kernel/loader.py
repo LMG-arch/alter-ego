@@ -371,6 +371,23 @@ def load_manifest(path: Path, *, base_dir: Path | None = None) -> PluginManifest
             manifest=str(path),
             hint=f"[{_MANIFEST_TABLE}] 里要写 id / version / api_version / kind / entry",
         )
+    # 顶层除 [plugin] 之外的表一律拒掉。看起来很像宽松处理更友好，其实相反：
+    # 常见写法 `[config]`（少了 plugin. 前缀）会被**整段静默忽略**，
+    # 于是插件带着「一份作者以为配了、实际一个字都没生效」的清单跑起来，
+    # 而症状要等到功能不工作时才显形。这与 ``PluginManifest.parse``
+    # 拒掉拼错的顶层键是同一个理由（见 docs/design/13-interface-consistency.md）。
+    stray = sorted(set(data) - {_MANIFEST_TABLE})
+    if stray:
+        raise PluginManifestError(
+            "插件清单里有 [plugin] 之外的顶层键",
+            manifest=str(path),
+            unknown=stray,
+            hint=(
+                f"配置字段要写在 [{_MANIFEST_TABLE}.config.<字段名>] 里，"
+                f"例如 [{_MANIFEST_TABLE}.config.token]；"
+                f"顶层只允许 [{_MANIFEST_TABLE}]"
+            ),
+        )
     return PluginManifest.parse(table, path=base_dir or path.parent, source="local")
 
 
