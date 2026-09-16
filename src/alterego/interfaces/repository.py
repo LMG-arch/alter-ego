@@ -17,28 +17,39 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 
 if TYPE_CHECKING:
     from alterego.domain.dataset import ActivityRow, MessageRow, TickRow
+    from alterego.domain.emotion import Emotion
     from alterego.domain.memory import Memory, MemoryKind
 
 
 __all__ = [
     "ActivityRecord",
     "ActivityRepository",
+    "BudgetRepository",
+    "BudgetUsage",
+    "ConversationRecord",
+    "ConversationRepository",
     "DatasetSourceRepository",
+    "EmotionRepository",
     "MemoryRepository",
+    "MessageRecord",
     "PersonaRecord",
     "PersonaRepository",
     "ScheduleRecord",
     "ScheduleRepository",
+    "SocialPostRecord",
+    "SocialPostRepository",
     "SourceRecord",
     "SourceRepository",
+    "TickLogDraft",
+    "TickLogRepository",
 ]
 
 
@@ -60,6 +71,9 @@ class ActivityRecord:
             ``description`` 更有信息量——一个人记住的往往是自己当时怎么想，
             而不是自己当时做了什么。
         duration_minutes: 持续分钟数，可能为 0（未知）。
+        detail: 结构化补充，落 ``detail_json``。放的是「这次行为带回来什么」——
+            能力的产物、失败原因。空的时候列里仍是合法的 ``{}``，
+            所以「没有细节」与「细节是空对象」在库里长得一样，读的人不必区分。
     """
 
     id: str
@@ -70,6 +84,18 @@ class ActivityRecord:
     location: str = ""
     inner_voice: str = ""
     duration_minutes: int = 0
+    detail: Mapping[str, Any] = field(default_factory=dict)
+    #: 下面这些只在**写**的时候有意义：读回来的 ``ActivityRecord`` 用不到它们，
+    #: 因为调用方拿到的己经是某个角色的行。同样一个类承担两个方向，
+    #: 是因为再拆一个 ``ActivityDraft`` 只会让两份字段列表各自漂移。
+    persona_id: str = ""
+    actor_kind: str = "persona"
+    actor_id: str = ""
+    outbound: bool = False
+    outbound_ref: str = ""
+    suppressed_intent: str = ""
+    suppress_reason: str = ""
+    tick_id: str = ""
 
 
 class MemoryRepository(Protocol):
@@ -156,6 +182,56 @@ class ActivityRepository(Protocol):
         """
         ...
 
+    def append(self, records: Sequence[ActivityRecord]) -> None:
+        """追写一批行为。
+
+        批次而不是单条：一次 tick 可能同时做成一件事、拦下三件想做没做的事，
+        单条接口会让那三件被拦下的事要么各开一个事务、要么干脆不记。
+        """
+        ...
+
+
+class EmotionRepository(Protocol):
+    """情绪轨迹的读写。
+
+    **它的存在是为了让上一轮的它接得上下一次。** ``ReflectStage`` 从
+    ``state.emotion`` 出发算回归，而那份快照只能来自库里：不读旧情绪，
+    每一轮都从基线重新开始——表现出来就是「它永远是同一个心情」，
+    而这是个很难从日志里看出来的 bug（每一轮的 ``reason`` 都自洽）。
+
+    一次 tick 一行是**故意的**，不是浪费：``emotion_log`` 就是一条时间序列
+    （``03-data-model.md`` 按每天 288 行估算它的体量），而「曲线在这一天怎么走」
+    只能从点里看出来。
+    """
+
+    def latest(self, persona_id: str) -> Emotion | None:
+        """最近一条情绪。没有记录返回 ``None``。
+
+        ``None`` 是「还不知道它现在心情如何」，不是「一条平静的情绪」：
+        两者在 ``reflect`` 里走的是同一段兼容代码，但在文档与调试里
+        是两个完全不同的起点（新装好的它 vs 一个真的平静的它）。
+        """
+        ...
+
+    def append(
+        self,
+        persona_id: str,
+        emotion: Emotion,
+        *,
+        reason: str = "",
+        causes: Sequence[str] = (),
+        tick_id: str = "",
+    ) -> None:
+        """记一条。时间取 ``emotion.updated_at``——
+
+        那个字段就是「这份情绪算到哪一刻为止」，另传一个 ``recorded_at``
+        会让两者有机会不一致，而它们一旦不一致，回归曲线就会从错的地方重算。
+
+        ``reason`` 与 ``causes`` 是 ``alterego why`` 的全部原料
+        （见 ADR-0004）。
+        """
+        ...
+
 
 # ── 知识库要读的三样东西 ────────────────────────────────────
 #
@@ -198,6 +274,10 @@ class ScheduleRecord:
     end_at: datetime
     activity: str
     category: str = "other"
+    #: 是否允许被主动联系打断。**必须带出来**：打扰预算的第一道检查就是它
+    #: （``sim/budget.check_budget``），而它一旦缺失，唯一安全的默认值是
+    #: 「可以打断」——那等于把「开会时别发消息」变成一条永远不会生效的规则。
+    interruptible: bool = True
     location: str = ""
     actual_start_at: datetime | None = None
     actual_end_at: datetime | None = None
@@ -238,6 +318,19 @@ class PersonaRepository(Protocol):
         """全部人设，按创建时间。用来在「有多个」时报出候选。"""
         ...
 
+    def document(self, persona_id: str) -> Mapping[str, Any]:
+        """取整份人格文档（``persona_json``）。不存在返回空字典。
+
+        :class:`PersonaRecord` 故意不带它——索引页只需要一句「我是谁」。
+        但**写提示词的地方必须要它**：语气、口头禅、表达习惯都在这一份里，
+        而它们是 ``prompts/chat_reply.md`` 那十几个占位符的真正来源。
+
+        返回的是**原样的 JSON 对象**：schema 由 ``persona_generate`` 提示词
+        决定，现在把它序列化成一个 dataclass 会把「人设能长成什么样」锁死在
+        代码里，而它本来应该由提示词与用户输入决定。读的人自己宽容取键。
+        """
+        ...
+
 
 class ScheduleRepository(Protocol):
     """日程的只读访问。"""
@@ -273,6 +366,54 @@ class SourceRepository(Protocol):
         ``dropped`` 的那些不出现：它们是过滤掉的中间产物
         （提示词注入、过长、重复），不是它「搜集到的东西」。
         """
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class SocialPostRecord:
+    """``social_post`` 的一行：它自己发的一条动态。
+
+    动态与消息是两条不同的产品线：消息有收件人，动态没有。所以它不共用
+    :class:`MessageRecord`——「发给谁」在动态上是空值，而把空值塞进一个
+    必填字段会让每个读的人都要先回答「这里的空是什么意思」。
+
+    ``mood_*`` 三个字段是**发的时候**的情绪快照，不是外键：情绪曲线会继续
+    演化，而「这条动态是在什么心情下发的」必须停在这一刻。
+    """
+
+    id: str
+    persona_id: str
+    content: str
+    posted_at: datetime
+    image_paths: tuple[str, ...] = ()
+    location: str = ""
+    mood_label: str = ""
+    mood_valence: float | None = None
+    mood_arousal: float | None = None
+    intent_motivation: str = ""
+    trigger_note: str = ""
+    activity_ref: str = ""
+    like_count: int = 0
+    comment_count: int = 0
+    visible: bool = True
+    tick_id: str = ""
+
+
+class SocialPostRepository(Protocol):
+    """动态的读写。"""
+
+    def append(self, post: SocialPostRecord) -> None:
+        """写一条动态。同一个 id 再来一次是覆盖，而不是多出一条。"""
+        ...
+
+    def list_recent(
+        self,
+        persona_id: str,
+        *,
+        limit: int = 30,
+        visible_only: bool = True,
+    ) -> list[SocialPostRecord]:
+        """最近的动态，按发布时间倒序。"""
         ...
 
 
@@ -348,5 +489,195 @@ class DatasetSourceRepository(Protocol):
 
         单独的查询而不是让调用方从 ``list_ticks`` 里自己挖：行为日志里
         只有被规范化过的 ``intent``，而两者之差恰恰是「它想做」与「它实际做的」。
+        """
+        ...
+
+
+# ── 推演要写的东西 ──────────────────────────────────────────
+#
+# 上面那几个契约是给「读」用的——知识库、数据集、CLI 都在读。下面这四个是给
+# 「写」用的，而且**只有推演引擎在写**。读写分开不是洁癖：读要的是「把它渲染
+# 进提示词」，写要的是「这一次它做了什么」，中间差的字段强行合成一个类，
+# 结果是每一侧都背着一半用不上的字段。
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationRecord:
+    """``conversation`` 的一行。
+
+    ``counterpart_id`` 对用户会话恒为 ``"user"``，对 NPC 会话是 ``npc.id``——
+    真正的区分靠 ``counterpart_kind``，因为一个 NPC 的 id 完全可能就叫 ``user``。
+    """
+
+    id: str
+    persona_id: str
+    counterpart_id: str
+    counterpart_kind: str
+    title: str = ""
+    message_count: int = 0
+    last_message_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MessageRecord:
+    """``message`` 的一行（写方向）。
+
+    ``initiative`` 与 ``motivation`` 是**主动消息**才有的：区分「你说话它回」
+    与「它突然找你」是这套数据最要紧的一列——前者谁都会，后者才是这个项目
+    要模拟的东西。``delivered_channels`` 为空的出站消息表示「生成了但还没发出去」。
+    """
+
+    id: str
+    conversation_id: str
+    direction: str
+    sender_id: str
+    content: str
+    content_type: str = "text"
+    initiative: bool = False
+    motivation: str = ""
+    trigger_note: str = ""
+    delivered_channels: tuple[str, ...] = ()
+    read_at: datetime | None = None
+    replied_at: datetime | None = None
+    tick_id: str = ""
+    created_at: datetime | None = None
+
+
+class ConversationRepository(Protocol):
+    """会话与消息的读写。
+
+    ``ensure`` / ``append`` 两个写方法都**幂等**：同一个 id 再来一次是更新而不是
+    报错。推演会在失败后重跑同一段时间，而「重跑一次就多出一条重复消息」
+    会让用户看到自己说过两遍。
+    """
+
+    def ensure(self, record: ConversationRecord) -> ConversationRecord:
+        """按 ``(persona_id, counterpart_id)`` 取出会话；没有就建一个。
+
+        返回的是**库里真实的那一行**（消息数、最后消息时间都是最新的）。
+        """
+        ...
+
+    def append(self, message: MessageRecord) -> None:
+        """写一条消息，并把所在会话的 ``message_count`` 与 ``last_message_at`` 推上去。"""
+        ...
+
+    def list_messages(
+        self,
+        conversation_id: str,
+        *,
+        limit: int = 50,
+        before: datetime | None = None,
+    ) -> list[MessageRecord]:
+        """按时间**正序**取消息；给了 ``before`` 就取它之前的。
+
+        正序是因为调用方（组装对话上下文）要的是「从早到晚读一遍」；
+        要最新的 N 条时取完再自己切——比让仓储提供两种排序简单，
+        也让「倒序取 N 条再翻回来」这种典型的 off-by-one 不会发生。
+        """
+        ...
+
+    def count_unread(self, conversation_id: str) -> int:
+        """有多少条入站消息还没回过。
+
+        「已回」的判据是**后面已有出站消息**，而不是 ``read_at`` 不为空：
+        已读不回也是一种状态，而它这里关心的是「有人在等它说话」。
+        """
+        ...
+
+    def last_inbound_at(self, conversation_id: str) -> datetime | None:
+        """最后一条入站消息的时间。没有就返回 ``None``。
+
+        ``None`` 与「很久以前」是两件事：前者是「刚装好，还没说过话」，
+        后者是「被冷落了」。混为一谈会让新装好的它在第一天就摆出一副
+        被冷落的样子。
+        """
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class BudgetUsage:
+    """某一天的打扰预算用量。对应 ``budget_usage`` 表的一行。
+
+    **它为什么住在这里而不是 ``sim/budget.py``。** 它是「一行 ↔ 一个对象」里
+    的那个对象，而 ``scripts/check_architecture.sh`` 第 16 组红线禁止 ``storage/``
+    引用 ``sim/``——仓储不能为了描述一行而反向依赖推演层。**规则**
+    （:func:`alterego.sim.budget.check_budget`）留在 ``sim/``：形状是数据，
+    「什么时候该拦」是业务。
+
+    所有时间字段都是**虚拟时间**：推演可以 60 倍速跑，「今天」指的是它自己的今天。
+    """
+
+    day: date
+    messages_sent: int = 0
+    posts_sent: int = 0
+    messages_suppressed: int = 0
+    posts_suppressed: int = 0
+    #: 连续多少次主动消息没等到回复。到阈值就熔断。
+    consecutive_no_reply: int = 0
+    #: 熔断截止时间。``None`` 表示没熔断。
+    circuit_until: datetime | None = None
+    last_message_at: datetime | None = None
+    last_post_at: datetime | None = None
+
+
+class BudgetRepository(Protocol):
+    """打扰预算的当日用量。"""
+
+    def load(self, persona_id: str, *, day: date) -> BudgetUsage:
+        """取某一天的用量。没有记录就返回一条空的。
+
+        **不返回 ``None``。** 让调用方处理三种状态（没有记录 / 有记录但为空 /
+        有记录）是在制造 bug：第一次跑的那天正好是最容易被忘记处理的那种。
+        """
+        ...
+
+    def save(self, persona_id: str, usage: BudgetUsage) -> None:
+        """整条覆盖。``(persona_id, day)`` 是主键，所以这是一次 UPSERT。"""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class TickLogDraft:
+    """``tick_log`` 的一行。
+
+    它是 ``alterego why`` 的唯一数据来源，所以 ``notes`` / ``candidates`` /
+    ``suppressed`` 三个字段**不是调试用的废料，是产品的一部分**：
+    「它为什么没回我」这个问题必须能不看代码就回答出来。
+
+    各种 ``*_json`` 列在这里是真正的 Python 对象，序列化由存储层负责——
+    让调用方自己 ``json.dumps`` 会把「能不能序列化」变成一个运行期惊喜。
+    """
+
+    id: str
+    persona_id: str
+    virtual_time: datetime
+    status: str
+    created_at: datetime
+    real_duration_ms: int = 0
+    state_snapshot: Mapping[str, object] = field(default_factory=dict)
+    percepts: Mapping[str, object] = field(default_factory=dict)
+    candidates: Sequence[Mapping[str, object]] = ()
+    chosen_intent: str | None = None
+    motivation: str = ""
+    trigger_note: str = ""
+    suppressed: Sequence[Mapping[str, object]] = ()
+    memories: Sequence[str] = ()
+    notes: Sequence[str] = ()
+    stage_results: Mapping[str, object] = field(default_factory=dict)
+    llm_calls: int = 0
+    llm_tokens: int = 0
+    error: str | None = None
+
+
+class TickLogRepository(Protocol):
+    """推演日志的写入。"""
+
+    def append(self, draft: TickLogDraft) -> None:
+        """写一条 tick 记录。
+
+        保留策略（``[retention] tick_log_keep_days``）不在这里做——
+        仓储不清扫自己，因为「什么时候可以删」是运维判断，不是数据形状。
         """
         ...

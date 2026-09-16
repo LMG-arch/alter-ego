@@ -136,8 +136,8 @@ purpose 是**代码里**的概念（每次 LLM 调用都必须声明它），rou
 | purpose | 触发者 | 建议档位 | 状态 | 说明 |
 | --- | --- | --- | --- | --- |
 | `decision` | 意图阶段 | strong | 🔌 仅配置键 | 10 个候选里选 1 个，质量最影响拟人感 |
-| `expression` | 表达阶段 | strong | 🔌 仅配置键 | 生成真正说出口的话 |
-| `reflection` | 反思阶段 | cheap | 🔌 仅配置键 | 概括状态、归纳记忆 |
+| `expression` | 表达阶段 | strong | ✅ 已接线 | 生成真正说出口的话。两个调用方：推演里的三种模板（回话 / 发动态 / 主动找人，`sim/stages/express.py`）；用户在命令行直接开口（`cli_chat.py`）。**两边共用一条 purpose**——对它们的要求是同一件事 |
+| `reflection` | 反思阶段 | cheap | ✅ 已接线 | 用一句话说出它此刻为什么是这种心情（`sim/stages/reflect.py`）。情绪主体由纯函数算出来，模型只负责那句解释，**而且只在有事发生的那一轮调** |
 | `emotion` | 反思阶段 | cheap | ⏳ 未实现 | 情绪更新（结构化输出）。**当前不走 LLM**：`domain/emotion.py::update_emotion` 是纯函数（规则驱动，可复现），`prompts/emotion_update.md` 已备好但尚未接线 |
 | `memory` | 记忆巩固 | cheap | ✅ 已接线 | 归纳 episodic → semantic（`sim/consolidation.py`） |
 | `vault` | 知识库整理、学一格 | cheap | ✅ 已接线 | 两个调用方同一形状：整理时把收集箱里的笔记归位、起名、互链（`sim/vault.py`）；学习时按题面写一篇专业笔记（`sim/study.py`）。两边都是「给材料 + 要 JSON + 低温度」，所以不另开一个 purpose

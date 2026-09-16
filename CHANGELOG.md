@@ -583,6 +583,82 @@ Obsidian 知识库里。
   拿 `T0` 推出的合成时间去减真实时间，而那个差每天都在变小。
   合成时间只和它自己的起点比才有意义
 
+**主体四块 · 第一批：对话主体（推演循环 + 会话路径 + `alterego chat`）**
+
+计划见 `docs/plans/2026-09-16-main-body.md` § 4 批次 A。「主体」四块（对话 / 设置 /
+插件加载 / Web UI）里的第一块，也是第一次能端到端跑起来的东西：
+
+```bash
+alterego chat --once "在忙什么"      # 说一句，看它怎么回（含「几秒后送出」和理由）
+alterego chat                        # 连续对话，:q 结束
+```
+
+- **推演循环从「一层空壳」长成六个阶段**。`sim/stages/` 新增
+  `sense(10) → reflect(30) → intention(50) → act(70) → express(90) → persist(110)`，
+  由 `sim/engine.py::SimulationEngine.run_tick()` 按 `depends_on` 排序执行。
+  `default_stages()` 会把注册处里的插件阶段接在自带六阶段后面。一条铁律：
+  **阶段只声明 `StageResult.changes`，绝不自己改 `ctx`**，改由引擎统一应用——
+  否则「这一轮到底改了什么」就成了一份没人能复读的记录
+- **`sim/budget.py` 打扰预算**（8 个导出，全是纯函数）。它回答的是
+  「它今天还能主动找你几次」。`roll_over` 跨天清零、`check_budget` 给出
+  `BudgetDecision`、`record_sent` / `record_reply` / `record_no_reply` 各自记账。
+  语义上的关键一处：**连续三次没被回，它就停 24 小时**（`NO_REPLY_CIRCUIT_HOURS`）——
+  拟人的一半是知道什么时候不开口
+- **`sim/intents.py` 意图目录**：10 个候选意图各自的权重、前置条件、
+  以及 `reach_out` 的五个动机（`REACH_OUT_MOTIVATIONS`）。意图选择是
+  **加权随机 + 门槛**，不是提示词祈祷（P3）
+- **`sim/context.py` 补上 `TickContext.llm()`**。这是 `sim/` 唯一允许碰模型的入口，
+  它转手调 `gateway.complete(purpose, prompt, ...)`——**purpose 是第一个位置参数**，
+  写错用途名当场报错而不是静默走到默认档位。`StateSnapshot` 同时补了三个字段
+  （`consecutive_passive_turns` / `last_topic_at` / `consecutive_instant_replies`），
+  它们让「它连着被动了几轮」「刚开过话题」「连着秒回了几次」变成可读的输入
+- **`sim/conversation.py` 会话路径**。这是「用户按下回车之后发生的事」，
+  与 tick 循环**分开**：tick 负责它自己什么时候想说话，会话负责**你说了话之后**。
+  四条用户看得见的保证（`tests/test_sim_conversation.py` 就是照这四条写的）：
+  ① 用户说的那句一定先落库 ② 「它这一轮不回」是**正常结果不是错误**
+  ③ 同一个世界 ④ 它不复读自己，重写那一遍不会把两条都落库
+- **`sim/transcript.py`** 与 `sim/persona_view.py`：前者把消息对排成可读的对话，
+  后者把 `persona_json` 摊成提示词要的那几个值
+- **`alterego chat`**（`cli_chat.py`，第七个组装根）。它**不走 tick**：
+  `04-simulation-loop.md` § 3.3 给 `reply` 意图在有未读消息时的权重是 1.0，
+  那是**主动行为**的调度；而人在这里打完字等着回话，等不了一个 tick
+  （`realtime` 模式下 5 虚拟分钟 ≈ 真的 5 分钟）。它还**不真的睡觉**：
+  `decide_reply` 算出来的是「这一句该在几秒后送出」，命令把它打出来、落进库，
+  然后立刻返回——真睡着会让测试变慢、让 Web 页面看起来卡住。三行开场白说清
+  人设、时刻、这次调用记在哪个路由用途上；`--show-prompt` 打出**真正发出去的那份**
+  提示词（重渲染而不是缓存：渲染是纯函数，缓存会让「调试看到的那份」与
+  「真正用的那份」有机会不一致）
+- **存储层补齐五个引擎仓储**（`storage/sqlite/engine_repositories.py`）：
+  会话 / 预算 / 推演日志 / 情绪 / 动态。`repositories.py` 同时从 1133 行拆到 825 行，
+  `storage/sqlite/__init__.py::__all__` 扩到 16 个名字。
+  四个 Protocol（`ConversationRepository` / `BudgetRepository` / `SocialPostRepository` /
+  `TickLogRepository`）落进 `interfaces/repository.py`——其中 `BudgetUsage`
+  **刻意住在这里而不是 `sim/budget.py`**：存储层不许 import `sim/`（红线 16），
+  而它是要被存下来的形状
+- **`interfaces/simulation.py` 补上 `Stage` 契约**，`Stage.run(ctx)` 的注解
+  只在 `TYPE_CHECKING` 下导入 `TickContext`——这是刻意的，
+  否则 `interfaces/` 会反过来依赖 `sim/`（审计第 7 项）
+- 测试新增 481 个（`test_sim_budget.py` / `test_sim_intents.py` /
+  `test_sim_persona_view.py` / `test_sim_stages.py` 100 个 / `test_sim_engine.py` 58 个 /
+  `test_sim_conversation.py` 54 个 / `test_cli_chat.py` 29 个）。
+  **全库 2878 个测试、96.18%**（`kernel` 96.84% / `domain` 98.48% / `sim` 96.42%）
+- **写这一批的过程里逮到的两个真问题**：
+  - **同一秒里的两句话会共用一个 `message_id`**。`ConversationService` 在
+    渠道没给消息号时按「人设 + 秒」现造一个，而库里按 id 去重——
+    连续对话按得快的时候，三句话只留下一句。修法是**让命令行自己发消息号**
+    （`cli-<uuid>`）：它有资格发，因为「这是新的一句」只有它知道。
+    `tests/test_cli_chat.py::test_two_lines_in_the_same_second_both_survive`
+    就是为这件事存在的
+  - **`07-model-routing-and-media.md` § 2.4 少标了两个已经接线的用途**。`expression`
+    与 `reflection` 早就有人在调，但在阶段里是**手敲的字面量**，所以
+    `test_the_purposes_marked_wired_are_actually_called` 一直没发现；
+    这次 `cli_chat.py` 按约定声明了模块级 `PURPOSE` 常量，测试立刻报出「文档没标」。
+    修法是两头都改：阶段里也声明 `PURPOSE`（`vault` 那两个调用方早就是这么做的），
+    文档补上 ✅
+- 顺手删掉 `sim/stages/persist.py` 里一段**已经不成立的注释**：
+  「动态暂时写进行为日志，不落 `social_post`」——`_posts()` 早就在写那张表了，
+  而 `PostRepository` 也已经在 `EnginePorts` 里。留着它只会让下一个人以为动态没入库
+
 ### 变更
 
 - **迁移文件从此只管 DDL**。四个 `.sql` 里没有任何 `PRAGMA` 头、没有 `IF NOT EXISTS`、

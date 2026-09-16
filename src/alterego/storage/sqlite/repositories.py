@@ -1,7 +1,7 @@
 """SQLite 仓储实现：记忆、行为日志、用量账本、人设、日程、搜集到的信息、训练数据集的源。
 
-七张表、七个类。**这里只做「一行 ↔ 一个对象」**：SQL、JSON 序列化、
-往返映射都在这里；业务规则（重要度怎么衰减、什么时候该降权）在 `domain/`
+**这里只做「一行 ↔ 一个对象」**：SQL、JSON 序列化、往返映射都在这里；
+业务规则（重要度怎么衰减、什么时候该拦下一条主动消息）在 `domain/` 与 `sim/`
 （见 `docs/design/03-data-model.md` § 6.9）。
 
 两条实现约定：
@@ -14,15 +14,19 @@
 **``SELECT *`` + 按列名取值。** 不写死列顺序：``005`` 之后又加过列，
 而按位置取值的那份代码不会报错，它只会把 ``location`` 读成 ``inner_voice``。
 
-后三个（人设 / 日程 / 搜集到的信息）是**只读**的，给知识库用。只读不是
-遗漏：知识库是库的下游，从不往回写。
+其中人设 / 日程 / 搜集到的信息是**只读**的，给知识库用。只读不是遗漏：
+知识库是库的下游，从不往回写。
 
-最后一个（训练数据集的源）同样只读，同样是下游的取数口。
-它和上面六个的差别是：它返回的是 ``domain.dataset`` 的行，而不是
-``interfaces.repository`` 的 ``*Record``——理由写在那边的契约文档里。
+训练数据集的源同样只读，同样是下游的取数口。它和上面那些的差别是：
+它返回的是 ``domain.dataset`` 的行，而不是 ``interfaces.repository`` 的
+``*Record``——理由写在那边的契约文档里。
 
-依据: docs/design/03-data-model.md § 7、docs/plans/2026-09-16-obsidian-vault.md § 6、
-docs/adr/0011-training-datasets-are-derived-and-redacted.md
+最后一段（会话 / 预算 / 推演日志 / 动态）是**推演引擎专用的写口**，2026-09-16 加上，
+同月拆去 :mod:`alterego.storage.sqlite.engine_repositories`——那一边的模块文档解释了
+为什么按「谁在写」而不是「哪张表」切。拆分同时也把这个文件从 1133 行拉回
+``AGENTS.md`` § 5 规定的 900 行以内。
+
+依据: docs/design/03-data-model.md § 7、docs/plans/2026-09-16-main-body.md § 4
 """
 
 from __future__ import annotations
@@ -80,6 +84,14 @@ WHERE persona_id = ?
   AND started_at >= ?
 ORDER BY started_at ASC, id ASC
 LIMIT ?
+"""
+
+_ACTIVITY_INSERT = """
+INSERT INTO activity_log (
+    id, persona_id, actor_kind, actor_id, intent, category, description,
+    detail_json, location, outbound, outbound_ref, suppressed_intent,
+    suppress_reason, inner_voice, duration_minutes, tick_id, started_at, ended_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 _LLM_USAGE_INSERT = """
@@ -140,6 +152,24 @@ def _load_str_list(raw: Any) -> list[str]:
     if not isinstance(loaded, list):
         raise StorageError("JSON 列不是数组", value=str(raw))
     return [str(item) for item in loaded]
+
+
+def _load_dict(raw: Any) -> dict[str, Any]:
+    """``*_json`` 列 → 字典。
+
+    ``NULL`` 与 ``{}`` 都回空字典：列上写着 ``NOT NULL DEFAULT '{}'``，
+    但老库、手改的库都可能留下 ``NULL``，而「没有细节」和「细节是空对象」
+    对读的人是一回事。
+    """
+    if raw is None:
+        return {}
+    try:
+        loaded = json.loads(str(raw))
+    except json.JSONDecodeError as exc:
+        raise StorageError("JSON 列解析失败", value=str(raw)) from exc
+    if not isinstance(loaded, dict):
+        raise StorageError("JSON 列不是对象", value=str(raw))
+    return {str(key): value for key, value in loaded.items()}
 
 
 def _dump_json(items: Sequence[str]) -> str:
@@ -327,6 +357,7 @@ def _row_to_activity(row: sqlite3.Row) -> ActivityRecord:
         location=str(row["location"] or ""),
         inner_voice=str(row["inner_voice"] or ""),
         duration_minutes=int(row["duration_minutes"] or 0),
+        detail=dict(_load_dict(row["detail_json"])),
     )
 
 
@@ -381,6 +412,17 @@ class SqliteActivityRepository:
             (persona_id, _format_dt(since), _format_dt(until), int(limit)),
         )
         return [_row_to_activity(row) for row in rows]
+
+    def append(self, records: Sequence[ActivityRecord]) -> None:
+        """追写一批行为。
+
+        被拦下的意图也走这里（``suppressed_intent`` + ``suppress_reason`` 两列），
+        而且**和真的做成的那件事同一个批次**：它们在 ``tick_log.notes`` 里
+        讲的其实是同一个故事，分两个事务写会出现「做成了但没说为什么拦住别的」
+        这种半截解释。
+        """
+        for record in records:
+            self._conn.execute(_ACTIVITY_INSERT, _activity_params(record))
 
 
 # ── 用量账本 ────────────────────────────────────────────────
@@ -491,6 +533,28 @@ class SqlitePersonaRepository:
         rows = self._conn.query("SELECT * FROM persona ORDER BY created_at, id")
         return [_row_to_persona(row) for row in rows]
 
+    def document(self, persona_id: str) -> dict[str, Any]:
+        """整份 ``persona_json``。
+
+        只把 JSON 解出来就返回，**不校验里面有哪些键**：这份文档的形状由
+        ``prompts/persona_generate.md`` 决定，把它锁进 dataclass 就等于把
+        「人设能长成什么样」钉死在代码里，而它本来应该由提示词与用户输入决定。
+
+        解不开的 JSON 不当成失败：这里唯一的来源是 ``persona_generate`` 的
+        输出，摊开一份坏 JSON 会让他连话都说不了；返回空字典能让他退回「一个
+        没有性格设定的人」，也能让调用方把「提示词里少了语气」这件事说清楚。
+        """
+        row = self._conn.query_one("SELECT persona_json FROM persona WHERE id = ?", (persona_id,))
+        if row is None:
+            return {}
+        try:
+            loaded = json.loads(str(row["persona_json"]))
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(loaded, dict):
+            return {}
+        return {str(key): value for key, value in loaded.items()}
+
 
 # ── 日程 ────────────────────────────────────────────────────
 
@@ -515,6 +579,7 @@ def _row_to_schedule(row: sqlite3.Row) -> ScheduleRecord:
         end_at=_require_dt(row["end_at"], column="end_at"),
         activity=str(row["activity"]),
         category=str(row["category"] or "other"),
+        interruptible=bool(row["interruptible"]),
         location=str(row["location"] or ""),
         actual_start_at=_parse_dt(row["actual_start_at"]),
         actual_end_at=_parse_dt(row["actual_end_at"]),
@@ -742,3 +807,42 @@ class SqliteDatasetSourceRepository:
             (persona_id, _format_dt(since)),
         )
         return {str(row["id"]): str(row["chosen_intent"]) for row in rows if row["chosen_intent"]}
+
+
+def _dump(value: Any) -> str:
+    """把任意值序列化成一行 JSON。
+
+    ``default=str`` 是**故意放松的**：这些字段里迟早会出现 ``datetime``、
+    ``Enum`` 或某个领域对象，而「序列化失败导致整轮推演白跑」的代价远大于
+    「日志里多了一个字符串形式的时间戳」。
+
+    它和上面那个 :func:`_dump_json` 的区别是「值域」：这个吃任意值、
+    交给 ``json.dumps`` 自己判断；那个只吃 ``Sequence[str]``。
+    ``tick_log`` / ``social_post`` / ``emotion_log`` 的那些 ``*_json`` 列
+    用这一个——它们装的是「当时都有哪些候选 / 哪几条原因」这类**混合结构**，
+    而 ``image_paths`` 这类纯字符串列表只是恰好也能走这条路。
+    """
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _activity_params(record: ActivityRecord) -> tuple[Any, ...]:
+    return (
+        record.id,
+        record.persona_id,
+        record.actor_kind or "persona",
+        record.actor_id or None,
+        record.intent,
+        record.category or "internal",
+        record.description,
+        _dump(record.detail),
+        record.location or None,
+        int(record.outbound),
+        record.outbound_ref or None,
+        record.suppressed_intent or None,
+        record.suppress_reason or None,
+        record.inner_voice or None,
+        int(record.duration_minutes),
+        record.tick_id or None,
+        _format_dt(record.started_at),
+        None,
+    )
