@@ -1431,7 +1431,22 @@ alterego serve --no-web              # 只装插件、不开界面
   `_restore_logging` fixture。`logging.getLogger(...)` 是**进程级单例**，插件用
   `PropagateHandler` 时很容易让上一个测试的 handler 活到下一个测试，
   表现为「单独跑绿、一起跑红」——批次 C 的 `test_cli_serve.py` 就是这么把它逼出来的
-@TEST_ENTRY@
+- **测试的成败不该取决于「跑测试的这台机器上恰好有没有 `config/alterego.toml`」**
+  —— `tests/conftest.py` 新增 autouse 的 `_no_config_file_from_this_machine`。
+  `Config.load(path=None)` 会按 `DEFAULT_CONFIG_PATHS` 在**工作目录**里找
+  `config/alterego.toml`，这是产品该有的行为；但在测试里它意味着：照
+  Quickstart 建过配置文件的人，会看到 15 个与本次改动毫不相关的红，而且报错
+  指向断言本身（典型是 `assert 'deepseek' == 'openai_compatible'`），
+  看不出是环境造成的。夹具把这两个查找位置指到一间**一定不存在该文件**的目录，
+  于是「没有配置文件」这件事在测试里重新变成确定的。收在 conftest 而不是逐个
+  用例打补丁，理由与上面那条 `_restore_logging` 相同：漏出去的是一份跨用例的
+  **全局状态**。两个实现细节：目录挂在 **`session` 级的 `tmp_path_factory`** 上，
+  而不是 `tmp_path`——autouse 夹具一旦写 `tmp_path`，pytest 就要为每个测试建一次
+  临时目录，三千多个测试下来实测把整套从 175s 拉到 351s；指到空目录而不是清成
+  空元组，是为了让「自己写一份配置文件、再让它被发现」的写法仍然成立，显式传
+  `path=` 的用例完全不受影响。`tests/test_kernel_config.py` 里断言「查找位置是
+  哪两个」的那条改成**从模块上现取**（`kernel_config.DEFAULT_CONFIG_PATHS`），
+  否则它测的是夹具而不是代码
 - **新增 `tests/test_desktop_window_plugin.py`（84 个）**。两半：一半守**武装纪律**
   （哪条事件才值得占快捷键、配置改了之后窗口还在不在、`on_stop` 幂等），
   另一半是纯逻辑（快捷键字符串解析、位置解析、浏览器查找）。它**不假装测过**

@@ -58,6 +58,8 @@ def make_config(
 
     显式传一个真实存在的空 TOML 文件，而不是 ``None``：``None`` 会去读工作目录
     下的 ``config/alterego.toml``，那样测试结果就取决于「你从哪个目录跑的 pytest」。
+    （``conftest`` 的 ``_no_config_file_from_this_machine`` 已经兜住了这层，所以这里
+    显式传不是为了防红，而是为了让这个辅助函数**自己说清楚它读的是什么**。）
     """
     config_file = tmp_path / "empty.toml"
     config_file.write_text("# 测试用空配置\n", encoding="utf-8")

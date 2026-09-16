@@ -14,9 +14,9 @@ from pathlib import Path
 import pytest
 
 from alterego.domain.dataset import FORMATS
+from alterego.kernel import config as kernel_config
 from alterego.kernel.config import (
     DEFAULT_CONFIG_PATH,
-    DEFAULT_CONFIG_PATHS,
     Config,
     DisturbBudgetConfig,
     LLMRoutingConfig,
@@ -61,7 +61,10 @@ def test_missing_file_can_be_required(tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.chdir(tmp_path)
     with pytest.raises(ConfigError) as excinfo:
         Config.load(require_file=True)
-    assert excinfo.value.context["searched"] == [str(p) for p in DEFAULT_CONFIG_PATHS]
+    # 从模块上现取，而不是用 import 时绑定的那个元组：``conftest`` 会把查找位置
+    # 挪进 ``tmp_path``，这条断言要跟着走，否则它测的是「夹具没生效」。
+    searched = [str(p) for p in kernel_config.DEFAULT_CONFIG_PATHS]
+    assert excinfo.value.context["searched"] == searched
 
 
 def test_packaged_defaults_file_ships_with_the_package() -> None:
