@@ -580,14 +580,26 @@ class TestLoad:
             assert plugin.intent_types == frozenset()
 
     def test_it_does_not_grab_the_keyboard_just_by_being_loaded(
-        self, tmp_path: Path, clock: FrozenClock
+        self, tmp_path: Path, clock: FrozenClock, os_layer: Any
     ) -> None:
         """**这个文件里最重要的一条。**
 
         ``alterego plugins doctor`` 同样会 ``load_all()``。在这里占住全局快捷键，
         等于用户看了一眼插件健不健康就把键盘上的一个组合键交出去了。
+
+        这里**显式**装一层 Windows（``os_layer`` 默认就是）。不装的话，这条断言
+        断的是「运行这个测试的机器是 Windows」——开发机上永远成立，CI 上永远不成立，
+        于是它拦不住任何东西。真正要断的是「能用的系统上，光加载不武装」，
+        这句话跟机器无关。「不能用的系统上它会说话」是另一条，见
+        ``test_off_windows_it_says_so_instead_of_pretending``。
         """
         with loaded(tmp_path, clock) as plugin:
+            os_layer(plugin, windows=True)
+            # 上面那一行才是「这台机器是 Windows」的来源。下面这句把它钉住：
+            # 哪天有人把 ``os_layer`` 删了，这条用例会**在这台机器上**也失败，
+            # 而不是安安静静地退回「断的是我自己的系统」。
+            assert sys.modules[type(plugin).__module__].win32.IS_WINDOWS is True
+
             assert plugin.armed is False
             assert plugin.health() == HealthStatus(
                 ok=True,

@@ -1187,15 +1187,26 @@ alterego serve --no-web              # 只装插件、不开界面
   CI +00:00，都不是 +09:00。两条都用「把生产代码换回旧写法」做过变异验证
 
 - **`channels/` 从此不许自己读进程时区**（`scripts/check_architecture.sh` 第 5 组，
-  新增第 24 项）。上面那个 bug 在本机与 CI 上给出**同一个答案**：
-  开发机装着东八区，配置默认值也是 `Asia/Shanghai`，于是「读配置」与「读进程」
-  写起来一样、跑起来一样，直到换一台服务器。**这条规则只能靠人记住的时候，
-  它就不是规则**——所以它现在是一条会拦人的红线，而不是一句写进文档的提醒。
-  例外只有两处，都是形式上的：`channels/web/deps.py`（它就是算「现在」的那个
-  地方，写的是 `datetime.now(resolve_timezone(...))`，带时区）与注释行
-  （讲这条规则时难免要写出被禁的调用）。连带更新 `AGENTS.md`、`CONTRIBUTING.md`、
-  `01-architecture.md`、`06-roadmap.md`、`13-interface-consistency.md` 里的
-  「七组 23 项」——**数字写进文档就会过期，而过期的数字会让人不再去跑那个脚本**
+  新增第 24 项）。**这条规则只能靠人记住的时候，它就不是规则**——所以它现在是一条
+  会拦人的红线，而不是一句写进文档的提醒。例外只有两处，都是形式上的：
+  `channels/web/deps.py`（它就是算「现在」的那个地方，写的是
+  `datetime.now(resolve_timezone(...))`，带时区）与注释行（讲这条规则时难免要写出
+  被禁的调用）。连带更新 `AGENTS.md`、`CONTRIBUTING.md`、`01-architecture.md`、
+  `06-roadmap.md`、`13-interface-consistency.md` 里的「七组 23 项」——
+  **数字写进文档就会过期，而过期的数字会让人不再去跑那个脚本**
+
+- **`tests/test_desktop_window_plugin.py` 断的是「运行它的这台机器是 Windows」**。
+  `plugins/desktop_window/plugin.py::health` 第一句就是 `if not win32.IS_WINDOWS:`，
+  所以那条最重要的用例（「光加载不许占快捷键」）断言 `health()` 是「待命中」时，
+  实际断的是宿主平台：开发机上永远成立，Linux runner 上永远不成立。
+  现在它自己装一层 Windows（`os_layer(plugin, windows=True)`），并加一句
+  `assert ... win32.IS_WINDOWS is True` 把那层假货钉住——**哪天有人把 `os_layer`
+  删了，这条用例会在这台机器上也失败，而不是安安静静地退回「断的是我自己的系统」**。
+  「不在 Windows 上它会说话」本来就有独立用例，不用合并过来
+
+  它和上面两条一样，之前没红不是因为它们对，而是因为 `f8ac537` 之前的那道 mypy 门
+  先拦住了后面所有作业。**一道永远红的门等于没有门，它拦住的只是它后面的一切**：
+  门一修好，攒了 6 次的东西一次全爆出来，看起来像是刚改的东西出了问题
 
 **接口一致性审计（v0.1.2，插件接口专项）**
 
